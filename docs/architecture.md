@@ -71,7 +71,7 @@ nous is a EURISKO-style discovery engine — an agenda-driven heuristic interpre
 The full vision has three loops operating at different timescales:
 
 ### Fast loop — Datalog inference
-- **Not yet built.**
+- **Built in pudl** (`pudl query`, `internal/datalog/`).
 - Runs continuously as pudl ingests new facts from mu
 - Derives IDB from EDB: dependency closures, invariant violations, susceptibility pattern matches
 - Reactive and deterministic
@@ -86,7 +86,7 @@ The full vision has three loops operating at different timescales:
 - Timescale: minutes to hours
 
 ### Slow loop — deliberative validation
-- **Not yet built.**
+- **Not yet built.** nous writes conjectures back to pudl, but there is no review/promotion gate.
 - Candidates from nous enter human review
 - Validated candidates get promoted: new pudl types, new Datalog rules, new conventions
 - Human judgment gates what accretes into the stable knowledge base
@@ -598,7 +598,7 @@ At the scale we're talking about, SQLite is fine for years. The scaling concern 
 ## Package structure
 
 ```
-cmd/nous/main.go              — CLI entry point
+cmd/nous/main.go              — CLI entry point (Mode 1 + Mode 2)
 internal/
   unit/                        — Unit, Store (property-list model)
   agenda/                      — Priority queue with merge
@@ -615,25 +615,48 @@ internal/
     mutation.go                — Heuristic mutation integration
   mutate/                      — Token-level mutation engine
     mutate.go                  — 7 mutation operators + validation
+  pudlbridge/                  — Mode 2: connection to pudl
+    bridge.go                  — Read observations, write discoveries, query Datalog
   seed/                        — Domain loaders
     registry.go                — Domain registry (-domain flag)
-    math.go                    — Math/set-theory domain
-    heuristics.go              — 11 seed heuristics
+    math.go                    — Math/set-theory domain (Mode 1)
+    heuristics.go              — 11 seed heuristics (Mode 1)
+    observations.go            — Observation domain + 5 heuristics (Mode 2)
 ```
+
+## What's built
+
+### pudl integration (built 2026-04-05/06)
+
+The Datalog evaluator and bitemporal fact store now exist in pudl. See pudl's `docs/facts.md` and `docs/datalog.md`.
+
+Mode 2 is operational: nous reads observations from pudl, reasons with Mode 2 heuristics, and writes discoveries back. See `docs/mode2.md` for usage and details.
+
+**pudl side:**
+- Bitemporal fact store with four temporal query modes
+- Datalog evaluator (semi-naive, hash-indexed) with CUE rule loader
+- `pudl observe`, `pudl facts`, `pudl query`, `pudl rule add` commands
+- Public API packages (`pkg/factstore`, `pkg/eval`) for external consumers
+
+**nous side:**
+- `internal/pudlbridge` — reads observations as units, writes discoveries as facts
+- `internal/seed/observations.go` — Mode 2 domain (4 types, 5 heuristics)
+- `-pudl DIR` flag on `nous run` to enable Mode 2
 
 ## What's next
 
 See `docs/domain-notes/` for detailed analysis of candidate Mode 1 domains.
 
-**Near-term options:**
-- Datalog evaluator in Go with CUE syntax, integrated into pudl as `pudl query`
-- Another Mode 1 domain (graphs, grammars, workflows) to further exercise the nous engine
-- pudl integration for nous (units live in pudl catalog)
+**Near-term:**
+- Human validation gate (slow loop): review nous conjectures before promotion to Datalog rules
+- Load Datalog-derived facts as units (bridge.LoadDerived is built but not wired into main)
+- More Mode 2 heuristics: temporal correlation, causal inference, prediction accuracy
+- Adapt mutation vocabulary for Mode 2 heuristic programs
 
 **Medium-term:**
-- Wire nous to pudl's Datalog IDB (Mode 2: nous reasons over derived facts)
 - mu integration (actions go through mu, results re-ingested by pudl)
-- The full three-loop architecture
+- Mode 1 units backed by pudl catalog (hybrid Mode 1+2)
+- Another Mode 1 domain (graphs, grammars, workflows)
 
 **Long-term:**
 - Failure analysis as the first real Mode 2 domain
