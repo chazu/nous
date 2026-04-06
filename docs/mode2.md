@@ -27,8 +27,8 @@ Agents and humans record observations via `pudl observe`. nous loads those obser
 
 ```bash
 # Prerequisite: observations exist in pudl
-pudl observe "auth has circular dependency with user" --kind obstacle --repo pkg/auth
-pudl observe "config struct is too large" --kind suggestion --repo internal/config
+pudl observe "auth has circular dependency with user" --kind obstacle --scope myapp:pkg/auth
+pudl observe "config struct is too large" --kind suggestion --scope myapp:internal/config
 # ... more observations from agents, humans, CI hooks, etc.
 
 # Run nous in Mode 2
@@ -51,7 +51,7 @@ On startup, nous:
 
 On exit, nous writes discoveries back to pudl:
 - **Conjectures** become observations with `source: "nous"` and `kind` from the conjecture
-- **Repo hotspots** become `repo_hotspot` facts with repo name and observation count
+- **Scope hotspots** become `scope_hotspot` facts with scope and observation count
 
 ## How Observations Become Units
 
@@ -60,14 +60,14 @@ Each observation from pudl becomes a nous unit:
 ```
 pudl fact:
   relation: "observation"
-  args: {"kind": "obstacle", "description": "circular dep in auth", "repo": "pkg/auth", "source": "agent-1", ...}
+  args: {"kind": "obstacle", "description": "circular dep in auth", "scope": "myapp:pkg/auth", "source": "agent-1", ...}
 
 nous unit:
   name: "Obs-circular-dep-in-auth"
   isA: ["Observation", "Anything"]
   kind: "obstacle"
   description: "circular dep in auth"
-  repo: "pkg/auth"
+  scope: "myapp:pkg/auth"
   source: "agent-1"
   worth: 500
 ```
@@ -76,25 +76,25 @@ The fact's JSON args are mapped directly to unit slots. Worth defaults to 500 (m
 
 ## Mode 2 Heuristics
 
-Five seed heuristics designed for observation reasoning. They operate on structural properties of observations — kind, repo, source, worth — not on data content.
+Five seed heuristics designed for observation reasoning. They operate on structural properties of observations — kind, scope, source, worth — not on data content.
 
-### H-FindRepoHotspots (worth 700)
+### H-FindScopeHotspots (worth 700)
 
-Fires on each Observation. Counts how many observations share the same `repo`. If 2 or more, creates a `RepoHotspot` unit.
+Fires on each Observation. Counts how many observations share the same `scope`. If 2 or more, creates a `ScopeHotspot` unit.
 
-**What it detects:** Repos that attract disproportionate attention — multiple agents or humans independently flagging issues in the same place.
+**What it detects:** Scopes that attract disproportionate attention — multiple agents or humans independently flagging issues in the same place.
 
 ### H-CorroborateObstacles (worth 650)
 
-Fires on Observation units where `kind=obstacle`. Checks if other sources reported obstacles in the same repo. If corroborated, boosts the observation's worth.
+Fires on Observation units where `kind=obstacle`. Checks if other sources reported obstacles in the same scope. If corroborated, boosts the observation's worth.
 
 **What it detects:** Obstacles confirmed by independent observers. Corroboration is a strong signal that the obstacle is real and important.
 
 ### H-ConjectureFromPatterns (worth 600)
 
-Fires on each Observation. Counts how many distinct repos have the same `kind`. If 3 or more repos share the same kind, creates a `Conjecture` unit describing a systemic issue.
+Fires on each Observation. Counts how many distinct scopes have the same `kind`. If 3 or more scopes share the same kind, creates a `Conjecture` unit describing a systemic issue.
 
-**What it detects:** Cross-cutting patterns — when the same kind of observation (e.g., "suggestion" or "antipattern") appears across many repos, it may indicate a systemic problem rather than a local one.
+**What it detects:** Cross-cutting patterns — when the same kind of observation (e.g., "suggestion" or "antipattern") appears across many scopes, it may indicate a systemic problem rather than a local one.
 
 ### H-BoostCorroborated (worth 500)
 
@@ -119,22 +119,22 @@ Conjecture units become new observations in pudl with `source: "nous"`. These ar
 ```
 nous → pudl:
   relation: "observation"
-  args: {"kind": "pattern", "description": "Systemic issue: pattern observed across 3 repos", ...}
+  args: {"kind": "pattern", "description": "Systemic issue: pattern observed across 3 scopes", ...}
   source: "nous"
 ```
 
-### Repo Hotspots → Facts
+### Scope Hotspots → Facts
 
-RepoHotspot units become `repo_hotspot` facts:
+ScopeHotspot units become `scope_hotspot` facts:
 
 ```
 nous → pudl:
-  relation: "repo_hotspot"
-  args: {"repo": "internal/database", "observation_count": 3}
+  relation: "scope_hotspot"
+  args: {"scope": "pudl:internal/database", "observation_count": 3}
   source: "nous"
 ```
 
-These are queryable via `pudl facts list --relation repo_hotspot` or through Datalog rules.
+These are queryable via `pudl facts list --relation scope_hotspot` or through Datalog rules.
 
 ## Differences from Mode 1
 
@@ -143,7 +143,7 @@ These are queryable via `pudl facts list --relation repo_hotspot` or through Dat
 | **Data source** | In-memory seed data | pudl fact store |
 | **Operations** | Run functions on data | Query/correlate observations |
 | **Feedback** | Immediate (same cycle) | Accumulated over time |
-| **Heuristics** | H-RunOnExamples, H-Specialize, etc. | H-FindRepoHotspots, H-CorroborateObstacles, etc. |
+| **Heuristics** | H-RunOnExamples, H-Specialize, etc. | H-FindScopeHotspots, H-CorroborateObstacles, etc. |
 | **Evaluation** | Algorithmic (set equality, structural) | Statistical (counts, clustering, corroboration) |
 | **Write-back** | None (in-memory only) | Conjectures and hotspots to pudl |
 | **Mutation** | Token-level DSL mutation | Not yet adapted (use `-no-mutate`) |

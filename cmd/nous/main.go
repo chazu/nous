@@ -150,18 +150,18 @@ func writeDiscoveries(bridge *pudlbridge.Bridge, store *unit.Store) {
 
 		// Write repo hotspots back
 		for _, t := range isA {
-			if t == "RepoHotspot" {
-				repo := u.GetString("repo")
+			if t == "ScopeHotspot" {
+				scope := u.GetString("scope")
 				count := u.GetInt("observation_count")
-				if repo != "" {
-					_, err := bridge.WriteFact("repo_hotspot", map[string]interface{}{
-						"repo":              repo,
+				if scope != "" {
+					_, err := bridge.WriteFact("scope_hotspot", map[string]interface{}{
+						"scope":             scope,
 						"observation_count": count,
 					}, "nous")
 					if err != nil {
 						continue
 					}
-					fmt.Printf("nous → pudl: hotspot %s (%d observations)\n", repo, count)
+					fmt.Printf("nous → pudl: hotspot %s (%d observations)\n", scope, count)
 				}
 				break
 			}

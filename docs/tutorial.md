@@ -20,47 +20,47 @@ Pick a repo you're working in and record observations about it. These can come f
 ```bash
 # Obstacles — things blocking progress or causing pain
 pudl observe "circular dependency between auth and user packages" \
-    --kind obstacle --repo pkg/auth
+    --kind obstacle --scope myapp:pkg/auth
 
 pudl observe "no integration tests for the API layer" \
-    --kind obstacle --repo cmd/api
+    --kind obstacle --scope myapp:cmd/api
 
 # Patterns — recurring structures you've noticed
 pudl observe "all handlers follow the middleware chain pattern" \
-    --kind pattern --repo cmd/api
+    --kind pattern --scope myapp:cmd/api
 
 pudl observe "every service has its own connection pool" \
-    --kind pattern --repo internal/db
+    --kind pattern --scope myapp:internal/db
 
 # Antipatterns — recurring problems
 pudl observe "error handling is inconsistent across the API" \
-    --kind antipattern --repo cmd/api
+    --kind antipattern --scope myapp:cmd/api
 
 # Suggestions — ideas for improvement
 pudl observe "Config struct has too many fields, should split" \
-    --kind suggestion --repo internal/config
+    --kind suggestion --scope myapp:internal/config
 
 # Facts — verified truths
-pudl observe "all 20 packages pass tests" --kind fact --repo myproject
+pudl observe "all 20 packages pass tests" --kind fact --scope myapp
 
 # Bugs
 pudl observe "race condition in cache invalidation" \
-    --kind bug --repo internal/cache
+    --kind bug --scope myapp:internal/cache
 ```
 
 **Tips:**
 - Use `--source agent-name` if recording on behalf of an agent (defaults to your OS username)
 - One observation per concern. Be specific.
-- `--repo` is optional but makes observations joinable by Datalog rules
+- `--scope` uses `repo:path` format (e.g. `myapp:pkg/auth`) — makes observations globally unambiguous and joinable by Datalog rules
 
 **Simulate multiple agents** by varying `--source`:
 
 ```bash
 pudl observe "auth package is overly complex" \
-    --kind obstacle --repo pkg/auth --source claude-code
+    --kind obstacle --scope myapp:pkg/auth --source claude-code
 
 pudl observe "auth package has too many responsibilities" \
-    --kind obstacle --repo pkg/auth --source review-agent
+    --kind obstacle --scope myapp:pkg/auth --source review-agent
 ```
 
 Corroboration (multiple sources flagging the same area) is signal that nous picks up on.
@@ -108,11 +108,11 @@ Watch the output. nous will:
 pudl facts list --relation observation --source nous
 
 # Repo hotspots
-pudl facts list --relation repo_hotspot
+pudl facts list --relation scope_hotspot
 
 # Everything, verbose
 pudl facts list --relation observation -v
-pudl facts list --relation repo_hotspot -v
+pudl facts list --relation scope_hotspot -v
 ```
 
 ## Step 5: Write Datalog Rules (Optional)
@@ -147,7 +147,7 @@ The pipeline is designed to run repeatedly:
 
 ```bash
 # More work happens, agents make more observations...
-pudl observe "fixed the race condition in cache" --kind fact --repo internal/cache
+pudl observe "fixed the race condition in cache" --kind fact --scope myapp:internal/cache
 
 # Invalidate observations that are no longer true
 pudl facts invalidate <id-of-race-condition-bug>
@@ -185,29 +185,29 @@ Here's a concrete example using pudl's own codebase:
 ```bash
 # Record observations about pudl
 pudl observe "CatalogDB has 39 methods across 8 files" \
-    --kind suggestion --repo internal/database
+    --kind suggestion --scope pudl:internal/database
 
 pudl observe "streaming imports bypass CUE validation (TODO stubs)" \
-    --kind obstacle --repo internal/streaming
+    --kind obstacle --scope pudl:internal/streaming
 
 pudl observe "importer.go is 978 lines handling multiple concerns" \
-    --kind suggestion --repo internal/importer
+    --kind suggestion --scope pudl:internal/importer
 
 pudl observe "bootstrap schemas require pudl init to propagate changes" \
-    --kind pattern --repo internal/importer
+    --kind pattern --scope pudl:internal/importer
 
 pudl observe "schemagen handles all formats inline at 893 lines" \
-    --kind suggestion --repo internal/schemagen
+    --kind suggestion --scope pudl:internal/schemagen
 
 # Different source corroborates
 pudl observe "importer.go mixes format detection with schema inference" \
-    --kind suggestion --repo internal/importer --source code-review-agent
+    --kind suggestion --scope pudl:internal/importer --source code-review-agent
 
 # Run nous
 nous run -domain observations -pudl ~/.pudl -cycles 50 -no-mutate -v 1
 
 # Check results
-pudl facts list --relation repo_hotspot
+pudl facts list --relation scope_hotspot
 pudl facts list --relation observation --source nous
 
 # Write a rule based on what you see

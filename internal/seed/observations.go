@@ -10,23 +10,23 @@ func LoadObservationDomain(s *unit.Store) {
 	putType(s, "Observation", 500, []string{"Anything"})
 	putType(s, "DerivedFact", 400, []string{"Anything"})
 	putType(s, "Conjecture", 600, []string{"Anything"})
-	putType(s, "RepoHotspot", 500, []string{"DerivedFact", "Anything"})
+	putType(s, "ScopeHotspot", 500, []string{"DerivedFact", "Anything"})
 }
 
 // LoadObservationHeuristics loads Mode 2 heuristics for reasoning over observations.
 func LoadObservationHeuristics(s *unit.Store) {
-	hFindRepoHotspots(s)
+	hFindScopeHotspots(s)
 	hCorroborateObstacles(s)
 	hConjectureFromPatterns(s)
 	hBoostCorroborated(s)
 	hPenalizeStaleObservations(s)
 }
 
-// H-FindRepoHotspots: "If multiple observations target the same repo, that repo
-// is a hotspot. Create a RepoHotspot unit."
-func hFindRepoHotspots(s *unit.Store) {
-	h := putHeuristic(s, "H-FindRepoHotspots", 700)
-	h.Set("english", "Find repos with multiple observations and flag them as hotspots")
+// H-FindScopeHotspots: "If multiple observations target the same scope, that scope
+// is a hotspot. Create a ScopeHotspot unit."
+func hFindScopeHotspots(s *unit.Store) {
+	h := putHeuristic(s, "H-FindScopeHotspots", 700)
+	h.Set("english", "Find scopes with multiple observations and flag them as hotspots")
 
 	// Fires when working on any Observation unit
 	h.Set("ifPotentiallyRelevant", `
@@ -35,7 +35,7 @@ func hFindRepoHotspots(s *unit.Store) {
 
 	h.Set("thenCompute", `
 		# Get this observation's repo
-		"ArgU" @ "repo" get-slot "thisRepo" !
+		"ArgU" @ "scope" get-slot "thisRepo" !
 		"thisRepo" @ nil =
 		if
 			# No repo set, skip
@@ -44,7 +44,7 @@ func hFindRepoHotspots(s *unit.Store) {
 			0 "count" !
 			"Observation" examples
 			each
-				it "repo" get-slot "thisRepo" @ =
+				it "scope" get-slot "thisRepo" @ =
 				if
 					"count" @ 1 + "count" !
 				then
@@ -56,8 +56,8 @@ func hFindRepoHotspots(s *unit.Store) {
 				"Hotspot-" "thisRepo" @ concat "hsName" !
 				"hsName" @ unit-exists? not
 				if
-					"hsName" @ "RepoHotspot" create-unit
-					"hsName" @ "repo" "thisRepo" @ set-slot
+					"hsName" @ "ScopeHotspot" create-unit
+					"hsName" @ "scope" "thisRepo" @ set-slot
 					"hsName" @ "observation_count" "count" @ set-slot
 					"hsName" @ "worth" 600 set-slot
 				else
@@ -79,7 +79,7 @@ func hFindRepoHotspots(s *unit.Store) {
 }
 
 // H-CorroborateObstacles: "If multiple sources reported the same obstacle kind
-// for the same repo, boost its worth."
+// for the same scope, boost its worth."
 func hCorroborateObstacles(s *unit.Store) {
 	h := putHeuristic(s, "H-CorroborateObstacles", 650)
 	h.Set("english", "Boost worth of obstacles corroborated by multiple sources")
@@ -91,7 +91,7 @@ func hCorroborateObstacles(s *unit.Store) {
 	`)
 
 	h.Set("thenCompute", `
-		"ArgU" @ "repo" get-slot "thisRepo" !
+		"ArgU" @ "scope" get-slot "thisRepo" !
 		"ArgU" @ "source" get-slot "thisSrc" !
 		0 "otherSources" !
 
@@ -101,7 +101,7 @@ func hCorroborateObstacles(s *unit.Store) {
 			"other" @ "ArgU" @ !=
 			"other" @ "kind" get-slot "obstacle" =
 			and
-			"other" @ "repo" get-slot "thisRepo" @ =
+			"other" @ "scope" get-slot "thisRepo" @ =
 			and
 			"other" @ "source" get-slot "thisSrc" @ !=
 			and
@@ -127,10 +127,10 @@ func hCorroborateObstacles(s *unit.Store) {
 }
 
 // H-ConjectureFromPatterns: "If we see the same kind of observation across
-// multiple repos, conjecture that it's a systemic issue."
+// multiple scopes, conjecture that it's a systemic issue."
 func hConjectureFromPatterns(s *unit.Store) {
 	h := putHeuristic(s, "H-ConjectureFromPatterns", 600)
-	h.Set("english", "When the same observation kind appears across repos, propose a systemic conjecture")
+	h.Set("english", "When the same observation kind appears across scopes, propose a systemic conjecture")
 
 	h.Set("ifPotentiallyRelevant", `
 		"ArgU" @ "Observation" isa?
