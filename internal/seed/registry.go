@@ -10,7 +10,8 @@ import (
 type DomainLoader func(s *unit.Store)
 
 var domains = map[string]DomainLoader{
-	"math": LoadMath,
+	"math":         LoadMath,
+	"observations": LoadObservationDomain,
 }
 
 // LoadDomain loads a named domain into the store. Returns an error if unknown.
