@@ -673,6 +673,103 @@ See `docs/domain-notes/` for detailed analysis of candidate Mode 1 domains.
 - Another Mode 1 domain (graphs, grammars, workflows)
 
 **Long-term:**
+- CUE-native RLL (see below)
 - Failure analysis as the first real Mode 2 domain
 - Human-agent boundary heuristics (Phase 6 from nousdesign.md)
 - LLM-backed heuristics as mu plugins (Phase 7)
+
+## CUE as RLL: the long-term architecture
+
+The current implementation (v1) uses CUE for schema validation and rule syntax, with Go doing all reasoning. Heuristics are Go strings containing stack DSL programs — opaque to CUE, not inspectable by meta-heuristics, mutated only at the token level. This works but limits meta-reasoning to token manipulation rather than structural analysis.
+
+The long-term goal (v2) is to make CUE the native representation language — an analog of Lenat's RLL (Representation Language Language) — where knowledge, heuristics, and meta-knowledge are all CUE values that the system can inspect, unify, and reason about structurally.
+
+### Why CUE is viable as RLL
+
+RLL was a meta-level substrate: a language for describing knowledge representations, represented in itself. CUE has structural parallels:
+
+- **RLL's slot inheritance ↔ CUE's type lattice.** Units inherit from generalizations in RLL; definitions inherit constraints via embedding in CUE. Both form a lattice with computable meet and join.
+- **RLL's self-describing units ↔ CUE's self-describing values.** A CUE value carries its constraints. Two values can be unified and the system reports compatibility. Analogous to RLL's inspectable slot facets.
+- **RLL's monotonic accretion ↔ CUE's monotonic constraints.** CUE only adds constraints, never removes them. Knowledge grows, matching the accretion model.
+
+Where CUE falls short of RLL on its own: no Turing-completeness (no loops, no recursion, no side effects), no triggers (if-added, if-removed), and all-or-nothing unification (no partial matches or soft constraints).
+
+### Three mechanisms that close the gap
+
+**1. Custom op functions (the `op` package pattern).**
+
+Go functions registered as CUE operations give CUE values computational capability. A heuristic precondition can call `op.#Match` for pattern matching against the knowledge base. A then-part can call `op.#Emit` to produce agenda items. The heuristic remains a CUE value — inspectable, unifiable, meta-reasonable — but has access to computational primitives.
+
+This mirrors RLL's `if-needed` and `if-added` facets, which were Lisp functions attached to slots. They were inspectable as data (Lisp code is data) but executable as computation. CUE values with op calls have the same dual nature.
+
+**2. The Go API as the meta-level.**
+
+CUE can't generate new CUE at runtime the way Lisp generates new code. But Go can — it can construct CUE source strings and compile them. The meta-level (heuristics that modify heuristics) goes through Go generating CUE. Less elegant than Lisp's homoiconicity but functionally equivalent. The Go wrapper also handles agenda management, credit assignment, and the parts of evaluation that require state and side effects.
+
+**3. CUE's function pattern for heuristics.**
+
+CUE definitions framed as input → output transforms:
+
+```cue
+#FindHotspots: {
+    // Metadata — inspectable by meta-heuristics
+    name:     "find-hotspots"
+    worth:    0.7
+    produces: "scope-hotspot"
+    creditors: [...string]
+
+    // Input schema — what the engine provides
+    input: {
+        observations: [...#Observation]
+        threshold: int | *2
+    }
+
+    // Output schema — what the heuristic produces
+    output: {
+        hotspots: [...{
+            scope: string
+            count: int
+        }]
+    }
+
+    // Computation — CUE for declarative parts, op calls for the rest
+    _grouped: op.#GroupBy & { data: input.observations, key: "scope" }
+    output: hotspots: op.#Filter & {
+        data: _grouped.result
+        pred: { count: >= input.threshold }
+    }
+}
+```
+
+This maps directly to RLL's heuristic structure:
+
+| RLL | CUE-native RLL |
+|-----|----------------|
+| Relevance conditions ("when should I fire?") | Input schema + preconditions (CUE constraints) |
+| Action body ("what do I do?") | Function body with op calls |
+| Output spec ("what do I produce?") | Output schema (CUE definition) |
+| Meta-slots (worth, creditors, english) | Regular CUE fields alongside the function |
+
+### What meta-reasoning this enables
+
+With heuristics as CUE values, meta-heuristics can reason structurally:
+
+- **Subsumption checking:** "This heuristic's input schema subsumes that one's — it's strictly more general." (CUE computes this natively.)
+- **Redundancy detection:** "These two heuristics have identical preconditions but different outputs — one may be redundant."
+- **Precondition analysis:** "This heuristic requires observations with `kind=obstacle` — it's irrelevant if there are no obstacles in the knowledge base." (Checkable by unifying the input schema against the current EDB.)
+- **Structural mutation:** Instead of token-level DSL mutation, mutate the CUE structure itself — swap op calls, widen input constraints, narrow output schemas. The mutation operates on meaningful structure, not opaque tokens.
+- **Composition:** "These two heuristics are often fired in sequence — propose a composite heuristic whose input is the first's input and whose output is the second's output."
+
+None of this is possible when heuristics are opaque Go string programs. The CUE representation makes the internal structure of heuristics available to the system's own reasoning.
+
+### Relationship to the current implementation
+
+The current system (v1) is not thrown away. It's the working prototype that validates the engine mechanics — agenda, credit assignment, HindSight, mutation, the two-level control loop. The CUE-native RLL (v2) replaces *how heuristics are represented and inspected*, not the engine that fires them.
+
+The migration path from v1 to v2:
+
+1. **Current state:** Heuristics are Go strings with stack DSL programs. CUE validates `#Rule` and `#Observation` schemas. Go does everything.
+2. **Intermediate:** Heuristic definitions move to CUE files. Preconditions become CUE patterns matched by the Datalog engine. Stack programs remain as opaque `[...#StackOp]` lists. Meta-reasoning limited to precondition analysis.
+3. **Target:** Heuristics are CUE input→output functions with op calls. The stack DSL is retired. Meta-heuristics reason over CUE structure. Mutation operates on CUE values. Go is the evaluator and meta-level, CUE is the representation.
+
+Step 2 is the current migration path described in "Heuristic representation in CUE" above. Step 3 is the full RLL vision. The op package and Go API are what make step 3 viable rather than aspirational.
