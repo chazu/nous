@@ -643,6 +643,20 @@ Mode 2 is operational: nous reads observations from pudl, reasons with Mode 2 he
 - `internal/seed/observations.go` — Mode 2 domain (4 types, 5 heuristics)
 - `-pudl DIR` flag on `nous run` to enable Mode 2
 
+## Open design issues
+
+### Rule domains / namespacing
+
+Rules currently have no domain concept. All rules in `~/.pudl/schema/pudl/rules/` and `.pudl/schema/pudl/rules/` are loaded and evaluated together on every `pudl query` call. As rules accumulate across different analysis domains (dependency analysis, code quality, failure analysis), this becomes a problem — irrelevant rules fire against unrelated data, and there's no way for a nous domain to pull only its own rule set.
+
+Options under consideration:
+
+1. **Domain field on `#Rule`** — add `domain?: string` to the schema. The evaluator filters by domain before evaluation. Requires tagging every rule.
+2. **Directory-based namespacing** — `rules/deps/`, `rules/quality/`, `rules/failures/`. The evaluator loads from a specific subdirectory. Convention-based, no schema change. Mirrors how pudl already organizes schemas by package directory.
+3. **Query-time filtering** — `pudl query --domain deps depends_transitive`. The domain maps to a directory or a filter.
+
+Leaning toward option 2 (directory structure) with option 3 as the CLI surface. No decision made yet.
+
 ## What's next
 
 See `docs/domain-notes/` for detailed analysis of candidate Mode 1 domains.
