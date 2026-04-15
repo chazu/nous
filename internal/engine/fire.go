@@ -7,11 +7,11 @@ import (
 )
 
 // fireTaskRule fires a heuristic's IfTaskParts against a task, then executes ThenParts if all pass.
-// Returns (fired, abort).
-func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool) {
+// Returns (fired, abort, produced).
+func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool, bool) {
 	h := e.Store.Get(heuristic)
 	if h == nil {
-		return false, false
+		return false, false, false
 	}
 
 	e.VM.SetEnv("ArgU", dsl.StringVal(task.UnitName))
@@ -21,13 +21,13 @@ func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool) 
 		v, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
-				return true, true
+				return true, true, false
 			}
 			e.log(3, "    %s.ifPotentiallyRelevant error: %v", heuristic, err)
-			return false, false
+			return false, false, false
 		}
 		if !v.Truthy() {
-			return false, false
+			return false, false, false
 		}
 	}
 
@@ -36,13 +36,13 @@ func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool) 
 		v, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
-				return true, true
+				return true, true, false
 			}
 			e.log(3, "    %s.ifTrulyRelevant error: %v", heuristic, err)
-			return false, false
+			return false, false, false
 		}
 		if !v.Truthy() {
-			return false, false
+			return false, false, false
 		}
 	}
 
@@ -51,26 +51,28 @@ func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool) 
 		v, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
-				return true, true
+				return true, true, false
 			}
 			e.log(3, "    %s.ifWorkingOnTask error: %v", heuristic, err)
-			return false, false
+			return false, false, false
 		}
 		if !v.Truthy() {
-			return false, false
+			return false, false, false
 		}
 	}
 
 	// All conditions passed — execute ThenParts
-	return true, e.executeThenParts(h, heuristic)
+	abort, produced := e.executeThenParts(h, heuristic)
+	return true, abort, produced
 }
 
 // fireUnitRule fires a heuristic against a unit (Level 2: when agenda is empty).
 // Uses ifPotentiallyRelevant and ifTrulyRelevant, then ThenParts.
-func (e *Engine) fireUnitRule(heuristic string, targetUnit string) (bool, bool) {
+// Returns (fired, abort, produced).
+func (e *Engine) fireUnitRule(heuristic string, targetUnit string) (bool, bool, bool) {
 	h := e.Store.Get(heuristic)
 	if h == nil {
-		return false, false
+		return false, false, false
 	}
 
 	e.VM.SetEnv("ArgU", dsl.StringVal(targetUnit))
@@ -81,13 +83,13 @@ func (e *Engine) fireUnitRule(heuristic string, targetUnit string) (bool, bool) 
 		v, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
-				return true, true
+				return true, true, false
 			}
 			e.log(3, "    %s.ifPotentiallyRelevant error: %v", heuristic, err)
-			return false, false
+			return false, false, false
 		}
 		if !v.Truthy() {
-			return false, false
+			return false, false, false
 		}
 	}
 
@@ -96,22 +98,28 @@ func (e *Engine) fireUnitRule(heuristic string, targetUnit string) (bool, bool) 
 		v, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
-				return true, true
+				return true, true, false
 			}
 			e.log(3, "    %s.ifTrulyRelevant error: %v", heuristic, err)
-			return false, false
+			return false, false, false
 		}
 		if !v.Truthy() {
-			return false, false
+			return false, false, false
 		}
 	}
 
 	// All conditions passed — execute ThenParts
-	return true, e.executeThenParts(h, heuristic)
+	abort, produced := e.executeThenParts(h, heuristic)
+	return true, abort, produced
 }
 
-// executeThenParts runs all ThenPart slots of a heuristic. Returns true if abort.
-func (e *Engine) executeThenParts(h *unit.Unit, heuristicName string) bool {
+// executeThenParts runs all ThenPart slots of a heuristic.
+// Returns (abort, producedOutput). producedOutput is true if the store grew
+// or the agenda grew as a result of executing the ThenParts.
+func (e *Engine) executeThenParts(h *unit.Unit, heuristicName string) (bool, bool) {
+	storeBefore := e.Store.Count()
+	agendaBefore := e.Agenda.Len()
+
 	for _, slot := range unit.ThenPartSlots() {
 		prog := h.GetString(slot)
 		if prog == "" {
@@ -120,10 +128,12 @@ func (e *Engine) executeThenParts(h *unit.Unit, heuristicName string) bool {
 		_, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
-				return true
+				return true, false
 			}
 			e.log(3, "    %s.%s error: %v", heuristicName, slot, err)
 		}
 	}
-	return false
+
+	produced := e.Store.Count() > storeBefore || e.Agenda.Len() > agendaBefore
+	return false, produced
 }

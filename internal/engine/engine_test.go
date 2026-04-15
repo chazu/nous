@@ -248,3 +248,61 @@ func TestDumpWorths(t *testing.T) {
 		t.Error("Alpha (700) should appear before Beta (300)")
 	}
 }
+
+func TestTrackApplicsNoOpFailure(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+
+	// Create a minimal "Anything" so isA lookups work
+	anything := unit.New("Anything")
+	anything.Set("isA", []string{"Anything"})
+	store.Put(anything)
+
+	heuristic := unit.New("Heuristic")
+	heuristic.Set("isA", []string{"Anything"})
+	store.Put(heuristic)
+
+	// Create a heuristic whose thenCompute fires but produces nothing.
+	// "1 drop" pushes 1 then drops it — net effect is zero.
+	h := unit.New("H-NoOp")
+	h.SetWorth(500)
+	h.Set("isA", []string{"Heuristic", "Anything"})
+	h.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	h.Set("thenCompute", "1 drop")
+	store.Put(h)
+
+	// Create a target unit
+	target := unit.New("Target")
+	target.SetWorth(500)
+	target.Set("isA", []string{"Anything"})
+	store.Put(target)
+
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	// Fire the heuristic via a task
+	ag.Push(&agenda.Task{
+		Priority: 500,
+		UnitName: "Target",
+		SlotName: "examples",
+		Reasons:  []string{"test"},
+	})
+	eng.MaxCycles = 1
+	eng.Run(context.Background())
+
+	// The heuristic fired (no if-guards) but produced no output.
+	// overallRecord should have failures=1, successes=0.
+	record := h.GetMap("overallRecord")
+	if record == nil {
+		t.Fatal("overallRecord is nil")
+	}
+	if toInt(record["successes"]) != 0 {
+		t.Errorf("expected 0 successes, got %d", toInt(record["successes"]))
+	}
+	if toInt(record["failures"]) != 1 {
+		t.Errorf("expected 1 failure, got %d", toInt(record["failures"]))
+	}
+}

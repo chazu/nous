@@ -127,9 +127,9 @@ func (e *Engine) WorkOnTask(task *agenda.Task) {
 
 	heuristics := e.Store.Examples("Heuristic")
 	for _, h := range heuristics {
-		fired, abort := e.fireTaskRule(h, task)
+		fired, abort, produced := e.fireTaskRule(h, task)
 		if fired {
-			e.trackApplics(h, task.UnitName, true)
+			e.trackApplics(h, task.UnitName, produced)
 			e.log(2, "  Heuristic %s fired on task %s.%s", h, task.UnitName, task.SlotName)
 		}
 		if abort {
@@ -146,9 +146,9 @@ func (e *Engine) WorkOnUnit(u string) {
 
 	heuristics := e.Store.Examples("Heuristic")
 	for _, h := range heuristics {
-		fired, _ := e.fireUnitRule(h, u)
+		fired, _, produced := e.fireUnitRule(h, u)
 		if fired {
-			e.trackApplics(h, u, true)
+			e.trackApplics(h, u, produced)
 			e.log(2, "  Heuristic %s fired on unit %s", h, u)
 		}
 	}
