@@ -278,6 +278,122 @@ func TestGetApplics(t *testing.T) {
 	}
 }
 
+func TestAllSlots(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag)
+	vm.Out = &bytes.Buffer{}
+
+	u := unit.New("TestUnit")
+	u.Set("isA", []string{"Anything"})
+	u.Set("domain", []string{"Set"})
+	u.Set("english", "test")
+	store.Put(u)
+
+	v, err := vm.Execute(`"TestUnit" all-slots`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := v.AsList()
+	if len(list) < 3 {
+		t.Errorf("expected at least 3 slots (isA, domain, english), got %d", len(list))
+	}
+}
+
+func TestCriterialSlots(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag)
+	vm.Out = &bytes.Buffer{}
+
+	// Create slot ontology units
+	critSlot := unit.New("CriterialSlot")
+	critSlot.Set("isA", []string{"Slot", "Anything"})
+	store.Put(critSlot)
+
+	slotUnit := unit.New("Slot")
+	slotUnit.Set("isA", []string{"Anything"})
+	store.Put(slotUnit)
+
+	anything := unit.New("Anything")
+	store.Put(anything)
+
+	domainSlot := unit.New("domain")
+	domainSlot.Set("isA", []string{"Slot", "CriterialSlot", "Anything"})
+	store.Put(domainSlot)
+
+	englishSlot := unit.New("english")
+	englishSlot.Set("isA", []string{"Slot", "NonCriterialSlot", "Anything"})
+	store.Put(englishSlot)
+
+	nonCritSlot := unit.New("NonCriterialSlot")
+	nonCritSlot.Set("isA", []string{"Slot", "Anything"})
+	store.Put(nonCritSlot)
+
+	// Create a unit with both slot types
+	u := unit.New("TestOp")
+	u.Set("isA", []string{"Op"})
+	u.Set("domain", []string{"Set"})
+	u.Set("english", "test op")
+	store.Put(u)
+
+	v, err := vm.Execute(`"TestOp" criterial-slots`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := v.AsList()
+	found := false
+	for _, item := range list {
+		if item.AsString() == "domain" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'domain' in criterial slots")
+	}
+}
+
+func TestSibSlots(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag)
+	vm.Out = &bytes.Buffer{}
+
+	domainSlot := unit.New("Domain")
+	domainSlot.Set("isA", []string{"Slot"})
+	domainSlot.Set("sibSlots", []string{"Range"})
+	store.Put(domainSlot)
+
+	v, err := vm.Execute(`"Domain" sib-slots`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := v.AsList()
+	if len(list) != 1 || list[0].AsString() != "Range" {
+		t.Errorf("expected [Range], got %v", list)
+	}
+}
+
+func TestInverseSlot(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag)
+	vm.Out = &bytes.Buffer{}
+
+	domainSlot := unit.New("Domain")
+	domainSlot.Set("isA", []string{"Slot"})
+	domainSlot.Set("inverse", "InDomainOf")
+	store.Put(domainSlot)
+
+	v, err := vm.Execute(`"Domain" inverse-slot`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.AsString() != "InDomainOf" {
+		t.Errorf("expected InDomainOf, got %s", v.AsString())
+	}
+}
+
 func TestApplicsByType(t *testing.T) {
 	vm := testVM(t)
 

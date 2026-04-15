@@ -83,6 +83,16 @@ var builtins = map[string]builtinFn{
 	// Meta-heuristic ops
 	"analyze-and-specialize": bAnalyzeAndSpecialize,
 
+	// Slot reasoning
+	"all-slots":           bAllSlots,
+	"criterial-slots":     bCriterialSlots,
+	"non-criterial-slots": bNonCriterialSlots,
+	"sib-slots":           bSibSlots,
+	"super-slots":         bSuperSlots,
+	"sub-slots":           bSubSlots,
+	"inverse-slot":        bInverseSlot,
+	"slot-type":           bSlotType,
+
 	// Misc
 	"noop": func(vm *VM) error { return nil },
 }
@@ -257,9 +267,9 @@ func bSetSlot(vm *VM) error {
 	slot := slotName.AsString()
 	// Creditors is always stored as []string
 	if slot == "creditors" && value.kind == VString {
-		u.Set(slot, []string{value.sval})
+		vm.Store.SetSlot(unitName.AsString(), slot, []string{value.sval})
 	} else {
-		u.Set(slot, valueToAny(value))
+		vm.Store.SetSlot(unitName.AsString(), slot, valueToAny(value))
 	}
 	return nil
 }
@@ -619,6 +629,149 @@ func bAnalyzeAndSpecialize(vm *VM) error {
 	vm.Store.Put(spec)
 	vm.NewUnits = append(vm.NewUnits, specName)
 	vm.push(BoolVal(true))
+	return nil
+}
+
+// Slot reasoning builtins
+
+func bAllSlots(vm *VM) error {
+	name := vm.pop()
+	u := vm.Store.Get(name.AsString())
+	if u == nil {
+		vm.push(Nil())
+		return nil
+	}
+	var slots []Value
+	for k := range u.Slots {
+		slots = append(slots, StringVal(k))
+	}
+	vm.push(ListVal(slots))
+	return nil
+}
+
+func bCriterialSlots(vm *VM) error {
+	name := vm.pop()
+	u := vm.Store.Get(name.AsString())
+	if u == nil {
+		vm.push(Nil())
+		return nil
+	}
+	var slots []Value
+	for k := range u.Slots {
+		if vm.Store.IsA(k, "CriterialSlot") {
+			slots = append(slots, StringVal(k))
+		}
+	}
+	vm.push(ListVal(slots))
+	return nil
+}
+
+func bNonCriterialSlots(vm *VM) error {
+	name := vm.pop()
+	u := vm.Store.Get(name.AsString())
+	if u == nil {
+		vm.push(Nil())
+		return nil
+	}
+	var slots []Value
+	for k := range u.Slots {
+		if vm.Store.IsA(k, "NonCriterialSlot") {
+			slots = append(slots, StringVal(k))
+		}
+	}
+	vm.push(ListVal(slots))
+	return nil
+}
+
+func bSibSlots(vm *VM) error {
+	name := vm.pop()
+	slotUnit := vm.Store.Get(name.AsString())
+	if slotUnit == nil {
+		vm.push(Nil())
+		return nil
+	}
+	sibs := slotUnit.GetStrings("sibSlots")
+	if sibs == nil {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	vals := make([]Value, len(sibs))
+	for i, s := range sibs {
+		vals[i] = StringVal(s)
+	}
+	vm.push(ListVal(vals))
+	return nil
+}
+
+func bSuperSlots(vm *VM) error {
+	name := vm.pop()
+	slotUnit := vm.Store.Get(name.AsString())
+	if slotUnit == nil {
+		vm.push(Nil())
+		return nil
+	}
+	supers := slotUnit.GetStrings("superSlots")
+	if supers == nil {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	vals := make([]Value, len(supers))
+	for i, s := range supers {
+		vals[i] = StringVal(s)
+	}
+	vm.push(ListVal(vals))
+	return nil
+}
+
+func bSubSlots(vm *VM) error {
+	name := vm.pop()
+	slotUnit := vm.Store.Get(name.AsString())
+	if slotUnit == nil {
+		vm.push(Nil())
+		return nil
+	}
+	subs := slotUnit.GetStrings("subSlots")
+	if subs == nil {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	vals := make([]Value, len(subs))
+	for i, s := range subs {
+		vals[i] = StringVal(s)
+	}
+	vm.push(ListVal(vals))
+	return nil
+}
+
+func bInverseSlot(vm *VM) error {
+	name := vm.pop()
+	slotUnit := vm.Store.Get(name.AsString())
+	if slotUnit == nil {
+		vm.push(Nil())
+		return nil
+	}
+	inv := slotUnit.GetString("inverse")
+	if inv == "" {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(inv))
+	return nil
+}
+
+func bSlotType(vm *VM) error {
+	name := vm.pop()
+	slotUnit := vm.Store.Get(name.AsString())
+	if slotUnit == nil {
+		vm.push(Nil())
+		return nil
+	}
+	dt := slotUnit.GetString("dataType")
+	if dt == "" {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(dt))
 	return nil
 }
 
