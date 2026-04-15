@@ -5,9 +5,46 @@
 
 ---
 
+## Phase 0: CUE Data Layer
+
+**Why first:** The EURISKO parity work adds ~200 units. Defining them in CUE from the start avoids creating a large body of hardcoded Go that would need to be migrated later. Establishes the infrastructure that all subsequent phases use to define their units.
+
+### Issues
+
+**0.1: CUE schema for units**
+Define `#Unit` schema in `domains/schema.cue`. Covers: name, worth, isA, and an open slots structure that accepts any slot key. Heuristic programs (ifParts, thenParts) are string fields holding stack DSL code. Data fields (data, examples) are typed. The schema validates at load time but doesn't constrain slot names -- units are extensible.
+
+**0.2: CUE loader in Go**
+New package `internal/cueload/` that reads a directory of `.cue` files, validates against the `#Unit` schema, and returns a list of unit definitions. Uses `cuelang.org/go` to load and evaluate. Returns a Go struct that the seed loader can iterate to create units in the store.
+
+**0.3: Migrate math domain to CUE**
+Move all units from `internal/seed/math.go` into CUE files under `domains/math/`:
+- `domains/math/types.cue` -- type hierarchy (Structure, Set, List, Bag, Number, etc.)
+- `domains/math/sets.cue` -- concrete sets (SetOfPrimes, SetOfEvens, SetOfOdds, etc.)
+- `domains/math/operations.cue` -- operations (SetUnion, SetIntersect, SetDifference, GCD, DivisorsOf, Compose, Restrict)
+- `domains/math/predicates.cue` -- predicates (MemberOf, SubsetOf, SetEqual)
+- `domains/math/numbers.cue` -- number types and instances (EvenNum, OddNum, PrimeNum, etc.)
+- `domains/math/conjectures.cue` -- seed conjectures (GoldbachConjecture)
+
+**0.4: Migrate heuristics to CUE**
+Move all heuristics from `internal/seed/heuristics.go` into `domains/math/heuristics.cue`. Each heuristic is a `#Unit` with DSL program strings in its ifPart/thenPart slots. The Go helper `putHeuristic` is replaced by the CUE loader.
+
+**0.5: Migrate observation domain to CUE**
+Move `internal/seed/observations.go` types and heuristics into `domains/observations/`:
+- `domains/observations/types.cue` -- Observation, DerivedFact, Conjecture, ScopeHotspot
+- `domains/observations/heuristics.cue` -- H-FindScopeHotspots, H-CorroborateObstacles, etc.
+
+**0.6: Update seed/registry.go**
+Replace `LoadMath`/`LoadHeuristics`/`LoadObservationDomain`/`LoadObservationHeuristics` with a single `LoadDomain(name, store)` that calls the CUE loader on `domains/<name>/`. Keep the Go seed files around temporarily for comparison, remove once CUE loading is verified equivalent.
+
+**0.7: Regression test**
+Run the existing engine tests and the 300-cycle math domain run, verify identical behavior (same conjectures, same unit kills, same HAvoid rules). The CUE migration must be a pure refactor with no behavioral change.
+
+---
+
 ## Phase 1: Slot Ontology
 
-**Why first:** H3/H5/H6/H17/H18 can't be implemented without it. HindSight H12-H14 need to know which slot was changed. This is the foundation everything else builds on.
+**Why second:** H3/H5/H6/H17/H18 can't be implemented without it. HindSight H12-H14 need to know which slot was changed. Now defined in CUE (from Phase 0), not Go.
 
 ### Issues
 
@@ -27,8 +64,8 @@ Pairs: Generalizations/Specializations, Domain/InDomainOf, Range/IsRangeOf, Exte
 **1.4: DSL builtins for slot reasoning**
 New builtins: `criterial-slots` (push list of criterial slot names for a unit), `non-criterial-slots`, `sib-slots` (push sibling slots), `super-slots`, `sub-slots`, `inverse-slot` (push the inverse slot name), `slot-type` (push the DataType of a slot), `all-slots` (push list of all populated slot names for a unit).
 
-**1.5: Load slot definitions in seed**
-New file `internal/seed/slots.go` that creates all slot definition units. Called from both math and observation domain loaders.
+**1.5: Slot definitions in CUE**
+New file `domains/slots/slots.cue` defining all slot units. Loaded by the CUE loader (Phase 0) before any domain. Both math and observation domains depend on the slot definitions being present.
 
 ---
 
@@ -230,14 +267,15 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 
 | Phase | Focus | Issues | Dependencies |
 |---|---|---|---|
-| 1 | Slot ontology | 5 | None |
-| 2 | Generalization/specialization | 8 | Phase 1 |
-| 3 | Rich HindSight | 6 | Phase 1, 2 |
-| 4 | Remaining heuristics | 10 | Phase 1, 2, 3 |
-| 5 | Type hierarchy + operations | 12 | Phase 1 |
+| 0 | CUE data layer | 7 | None |
+| 1 | Slot ontology | 5 | Phase 0 |
+| 2 | Generalization/specialization | 8 | Phase 0, 1 |
+| 3 | Rich HindSight | 6 | Phase 0, 1, 2 |
+| 4 | Remaining heuristics | 10 | Phase 0, 1, 2, 3 |
+| 5 | Type hierarchy + operations | 12 | Phase 0, 1 |
 | 6 | Interestingness + rarity | 5 | Phase 4, 5 |
-| 7 | Definition representations | 5 | Phase 1 |
+| 7 | Definition representations | 5 | Phase 0, 1 |
 
 Phases 4 and 5 can be parallelized. Phase 7 can start after Phase 1.
 
-Total: 51 issues across 7 phases.
+Total: 58 issues across 8 phases.
