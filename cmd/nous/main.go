@@ -28,6 +28,10 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		runCmd(os.Args[2:])
+	case "init":
+		initCmd(os.Args[2:])
+	case "guide":
+		guideCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -43,7 +47,21 @@ func runCmd(args []string) {
 	domain := fs.String("domain", "math", "seed domain to load ("+seed.Available()+")")
 	noMutate := fs.Bool("no-mutate", false, "disable heuristic mutation")
 	pudlDir := fs.String("pudl", "", "pudl config directory (enables Mode 2, reads from pudl fact store)")
+	domainsDir := fs.String("domains-dir", "", "filesystem path to domains/ directory")
 	fs.Parse(args)
+
+	// Set domains directory
+	if *domainsDir != "" {
+		seed.DomainsDir = *domainsDir
+	} else {
+		// Try ./domains/ (running from project root)
+		if _, err := os.Stat("domains"); err == nil {
+			seed.DomainsDir = "domains"
+		} else {
+			fmt.Fprintf(os.Stderr, "error: cannot find domains/ directory. Use -domains-dir flag.\n")
+			os.Exit(1)
+		}
+	}
 
 	// Build the system
 	store := unit.NewStore()
@@ -53,13 +71,6 @@ func runCmd(args []string) {
 	if err := seed.LoadDomain(store, *domain); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
-	}
-
-	// Load heuristics — use observation heuristics for Mode 2
-	if *domain == "observations" {
-		seed.LoadObservationHeuristics(store)
-	} else {
-		seed.LoadHeuristics(store)
 	}
 
 	// Mode 2: load facts from pudl
@@ -174,14 +185,17 @@ func usage() {
 
 Usage:
   nous run [-v N] [-cycles N] [-domain NAME]    Run the discovery engine
+  nous init                                     Install agent hooks in current project
+  nous guide [topic]                            Agent guides (observations, query, scope, overview)
   nous help                                     Show this help
 
 Flags:
-  -v N          Verbosity (0=quiet, 1=normal, 2=detailed, 3=debug)
-  -cycles N     Maximum cycles (default 100)
-  -domain NAME  Seed domain to load (default: math)
-  -no-mutate    Disable heuristic mutation
-  -pudl DIR     pudl config directory (Mode 2: reason over pudl facts)
+  -v N            Verbosity (0=quiet, 1=normal, 2=detailed, 3=debug)
+  -cycles N       Maximum cycles (default 100)
+  -domain NAME    Seed domain to load (default: math)
+  -domains-dir D  Filesystem path to domains/ directory
+  -no-mutate      Disable heuristic mutation
+  -pudl DIR       pudl config directory (Mode 2: reason over pudl facts)
 `)
 	os.Exit(1)
 }
