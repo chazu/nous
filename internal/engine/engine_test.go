@@ -295,6 +295,113 @@ func TestTrackApplicsDeferredFailure(t *testing.T) {
 	}
 }
 
+func TestPerformanceBasedMutation(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	// Set mutation config
+	eng.MutConfig.Enabled = true
+	eng.MutConfig.MinApplics = 10
+	eng.MutConfig.MutationThreshold = 0.3
+	eng.MutConfig.MaxMutants = 20
+
+	// Create Heuristic type unit
+	hType := unit.New("Heuristic")
+	hType.Set("isA", []string{"Anything"})
+	store.Put(hType)
+
+	anything := unit.New("Anything")
+	anything.Set("isA", []string{"Anything"})
+	store.Put(anything)
+
+	// H-Bad: ratio 2/12 = 0.17, below threshold
+	hBad := unit.New("H-Bad")
+	hBad.SetWorth(500)
+	hBad.Set("isA", []string{"Heuristic", "Anything"})
+	hBad.Set("overallRecord", map[string]any{"successes": 2, "failures": 10})
+	hBad.Set("thenCompute", "1 drop")
+	store.Put(hBad)
+
+	// H-Good: ratio 8/10 = 0.80, above threshold
+	hGood := unit.New("H-Good")
+	hGood.SetWorth(500)
+	hGood.Set("isA", []string{"Heuristic", "Anything"})
+	hGood.Set("overallRecord", map[string]any{"successes": 8, "failures": 2})
+	hGood.Set("thenCompute", "1 drop")
+	store.Put(hGood)
+
+	eng.tryMutateHeuristic()
+
+	// Check that a mutant of H-Bad was created
+	foundBadMutant := false
+	foundGoodMutant := false
+	for _, name := range store.All() {
+		u := store.Get(name)
+		if u == nil {
+			continue
+		}
+		mutOf := u.GetString("mutant_of")
+		if mutOf == "H-Bad" {
+			foundBadMutant = true
+		}
+		if mutOf == "H-Good" {
+			foundGoodMutant = true
+		}
+	}
+
+	if !foundBadMutant {
+		t.Error("expected a mutant of H-Bad to be created")
+	}
+	if foundGoodMutant {
+		t.Error("did not expect a mutant of H-Good")
+	}
+}
+
+func TestNoMutationWhenAllAdequate(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	eng.MutConfig.Enabled = true
+	eng.MutConfig.MinApplics = 10
+	eng.MutConfig.MutationThreshold = 0.3
+	eng.MutConfig.MaxMutants = 20
+
+	// Create Heuristic type unit
+	hType := unit.New("Heuristic")
+	hType.Set("isA", []string{"Anything"})
+	store.Put(hType)
+
+	anything := unit.New("Anything")
+	anything.Set("isA", []string{"Anything"})
+	store.Put(anything)
+
+	// H-Good: ratio 0.80, above threshold
+	hGood := unit.New("H-Good")
+	hGood.SetWorth(500)
+	hGood.Set("isA", []string{"Heuristic", "Anything"})
+	hGood.Set("overallRecord", map[string]any{"successes": 8, "failures": 2})
+	hGood.Set("thenCompute", "1 drop")
+	store.Put(hGood)
+
+	countBefore := store.Count()
+
+	eng.tryMutateHeuristic()
+
+	if store.Count() != countBefore {
+		t.Errorf("expected no new units, store count changed from %d to %d", countBefore, store.Count())
+	}
+}
+
 func TestTrackApplicsNoOpFailure(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()

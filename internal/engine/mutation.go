@@ -11,21 +11,25 @@ import (
 // MutationConfig controls how often and how aggressively the engine
 // mutates heuristics.
 type MutationConfig struct {
-	Enabled      bool
-	Interval     int     // try mutation every N cycles
-	MaxMutants   int     // max live mutant heuristics at once
-	MutantWorth  int     // starting worth for mutant heuristics
-	ValidateOnly bool    // if true, only keep mutations that pass validation
+	Enabled           bool
+	Interval          int     // try mutation every N cycles
+	MaxMutants        int     // max live mutant heuristics at once
+	MutantWorth       int     // starting worth for mutant heuristics
+	ValidateOnly      bool    // if true, only keep mutations that pass validation
+	MinApplics        int     // minimum total applications before considering mutation
+	MutationThreshold float64 // success ratio below which a heuristic is eligible
 }
 
 // DefaultMutationConfig returns sensible defaults.
 func DefaultMutationConfig() MutationConfig {
 	return MutationConfig{
-		Enabled:      true,
-		Interval:     10,
-		MaxMutants:   20,
-		MutantWorth:  400,
-		ValidateOnly: true,
+		Enabled:           true,
+		Interval:          10,
+		MaxMutants:        20,
+		MutantWorth:       400,
+		ValidateOnly:      true,
+		MinApplics:        10,
+		MutationThreshold: 0.3,
 	}
 }
 
@@ -49,9 +53,10 @@ func (e *Engine) tryMutateHeuristic() {
 		return
 	}
 
-	// Pick a heuristic to mutate, weighted by worth
-	parent := e.pickHeuristicByWorth()
+	// Pick the worst-performing heuristic to mutate
+	parent := e.pickWorstPerformer()
 	if parent == nil {
+		e.log(2, "  Mutation: no underperforming heuristics found")
 		return
 	}
 
@@ -82,7 +87,9 @@ func (e *Engine) tryMutateHeuristic() {
 	m := unit.New(mutantName)
 	m.SetWorth(e.MutConfig.MutantWorth)
 	m.Set("isA", []string{"Heuristic", "MutantHeuristic", "Anything"})
-	m.Set("creditors", []string{parent.Name})
+	parentCreditors := parent.GetStrings("creditors")
+	mutantCreditors := append([]string{parent.Name}, parentCreditors...)
+	m.Set("creditors", mutantCreditors)
 	m.Set("mutant_of", parent.Name)
 	m.Set("mutation_op", op.Kind)
 	m.Set("mutation_slot", slot)
@@ -162,6 +169,62 @@ func (e *Engine) pickHeuristicByWorth() *unit.Unit {
 		}
 	}
 	return e.Store.Get(candidates[len(candidates)-1].name)
+}
+
+// pickWorstPerformer selects the heuristic with the lowest success ratio
+// that has enough applications and falls below the mutation threshold.
+// Ties are broken by lowest worth.
+func (e *Engine) pickWorstPerformer() *unit.Unit {
+	heuristics := e.Store.Examples("Heuristic")
+	if len(heuristics) == 0 {
+		return nil
+	}
+
+	type candidate struct {
+		name  string
+		ratio float64
+		worth int
+	}
+	var candidates []candidate
+
+	for _, name := range heuristics {
+		if name == "Heuristic" {
+			continue
+		}
+		u := e.Store.Get(name)
+		if u == nil {
+			continue
+		}
+		record := u.GetMap("overallRecord")
+		if record == nil {
+			continue
+		}
+		successes := toInt(record["successes"])
+		failures := toInt(record["failures"])
+		total := successes + failures
+		if total < e.MutConfig.MinApplics {
+			continue
+		}
+		ratio := float64(successes) / float64(total)
+		if ratio >= e.MutConfig.MutationThreshold {
+			continue
+		}
+		candidates = append(candidates, candidate{name, ratio, u.Worth()})
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Sort: lowest ratio first, then lowest worth as tiebreaker
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].ratio != candidates[j].ratio {
+			return candidates[i].ratio < candidates[j].ratio
+		}
+		return candidates[i].worth < candidates[j].worth
+	})
+
+	return e.Store.Get(candidates[0].name)
 }
 
 // pickProgramSlot returns a random non-empty program slot from a heuristic.

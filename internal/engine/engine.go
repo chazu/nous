@@ -106,8 +106,8 @@ func (e *Engine) Run(ctx context.Context) error {
 		// Post-cycle: process any units deleted during this cycle
 		e.processDeletedUnits()
 
-		// Periodic mutation
-		if e.MutConfig.Enabled && e.cycle > 0 && e.cycle%e.MutConfig.Interval == 0 {
+		// Performance-based mutation: try every cycle, pickWorstPerformer gates it
+		if e.MutConfig.Enabled {
 			e.tryMutateHeuristic()
 		}
 	}
