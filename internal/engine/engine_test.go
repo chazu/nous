@@ -652,6 +652,107 @@ func TestHAvoidDemotion(t *testing.T) {
 	}
 }
 
+func TestSelfModificationLoop(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	// Type hierarchy
+	anything := unit.New("Anything")
+	anything.Set("isA", []string{})
+	store.Put(anything)
+
+	heuristic := unit.New("Heuristic")
+	heuristic.Set("isA", []string{"Anything"})
+	store.Put(heuristic)
+
+	setType := unit.New("Set")
+	setType.Set("isA", []string{"Anything"})
+	store.Put(setType)
+
+	// A heuristic that creates low-worth units (they'll be killed by H-KillWorthless)
+	hBadCreator := unit.New("H-BadCreator")
+	hBadCreator.SetWorth(500)
+	hBadCreator.Set("isA", []string{"Heuristic", "Anything"})
+	hBadCreator.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	hBadCreator.Set("ifPotentiallyRelevant", `
+		"ArgU" @ "Set" isa?
+		"ArgU" @ "Heuristic" isa? not
+		and
+	`)
+	hBadCreator.Set("thenCompute", `
+		"BadChild-" "ArgU" @ concat "childName" !
+		"childName" @ unit-exists? not
+		if
+			"childName" @ "Set" create-unit drop
+			50 "childName" @ "worth" set-slot
+			"H-BadCreator" "childName" @ "creditors" set-slot
+		then
+	`)
+	store.Put(hBadCreator)
+
+	// Load seed heuristics (includes H-KillWorthless which kills units with worth < 100)
+	seed.LoadHeuristics(store)
+
+	// A seed unit to trigger the heuristic
+	target := unit.New("TestSet")
+	target.SetWorth(500)
+	target.Set("isA", []string{"Set", "Anything"})
+	store.Put(target)
+
+	// Run with settings that enable the loop
+	eng.MaxCycles = 50
+	eng.MutConfig.Enabled = true
+	eng.MutConfig.Interval = 5
+	eng.MutConfig.MinApplics = 3
+	eng.MutConfig.MutationThreshold = 0.5
+
+	err := eng.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Verify the loop happened:
+
+	// 1. H-BadCreator should have applics failures (from unit deaths)
+	record := hBadCreator.GetMap("overallRecord")
+	if record == nil {
+		t.Fatal("H-BadCreator overallRecord is nil")
+	}
+	failures := toInt(record["failures"])
+	if failures == 0 {
+		t.Error("expected H-BadCreator to have accumulated failures from unit deaths")
+	}
+
+	// 2. H-BadCreator's worth should have decreased (from punishCreators)
+	if hBadCreator.Worth() >= 500 {
+		t.Errorf("expected H-BadCreator worth to decrease below 500, got %d", hBadCreator.Worth())
+	}
+
+	// 3. Graveyard should have entries
+	if len(eng.Graveyard) == 0 {
+		t.Error("expected units in the graveyard")
+	}
+
+	// 4. HAvoid rules should exist
+	avoidCount := 0
+	for _, name := range store.All() {
+		if store.IsA(name, "HAvoidRule") {
+			avoidCount++
+		}
+	}
+	if avoidCount == 0 {
+		t.Error("expected HAvoid rules to be created via HindSight")
+	}
+
+	t.Logf("Loop results: H-BadCreator worth=%d, failures=%d, graveyard=%d, HAvoid rules=%d",
+		hBadCreator.Worth(), failures, len(eng.Graveyard), avoidCount)
+}
+
 func TestHAnalyzeApplics(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()
