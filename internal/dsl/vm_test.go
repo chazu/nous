@@ -225,3 +225,89 @@ func TestAbort(t *testing.T) {
 		t.Errorf("expected AbortError, got %v", err)
 	}
 }
+
+func TestApplicsSuccessRatio(t *testing.T) {
+	vm := testVM(t)
+	u := unit.New("H-Test")
+	u.Set("overallRecord", map[string]any{"successes": 7, "failures": 3})
+	vm.Store.Put(u)
+
+	v, err := vm.Execute(`"H-Test" applics-success-ratio`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := v.AsFloat()
+	if got < 0.69 || got > 0.71 {
+		t.Errorf("got %f, want ~0.7", got)
+	}
+}
+
+func TestApplicsSuccessRatioNoRecord(t *testing.T) {
+	vm := testVM(t)
+	u := unit.New("H-Empty")
+	vm.Store.Put(u)
+
+	v, err := vm.Execute(`"H-Empty" applics-success-ratio`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.AsFloat() != 0.0 {
+		t.Errorf("got %f, want 0.0", v.AsFloat())
+	}
+}
+
+func TestGetApplics(t *testing.T) {
+	vm := testVM(t)
+	u := unit.New("H-Test2")
+	u.Set("applics", []map[string]any{
+		{"target": "A", "result": true},
+		{"target": "B", "result": false},
+	})
+	vm.Store.Put(u)
+
+	v, err := vm.Execute(`"H-Test2" get-applics`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.IsNil() {
+		t.Error("expected non-nil applics")
+	}
+	// anyToValue converts []map[string]any to IntVal(len), so expect 2
+	if v.AsInt() != 2 {
+		t.Errorf("got %d, want 2", v.AsInt())
+	}
+}
+
+func TestApplicsByType(t *testing.T) {
+	vm := testVM(t)
+
+	// Set up target units with different isA types
+	t1 := unit.New("Target1")
+	t1.Set("isA", []string{"Concept"})
+	vm.Store.Put(t1)
+
+	t2 := unit.New("Target2")
+	t2.Set("isA", []string{"Heuristic"})
+	vm.Store.Put(t2)
+
+	// Set up heuristic with applics
+	h := unit.New("H-Analyze")
+	h.Set("applics", []map[string]any{
+		{"target": "Target1", "result": true},
+		{"target": "Target2", "result": false},
+		{"target": "Target1", "result": true},
+	})
+	vm.Store.Put(h)
+
+	v, err := vm.Execute(`"H-Analyze" applics-by-type`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.IsNil() {
+		t.Error("expected non-nil applics-by-type result")
+	}
+	// anyToValue converts map[string]any to StringVal, so result should be non-empty
+	if v.AsString() == "" {
+		t.Error("expected non-empty string representation")
+	}
+}

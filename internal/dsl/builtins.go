@@ -75,6 +75,11 @@ var builtins = map[string]builtinFn{
 	// Loop variable
 	"it": func(vm *VM) error { vm.push(vm.env["it"]); return nil },
 
+	// Applics inspection
+	"get-applics":           bGetApplics,
+	"applics-success-ratio": bApplicsSuccessRatio,
+	"applics-by-type":       bApplicsByType,
+
 	// Misc
 	"noop": func(vm *VM) error { return nil },
 }
@@ -417,6 +422,101 @@ func bDotS(vm *VM) error {
 	}
 	fmt.Fprintln(vm.Out)
 	return nil
+}
+
+// Applics inspection
+
+func bGetApplics(vm *VM) error {
+	name := vm.pop()
+	u := vm.Store.Get(name.AsString())
+	if u == nil {
+		vm.push(Nil())
+		return nil
+	}
+	raw := u.Get("applics")
+	vm.push(anyToValue(raw))
+	return nil
+}
+
+func bApplicsSuccessRatio(vm *VM) error {
+	name := vm.pop()
+	u := vm.Store.Get(name.AsString())
+	if u == nil {
+		vm.push(FloatVal(0))
+		return nil
+	}
+	record := u.GetMap("overallRecord")
+	if record == nil {
+		vm.push(FloatVal(0))
+		return nil
+	}
+	s := toIntDSL(record["successes"])
+	f := toIntDSL(record["failures"])
+	total := s + f
+	if total == 0 {
+		vm.push(FloatVal(0))
+		return nil
+	}
+	vm.push(FloatVal(float64(s) / float64(total)))
+	return nil
+}
+
+func bApplicsByType(vm *VM) error {
+	name := vm.pop()
+	u := vm.Store.Get(name.AsString())
+	if u == nil {
+		vm.push(Nil())
+		return nil
+	}
+	applics, _ := u.Get("applics").([]map[string]any)
+	if len(applics) == 0 {
+		vm.push(Nil())
+		return nil
+	}
+	type counts struct {
+		successes int
+		failures  int
+	}
+	byType := make(map[string]*counts)
+	for _, a := range applics {
+		target, _ := a["target"].(string)
+		result, _ := a["result"].(bool)
+		targetUnit := vm.Store.Get(target)
+		typeName := "unknown"
+		if targetUnit != nil {
+			isA := targetUnit.GetStrings("isA")
+			if len(isA) > 0 {
+				typeName = isA[0]
+			}
+		}
+		c, ok := byType[typeName]
+		if !ok {
+			c = &counts{}
+			byType[typeName] = c
+		}
+		if result {
+			c.successes++
+		} else {
+			c.failures++
+		}
+	}
+	result := make(map[string]any)
+	for typ, c := range byType {
+		result[typ] = map[string]any{"s": c.successes, "f": c.failures}
+	}
+	vm.push(anyToValue(result))
+	return nil
+}
+
+func toIntDSL(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case float64:
+		return int(x)
+	default:
+		return 0
+	}
 }
 
 // Conversion helpers
