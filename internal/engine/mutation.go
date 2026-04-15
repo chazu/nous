@@ -120,57 +120,6 @@ func (e *Engine) tryMutateHeuristic() {
 		mutantName, op.Kind, parent.Name, slot, op.From, op.To)
 }
 
-// pickHeuristicByWorth selects a heuristic weighted by worth.
-// Higher-worth heuristics are more likely to be mutated (they're
-// more likely to be good starting points).
-func (e *Engine) pickHeuristicByWorth() *unit.Unit {
-	heuristics := e.Store.Examples("Heuristic")
-	if len(heuristics) == 0 {
-		return nil
-	}
-
-	type candidate struct {
-		name  string
-		worth int
-	}
-	var candidates []candidate
-	totalWorth := 0
-	for _, name := range heuristics {
-		u := e.Store.Get(name)
-		if u == nil {
-			continue
-		}
-		// Skip meta-heuristic types (HAvoid rules, the Heuristic type itself)
-		if name == "Heuristic" {
-			continue
-		}
-		w := u.Worth()
-		if w <= 0 {
-			continue
-		}
-		candidates = append(candidates, candidate{name, w})
-		totalWorth += w
-	}
-	if len(candidates) == 0 || totalWorth == 0 {
-		return nil
-	}
-
-	// Sort for determinism, then weighted random selection
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].name < candidates[j].name
-	})
-
-	r := e.rng.Intn(totalWorth)
-	cumulative := 0
-	for _, c := range candidates {
-		cumulative += c.worth
-		if r < cumulative {
-			return e.Store.Get(c.name)
-		}
-	}
-	return e.Store.Get(candidates[len(candidates)-1].name)
-}
-
 // pickWorstPerformer selects the heuristic with the lowest success ratio
 // that has enough applications and falls below the mutation threshold.
 // Ties are broken by lowest worth.

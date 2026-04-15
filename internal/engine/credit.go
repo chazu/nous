@@ -106,29 +106,6 @@ func (e *Engine) trackApplics(heuristicName, targetUnit string, succeeded bool) 
 	h.Set("applics", applics)
 }
 
-// trackRarity updates the success/failure ratio for an operation.
-func (e *Engine) trackRarity(opName string, succeeded bool) {
-	u := e.Store.Get(opName)
-	if u == nil {
-		return
-	}
-	rarity := u.GetMap("rarity")
-	if rarity == nil {
-		rarity = map[string]any{"successes": 0, "failures": 0, "ratio": 0.0}
-	}
-	if succeeded {
-		rarity["successes"] = toInt(rarity["successes"]) + 1
-	} else {
-		rarity["failures"] = toInt(rarity["failures"]) + 1
-	}
-	s := toInt(rarity["successes"])
-	f := toInt(rarity["failures"])
-	if s+f > 0 {
-		rarity["ratio"] = float64(s) / float64(s+f)
-	}
-	u.Set("rarity", rarity)
-}
-
 // HandleDeletedUnit processes credit assignment and HindSight when a unit is killed.
 func (e *Engine) HandleDeletedUnit(unitName string) {
 	snapshot := e.VM.DeletedSnapshots[unitName]
