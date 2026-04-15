@@ -80,6 +80,9 @@ var builtins = map[string]builtinFn{
 	"applics-success-ratio": bApplicsSuccessRatio,
 	"applics-by-type":       bApplicsByType,
 
+	// Meta-heuristic ops
+	"analyze-and-specialize": bAnalyzeAndSpecialize,
+
 	// Misc
 	"noop": func(vm *VM) error { return nil },
 }
@@ -505,6 +508,117 @@ func bApplicsByType(vm *VM) error {
 		result[typ] = map[string]any{"s": c.successes, "f": c.failures}
 	}
 	vm.push(anyToValue(result))
+	return nil
+}
+
+func bAnalyzeAndSpecialize(vm *VM) error {
+	name := vm.pop()
+	nameStr := name.AsString()
+	u := vm.Store.Get(nameStr)
+	if u == nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	applics, _ := u.Get("applics").([]map[string]any)
+	if len(applics) < 10 {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	// Group by target type
+	type counts struct {
+		successes int
+		failures  int
+	}
+	byType := make(map[string]*counts)
+
+	for _, a := range applics {
+		target, _ := a["target"].(string)
+		result, _ := a["result"].(bool)
+		targetUnit := vm.Store.Get(target)
+		typeName := "unknown"
+		if targetUnit != nil {
+			isA := targetUnit.GetStrings("isA")
+			if len(isA) > 0 {
+				typeName = isA[0]
+			}
+		}
+		c, ok := byType[typeName]
+		if !ok {
+			c = &counts{}
+			byType[typeName] = c
+		}
+		if result {
+			c.successes++
+		} else {
+			c.failures++
+		}
+	}
+
+	// Find best type (highest success rate with >= 3 data points)
+	bestType := ""
+	bestRatio := 0.0
+	for typ, c := range byType {
+		total := c.successes + c.failures
+		if total < 3 || typ == "unknown" {
+			continue
+		}
+		ratio := float64(c.successes) / float64(total)
+		if ratio > bestRatio {
+			bestRatio = ratio
+			bestType = typ
+		}
+	}
+
+	// Need clear skew: best type ratio > 0.7 and overall ratio < 0.7
+	if bestType == "" || bestRatio <= 0.7 {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	// Create specialized copy
+	specName := nameStr + "-on-" + bestType
+	if vm.Store.Has(specName) {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	spec := &unit.Unit{
+		Name:  specName,
+		Slots: map[string]any{},
+	}
+	spec.Set("isA", []string{"Heuristic", "Anything"})
+	spec.SetWorth(u.Worth())
+	spec.Set("creditors", []string{"H-AnalyzeApplics"})
+	spec.Set("specialized_from", nameStr)
+	spec.Set("specialized_type", bestType)
+	spec.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+
+	// Copy program slots, prepending type check to ifPotentiallyRelevant
+	for _, slot := range []string{
+		"ifPotentiallyRelevant", "ifTrulyRelevant", "ifWorkingOnTask",
+		"ifFinishedWorkingOnTask", "thenCompute", "thenAddToAgenda",
+		"thenDefineNewConcepts", "thenDeleteOldConcepts", "thenPrintToUser",
+		"thenConjecture",
+	} {
+		prog := u.GetString(slot)
+		if prog == "" {
+			continue
+		}
+		if slot == "ifPotentiallyRelevant" {
+			prog = fmt.Sprintf(`"ArgU" @ "%s" isa? `, bestType) + prog + " and"
+		}
+		spec.Set(slot, prog)
+	}
+
+	if u.GetString("english") != "" {
+		spec.Set("english", fmt.Sprintf("Specialized %s for %s targets", nameStr, bestType))
+	}
+
+	vm.Store.Put(spec)
+	vm.NewUnits = append(vm.NewUnits, specName)
+	vm.push(BoolVal(true))
 	return nil
 }
 

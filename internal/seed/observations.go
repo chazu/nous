@@ -20,6 +20,7 @@ func LoadObservationHeuristics(s *unit.Store) {
 	hConjectureFromPatterns(s)
 	hBoostCorroborated(s)
 	hPenalizeStaleObservations(s)
+	hAnalyzeApplics(s)
 }
 
 // H-FindScopeHotspots: "If multiple observations target the same scope, that scope

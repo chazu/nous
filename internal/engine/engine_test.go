@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -535,5 +536,98 @@ func TestTrackApplicsNoOpFailure(t *testing.T) {
 	}
 	if toInt(record["failures"]) != 1 {
 		t.Errorf("expected 1 failure, got %d", toInt(record["failures"]))
+	}
+}
+
+func TestHAnalyzeApplics(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+
+	// Type hierarchy
+	anything := unit.New("Anything")
+	anything.Set("isA", []string{"Anything"})
+	store.Put(anything)
+
+	heuristic := unit.New("Heuristic")
+	heuristic.Set("isA", []string{"Anything"})
+	store.Put(heuristic)
+
+	setType := unit.New("Set")
+	setType.Set("isA", []string{"Anything"})
+	store.Put(setType)
+
+	numType := unit.New("Number")
+	numType.Set("isA", []string{"Anything"})
+	store.Put(numType)
+
+	// Create H-Skewed with overall ratio ~0.57 (in 0.3-0.7 range)
+	hSkewed := unit.New("H-Skewed")
+	hSkewed.SetWorth(500)
+	hSkewed.Set("isA", []string{"Heuristic", "Anything"})
+	hSkewed.Set("overallRecord", map[string]any{"successes": 8, "failures": 6})
+	hSkewed.Set("thenCompute", "1 drop")
+	hSkewed.Set("ifPotentiallyRelevant", "true")
+
+	// Build applics: 8 successes on Set-type units, 6 failures on Number-type units
+	applics := make([]map[string]any, 0, 14)
+	for i := 0; i < 8; i++ {
+		name := fmt.Sprintf("SetUnit-%d", i)
+		u := unit.New(name)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.SetWorth(400)
+		store.Put(u)
+		applics = append(applics, map[string]any{"target": name, "result": true})
+	}
+	for i := 0; i < 6; i++ {
+		name := fmt.Sprintf("NumUnit-%d", i)
+		u := unit.New(name)
+		u.Set("isA", []string{"Number", "Anything"})
+		u.SetWorth(400)
+		store.Put(u)
+		applics = append(applics, map[string]any{"target": name, "result": false})
+	}
+	hSkewed.Set("applics", applics)
+	store.Put(hSkewed)
+
+	// Load seed heuristics (includes H-AnalyzeApplics)
+	seed.LoadHeuristics(store)
+
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	// Fire heuristics on H-Skewed (Level 2 focus)
+	eng.WorkOnUnit("H-Skewed")
+
+	// Assert: a unit with creditors including "H-AnalyzeApplics" was created
+	found := false
+	for _, name := range store.All() {
+		u := store.Get(name)
+		if u == nil {
+			continue
+		}
+		creds := u.GetStrings("creditors")
+		for _, c := range creds {
+			if c == "H-AnalyzeApplics" {
+				found = true
+				// Verify it's specialized from H-Skewed
+				if u.GetString("specialized_from") != "H-Skewed" {
+					t.Errorf("expected specialized_from=H-Skewed, got %s", u.GetString("specialized_from"))
+				}
+				if u.GetString("specialized_type") != "Set" {
+					t.Errorf("expected specialized_type=Set, got %s", u.GetString("specialized_type"))
+				}
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		t.Error("expected a unit with creditors including H-AnalyzeApplics to be created")
 	}
 }

@@ -17,6 +17,7 @@ func LoadHeuristics(s *unit.Store) {
 	hKillWorthless(s)
 	hPenalizeTrivial(s)
 	hBoostInteresting(s)
+	hAnalyzeApplics(s)
 }
 
 // H-FindExamples: "If working on examples for a concept, collect instances."
@@ -393,6 +394,31 @@ func hPenalizeTrivial(s *unit.Store) {
 			"ArgU" @ "worth" get-slot 200 - "ArgU" @ "worth" set-slot
 			"Trivial (empty): " "ArgU" @ concat print
 		then
+	`)
+}
+
+// H-AnalyzeApplics: "Inspect applics for type-skewed success patterns and propose specializations."
+func hAnalyzeApplics(s *unit.Store) {
+	h := putHeuristic(s, "H-AnalyzeApplics", 600)
+	h.Set("english", "Inspect applics for type-skewed success patterns and propose specializations")
+
+	h.Set("ifPotentiallyRelevant", `
+		"ArgU" @ "Heuristic" isa?
+		"ArgU" @ "H-AnalyzeApplics" !=
+		and
+	`)
+
+	h.Set("ifTrulyRelevant", `
+		"ArgU" @ applics-success-ratio "ratio" !
+		"ratio" @ 0.3 >=
+		"ratio" @ 0.7 <=
+		and
+		"ArgU" @ get-applics nil !=
+		and
+	`)
+
+	h.Set("thenCompute", `
+		"ArgU" @ analyze-and-specialize
 	`)
 }
 
