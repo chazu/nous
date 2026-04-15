@@ -41,6 +41,39 @@ func (e *Engine) rewardCreators(unitName string, amount int) {
 	}
 }
 
+// rewardForWorthGrowth rewards creditors when a unit's worth grows above its last rewarded baseline.
+// Heuristics are skipped — they are evaluated by applics, not worth growth.
+func (e *Engine) rewardForWorthGrowth() {
+	for _, name := range e.Store.All() {
+		u := e.Store.Get(name)
+		if u == nil {
+			continue
+		}
+		if e.Store.IsA(name, "Heuristic") {
+			continue
+		}
+		creditors := u.GetStrings("creditors")
+		if len(creditors) == 0 {
+			continue
+		}
+		if !u.Has("creationWorth") {
+			continue
+		}
+		lastRewarded := u.GetInt("lastRewardedWorth")
+		currentWorth := u.Worth()
+		if currentWorth > lastRewarded {
+			delta := currentWorth - lastRewarded
+			reward := delta / 2
+			if reward > 0 {
+				e.rewardCreators(name, reward)
+				u.Set("lastRewardedWorth", currentWorth)
+				e.log(2, "  Reward: %s grew %d->%d, rewarding creditors +%d",
+					name, lastRewarded, currentWorth, reward)
+			}
+		}
+	}
+}
+
 // trackApplics records that a heuristic fired on a unit.
 func (e *Engine) trackApplics(heuristicName, targetUnit string, succeeded bool) {
 	h := e.Store.Get(heuristicName)

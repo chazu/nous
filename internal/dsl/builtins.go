@@ -293,6 +293,8 @@ func bCreateUnit(vm *VM) error {
 		u.Set("isA", []string{parent})
 	}
 	u.Set("worth", 500) // default worth for new units
+	u.Set("creationWorth", 500)
+	u.Set("lastRewardedWorth", 500)
 	u.Set("isNew", true)
 	vm.Store.Put(u)
 	vm.NewUnits = append(vm.NewUnits, nameStr)

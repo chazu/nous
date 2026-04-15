@@ -110,6 +110,11 @@ func (e *Engine) Run(ctx context.Context) error {
 		if e.MutConfig.Enabled && e.cycle > 0 && e.cycle%e.MutConfig.Interval == 0 {
 			e.tryMutateHeuristic()
 		}
+
+		// Periodic worth-growth reward (every 10 cycles)
+		if e.cycle > 0 && e.cycle%10 == 0 {
+			e.rewardForWorthGrowth()
+		}
 	}
 
 	e.log(1, "\nReached max cycles (%d). Stopping.", e.MaxCycles)

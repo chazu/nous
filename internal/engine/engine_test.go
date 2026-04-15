@@ -402,6 +402,84 @@ func TestNoMutationWhenAllAdequate(t *testing.T) {
 	}
 }
 
+func TestWorthGrowthReward(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	// Create H-Creator at worth 500
+	hCreator := unit.New("H-Creator")
+	hCreator.SetWorth(500)
+	hCreator.Set("isA", []string{"Heuristic"})
+	store.Put(hCreator)
+
+	// Create ChildUnit at worth 400, creditors: ["H-Creator"], creationWorth: 400, lastRewardedWorth: 400
+	child := unit.New("ChildUnit")
+	child.SetWorth(400)
+	child.Set("isA", []string{"Set"})
+	child.Set("creditors", []string{"H-Creator"})
+	child.Set("creationWorth", 400)
+	child.Set("lastRewardedWorth", 400)
+	store.Put(child)
+
+	// Bump ChildUnit to worth 600
+	child.SetWorth(600)
+
+	// Call rewardForWorthGrowth
+	eng.rewardForWorthGrowth()
+
+	// Assert: H-Creator worth is 600 (500 + delta/2 = 500 + 100)
+	if hCreator.Worth() != 600 {
+		t.Errorf("expected H-Creator worth 600, got %d", hCreator.Worth())
+	}
+
+	// Assert: lastRewardedWorth updated to 600
+	if child.GetInt("lastRewardedWorth") != 600 {
+		t.Errorf("expected lastRewardedWorth 600, got %d", child.GetInt("lastRewardedWorth"))
+	}
+
+	// Call again, assert no double-dipping
+	eng.rewardForWorthGrowth()
+	if hCreator.Worth() != 600 {
+		t.Errorf("expected H-Creator worth still 600 after second call, got %d", hCreator.Worth())
+	}
+}
+
+func TestWorthGrowthRewardSkipsHeuristics(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	// Create H-Meta
+	hMeta := unit.New("H-Meta")
+	hMeta.SetWorth(500)
+	hMeta.Set("isA", []string{"Heuristic"})
+	store.Put(hMeta)
+
+	// Create H-Child (a heuristic with creditors and creationWorth)
+	hChild := unit.New("H-Child")
+	hChild.SetWorth(800)
+	hChild.Set("isA", []string{"Heuristic"})
+	hChild.Set("creditors", []string{"H-Meta"})
+	hChild.Set("creationWorth", 500)
+	hChild.Set("lastRewardedWorth", 500)
+	store.Put(hChild)
+
+	// Call rewardForWorthGrowth
+	eng.rewardForWorthGrowth()
+
+	// Assert: H-Meta worth is NOT changed (heuristics are skipped)
+	if hMeta.Worth() != 500 {
+		t.Errorf("expected H-Meta worth unchanged at 500, got %d", hMeta.Worth())
+	}
+}
+
 func TestTrackApplicsNoOpFailure(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()
