@@ -1,0 +1,391 @@
+units: [
+	{
+		name:    "H-FindExamples"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "Collect instances of a concept from the store"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "examples" =
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ examples
+			"found" !
+			"found" @ list-length 0 >
+			if
+				"found" @ "CurUnit" @ "examples" set-slot
+			then
+			"""#
+		thenPrintToUser: #"""
+			"Found examples of " "CurUnit" @ concat print
+			"""#
+	},
+	{
+		name:    "H-RunOnExamples"
+		worth:   750
+		isA: ["Heuristic", "Anything"]
+		english: "Run operations on concrete data to generate examples"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			# Track how many results we've created (cap at 5 per firing)
+			0 "created" !
+			"ArgU" @ "domain" get-slot first "domType1" !
+
+			# Collect data-bearing sources (up to 4)
+			"domType1" @ examples
+			each
+				it "src1" !
+				"src1" @ "data" get-slot nil !=
+				"created" @ 5 <
+				and
+				if
+					# Binary ops: pair with one other source
+					"ArgU" @ "BinaryOp" isa?
+					if
+						"domType1" @ examples
+						each
+							it "src2" !
+							"src2" @ "data" get-slot nil !=
+							"src1" @ "src2" @ !=
+							and
+							"created" @ 5 <
+							and
+							if
+								"src1" @ "data" get-slot
+								"src2" @ "data" get-slot
+								"ArgU" @ apply-op
+								"result" !
+								"result" @ nil !=
+								if
+									"ArgU" @ "-on-" concat "src1" @ concat "-" concat "src2" @ concat
+									"resultName" !
+									"resultName" @ unit-exists? not
+									if
+										"resultName" @ "Set" create-unit
+										"resultUnit" !
+										"result" @ "resultUnit" @ "data" set-slot
+										"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
+										"created" @ 1 + "created" !
+										"Applied " "ArgU" @ concat ": " concat "src1" @ concat " x " concat "src2" @ concat print
+									then
+								then
+							then
+						end
+					then
+
+					# Unary ops
+					"ArgU" @ "UnaryOp" isa?
+					"created" @ 5 <
+					and
+					if
+						"src1" @ "data" get-slot
+						"ArgU" @ apply-op
+						"result" !
+						"result" @ nil !=
+						if
+							"ArgU" @ "-on-" concat "src1" @ concat
+							"resultName" !
+							"resultName" @ unit-exists? not
+							if
+								"resultName" @ "Set" create-unit
+								"resultUnit" !
+								"result" @ "resultUnit" @ "data" set-slot
+								"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
+								"created" @ 1 + "created" !
+								"Applied " "ArgU" @ concat ": " concat "src1" @ concat print
+							then
+						then
+					then
+				then
+			end
+			"""#
+	},
+	{
+		name:    "H-CheckExtremes"
+		worth:   600
+		isA: ["Heuristic", "Anything"]
+		english: "Examine extreme cases of sets"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Set" isa?
+			"ArgU" @ "data" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "data" get-slot "theData" !
+
+			"theData" @ set-size 0 =
+			if
+				"ArgU" @ " is empty" concat print
+			then
+
+			"theData" @ set-size 1 =
+			if
+				"ArgU" @ " is a singleton: {" concat "theData" @ first concat "}" concat print
+				"ArgU" @ "worth" get-slot 700 <
+				if
+					"ArgU" @ "worth" get-slot 100 + "ArgU" @ "worth" set-slot
+				then
+			then
+			"""#
+	},
+	{
+		name:    "H-Specialize"
+		worth:   650
+		isA: ["Heuristic", "Anything"]
+		english: "Specialize operations by narrowing domain types"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "domain" get-slot nil !=
+			and
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "domain" get-slot
+			each
+				it "domType" !
+				"domType" @ "specializations" get-slot
+				each
+					it "specType" !
+					"ArgU" @ "-on-" concat "specType" @ concat
+					"specName" !
+					"specName" @ unit-exists? not
+					if
+						"specName" @ "ArgU" @ "isA" get-slot first create-unit
+						"specUnit" !
+						"ArgU" @ "defn" get-slot "specUnit" @ "defn" set-slot
+						"H-Specialize" "specUnit" @ "creditors" set-slot
+						"ArgU" @ "range" get-slot "specUnit" @ "range" set-slot
+						"specType" @ "specUnit" @ "domain" set-slot
+						600 "specUnit" @ "examples" "Specialized op needs testing" add-task
+						"Specialized " "ArgU" @ concat " -> " concat "specName" @ concat print
+					then
+				end
+			end
+			"""#
+	},
+	{
+		name:    "H-CheckDomain"
+		worth:   550
+		isA: ["Heuristic", "Anything"]
+		english: "If domain/range overlap, create self-composition"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "domain" get-slot nil !=
+			and
+			"ArgU" @ "range" get-slot nil !=
+			and
+			"ArgU" @ "creditors" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "range" get-slot
+			each
+				it "rangeType" !
+				"ArgU" @ "domain" get-slot
+				each
+					it "domType" !
+					"domType" @ "rangeType" @ =
+					if
+						"SelfCompose-" "ArgU" @ pack-name
+						"composeName" !
+						"composeName" @ unit-exists? not
+						if
+							"composeName" @ "BinaryOp" create-unit
+							"compUnit" !
+							"H-CheckDomain" "compUnit" @ "creditors" set-slot
+							"ArgU" @ "domain" get-slot "compUnit" @ "domain" set-slot
+							"ArgU" @ "range" get-slot "compUnit" @ "range" set-slot
+							600 "compUnit" @ "examples" "Self-composition needs examples" add-task
+							"Created self-composition: " "composeName" @ concat print
+						then
+					then
+				end
+			end
+			"""#
+	},
+	{
+		name:    "H-Conjecture"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "Compare sets to find equalities and subset relationships"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Set" isa?
+			"ArgU" @ "data" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"Set" examples
+			each
+				it "other" !
+				"other" @ "ArgU" @ !=
+				"other" @ "data" get-slot nil !=
+				and
+				if
+					"ArgU" @ "data" get-slot
+					"other" @ "data" get-slot
+					set-equal?
+					if
+						"CONJECTURE: " "ArgU" @ concat " = " concat "other" @ concat print
+						# If ArgU is machine-created and other is not, ArgU is redundant
+						"ArgU" @ "creditors" get-slot nil !=
+						"other" @ "creditors" get-slot nil =
+						and
+						if
+							# Penalize the redundant copy
+							"ArgU" @ "worth" get-slot 200 - "ArgU" @ "worth" set-slot
+							"Penalized redundant " "ArgU" @ concat " (= " concat "other" @ concat ")" concat print
+						then
+						# If both are machine-created, penalize the one with lower worth
+						"ArgU" @ "creditors" get-slot nil !=
+						"other" @ "creditors" get-slot nil !=
+						and
+						if
+							"ArgU" @ "worth" get-slot "other" @ "worth" get-slot <=
+							if
+								"ArgU" @ "worth" get-slot 150 - "ArgU" @ "worth" set-slot
+							then
+						then
+					then
+
+					"ArgU" @ "data" get-slot
+					"other" @ "data" get-slot
+					set-subset?
+					"ArgU" @ "data" get-slot "other" @ "data" get-slot set-equal? not
+					and
+					if
+						"CONJECTURE: " "ArgU" @ concat " ⊂ " concat "other" @ concat print
+					then
+				then
+			end
+			"""#
+	},
+	{
+		name:    "H-ExploreSlots"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "Add tasks to explore empty important slots"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Heuristic" isa? not
+			"ArgU" @ "Slot" isa? not
+			and
+			"ArgU" @ "explored" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "examples" get-slot nil =
+			if
+				400 "ArgU" @ "examples" "Unit needs examples" add-task
+			then
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "domain" get-slot nil =
+			and
+			if
+				350 "ArgU" @ "domain" "Operation needs domain defined" add-task
+			then
+			true "ArgU" @ "explored" set-slot
+			"""#
+	},
+	{
+		name:    "H-KillWorthless"
+		worth:   800
+		isA: ["Heuristic", "Anything"]
+		english: "Kill units with very low Worth that were machine-created"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "worth" get-slot 100 <
+			"ArgU" @ "creditors" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"Killing worthless unit: " "ArgU" @ concat print
+			"ArgU" @ kill-unit
+			"""#
+	},
+	{
+		name:    "H-BoostInteresting"
+		worth:   650
+		isA: ["Heuristic", "Anything"]
+		english: "Boost worth of operations that produce surprising results"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "creditors" get-slot nil !=
+			"ArgU" @ "data" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "data" get-slot set-size 0 =
+			if
+				"Interesting: " "ArgU" @ concat " produced empty result" concat print
+				"ArgU" @ "creditors" get-slot
+				each
+					it "cred" !
+					"cred" @ "worth" get-slot 50 + "cred" @ "worth" set-slot
+				end
+			then
+
+			"ArgU" @ "data" get-slot set-size 1 =
+			if
+				"Interesting: " "ArgU" @ concat " is singleton {" concat "ArgU" @ "data" get-slot first concat "}" concat print
+				"ArgU" @ "creditors" get-slot
+				each
+					it "cred" !
+					"cred" @ "worth" get-slot 75 + "cred" @ "worth" set-slot
+				end
+			then
+			"""#
+	},
+	{
+		name:    "H-PenalizeTrivial"
+		worth:   600
+		isA: ["Heuristic", "Anything"]
+		english: "Penalize machine-created units with trivial (empty) data"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "creditors" get-slot nil !=
+			"ArgU" @ "data" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "data" get-slot set-size 0 =
+			if
+				# Empty result — likely trivial (e.g., intersect with empty set)
+				"ArgU" @ "worth" get-slot 200 - "ArgU" @ "worth" set-slot
+				"Trivial (empty): " "ArgU" @ concat print
+			then
+			"""#
+	},
+	{
+		name:    "H-AnalyzeApplics"
+		worth:   600
+		isA: ["Heuristic", "Anything"]
+		english: "Inspect applics for type-skewed success patterns and propose specializations"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Heuristic" isa?
+			"ArgU" @ "H-AnalyzeApplics" !=
+			and
+			"""#
+		ifTrulyRelevant: #"""
+			"ArgU" @ applics-success-ratio "ratio" !
+			"ratio" @ 0.3 >=
+			"ratio" @ 0.7 <=
+			and
+			"ArgU" @ get-applics nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ analyze-and-specialize
+			"""#
+	},
+]
