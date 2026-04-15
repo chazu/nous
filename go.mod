@@ -4,10 +4,12 @@ go 1.25.0
 
 replace pudl => ../pudl
 
-require pudl v0.0.0-00010101000000-000000000000
+require (
+	cuelang.org/go v0.16.0
+	pudl v0.0.0-00010101000000-000000000000
+)
 
 require (
-	cuelang.org/go v0.16.0 // indirect
 	github.com/cockroachdb/apd/v3 v3.2.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emicklei/proto v1.14.3 // indirect
