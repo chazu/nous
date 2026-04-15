@@ -136,6 +136,72 @@ func TestUnitWorthClamped(t *testing.T) {
 	}
 }
 
+func TestInverseMaintenance(t *testing.T) {
+	s := NewStore()
+	s.RegisterInverse("range", "isRangeOf")
+
+	// Create target type
+	set := New("Set")
+	set.Set("isA", []string{"Anything"})
+	s.Put(set)
+
+	// Create operation with range
+	op := New("SetUnion")
+	op.Set("isA", []string{"Op"})
+	s.Put(op)
+
+	// Set range via SetSlot
+	s.SetSlot("SetUnion", "range", []string{"Set"})
+
+	// Verify inverse was maintained
+	isRangeOf := s.Get("Set").GetStrings("isRangeOf")
+	if len(isRangeOf) != 1 || isRangeOf[0] != "SetUnion" {
+		t.Errorf("expected isRangeOf=[SetUnion], got %v", isRangeOf)
+	}
+
+	// Add another op with same range
+	op2 := New("SetIntersect")
+	s.Put(op2)
+	s.SetSlot("SetIntersect", "range", []string{"Set"})
+
+	isRangeOf = s.Get("Set").GetStrings("isRangeOf")
+	if len(isRangeOf) != 2 {
+		t.Errorf("expected 2 entries in isRangeOf, got %d", len(isRangeOf))
+	}
+
+	// No duplicates on repeated set
+	s.SetSlot("SetUnion", "range", []string{"Set"})
+	isRangeOf = s.Get("Set").GetStrings("isRangeOf")
+	if len(isRangeOf) != 2 {
+		t.Errorf("expected still 2 entries (no dup), got %d", len(isRangeOf))
+	}
+}
+
+func TestInverseMaintenanceSingleString(t *testing.T) {
+	s := NewStore()
+	s.RegisterInverse("generalizations", "specializations")
+
+	parent := New("Number")
+	s.Put(parent)
+
+	child := New("PrimeNum")
+	s.Put(child)
+
+	// Set generalizations as single string
+	s.SetSlot("PrimeNum", "generalizations", "Number")
+
+	specs := s.Get("Number").GetStrings("specializations")
+	found := false
+	for _, sp := range specs {
+		if sp == "PrimeNum" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Number.specializations to contain PrimeNum, got %v", specs)
+	}
+}
+
 func TestUnitSlotAccessors(t *testing.T) {
 	u := New("Test")
 	u.Set("name", "hello")

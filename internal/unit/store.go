@@ -4,13 +4,17 @@ import "sync"
 
 // Store holds all units in memory, keyed by name.
 type Store struct {
-	mu    sync.RWMutex
-	units map[string]*Unit
+	mu       sync.RWMutex
+	units    map[string]*Unit
+	inverses map[string]string // slot name -> inverse slot name
 }
 
 // NewStore creates an empty unit store.
 func NewStore() *Store {
-	return &Store{units: make(map[string]*Unit)}
+	return &Store{
+		units:    make(map[string]*Unit),
+		inverses: make(map[string]string),
+	}
 }
 
 // Get returns a unit by name, or nil.
@@ -144,6 +148,63 @@ func ThenPartSlots() []string {
 		"thenDeleteOldConcepts",
 		"thenPrintToUser",
 		"thenConjecture",
+	}
+}
+
+// RegisterInverse registers a bidirectional inverse relationship between two slots.
+func (s *Store) RegisterInverse(slot, inverse string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inverses[slot] = inverse
+	s.inverses[inverse] = slot
+}
+
+// SetSlot sets a slot on a unit and maintains inverse relationships.
+func (s *Store) SetSlot(unitName, slotName string, value any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u := s.units[unitName]
+	if u == nil {
+		return
+	}
+	u.Set(slotName, value)
+
+	// Check for inverse maintenance
+	invSlot, ok := s.inverses[slotName]
+	if !ok {
+		return
+	}
+
+	// Extract unit references from the value
+	var refs []string
+	switch v := value.(type) {
+	case []string:
+		refs = v
+	case string:
+		refs = []string{v}
+	default:
+		return
+	}
+
+	// Add unitName to the inverse slot on each referenced unit
+	for _, ref := range refs {
+		target := s.units[ref]
+		if target == nil {
+			continue
+		}
+		existing := target.GetStrings(invSlot)
+		// Don't add duplicates
+		found := false
+		for _, e := range existing {
+			if e == unitName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			target.Set(invSlot, append(existing, unitName))
+		}
 	}
 }
 
