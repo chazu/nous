@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/unit"
 )
 
@@ -218,14 +219,21 @@ func (e *Engine) createAvoidanceRule(grave GraveRecord) {
 		false
 	`, failedType, creditor)
 
+	tokens := dsl.Tokenize(ifProg)
+	if len(tokens) == 0 {
+		e.log(1, "  HindSight: discarded invalid HAvoid program for %s", grave.Name)
+		return
+	}
+
 	avoid := unit.New(avoidName)
-	avoid.SetWorth(600) // avoidance rules start with decent worth
+	avoid.SetWorth(300) // avoidance rules start unproven
 	avoid.Set("isA", []string{"Heuristic", "HAvoidRule", "Anything"})
 	avoid.Set("english", fmt.Sprintf("Avoid: %s creating %s-type units (learned from %s dying)",
 		creditor, failedType, grave.Name))
 	avoid.Set("creditors", []string{"H-HindSight"})
 	avoid.Set("ifPotentiallyRelevant", ifProg)
 	avoid.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	avoid.Set("creationCycle", e.cycle)
 	// Record the provenance so we can trace why this rule exists
 	avoid.Set("avoidance_of", grave.Name)
 	avoid.Set("avoidance_creditor", creditor)
@@ -234,6 +242,38 @@ func (e *Engine) createAvoidanceRule(grave GraveRecord) {
 	e.Store.Put(avoid)
 	e.log(1, "  HindSight: created %s (blocks %s from making %s-type units)",
 		avoidName, creditor, failedType)
+}
+
+// promoteOrDemoteHAvoidRules evaluates HAvoid rules periodically,
+// promoting proven ones and demoting idle ones.
+func (e *Engine) promoteOrDemoteHAvoidRules() {
+	for _, name := range e.Store.Examples("HAvoidRule") {
+		u := e.Store.Get(name)
+		if u == nil {
+			continue
+		}
+		record := u.GetMap("overallRecord")
+		if record == nil {
+			continue
+		}
+		successes := toInt(record["successes"])
+		creationCycle := u.GetInt("creationCycle")
+		age := e.cycle - creationCycle
+
+		// Promote: 3+ successful firings
+		if successes >= 3 && u.Worth() < 600 {
+			u.SetWorth(600)
+			e.log(1, "  HAvoid: promoted %s to 600 (proven useful, %d firings)", name, successes)
+			continue
+		}
+
+		// Demote: 200+ cycles with zero firings
+		total := successes + toInt(record["failures"])
+		if age >= 200 && total == 0 && u.Worth() > 100 {
+			u.SetWorth(100)
+			e.log(1, "  HAvoid: demoted %s to 100 (idle for %d cycles)", name, age)
+		}
+	}
 }
 
 func sanitizeName(name string) string {

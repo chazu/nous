@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -536,6 +537,118 @@ func TestTrackApplicsNoOpFailure(t *testing.T) {
 	}
 	if toInt(record["failures"]) != 1 {
 		t.Errorf("expected 1 failure, got %d", toInt(record["failures"]))
+	}
+}
+
+func TestHAvoidValidation(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	// Create a heuristic that will be the creditor
+	h := unit.New("H-Creator")
+	h.SetWorth(600)
+	h.Set("isA", []string{"Heuristic"})
+	store.Put(h)
+
+	// Create a GraveRecord
+	grave := GraveRecord{
+		Name:      "DeadUnit",
+		IsA:       []string{"Set"},
+		Creditors: []string{"H-Creator"},
+		Worth:     50,
+		Cycle:     5,
+	}
+
+	eng.createAvoidanceRule(grave)
+
+	if !store.Has("HAvoid-DeadUnit") {
+		t.Fatal("expected HAvoid-DeadUnit to be created")
+	}
+	avoid := store.Get("HAvoid-DeadUnit")
+
+	// Assert: worth is 300 (unproven), not 600
+	if avoid.Worth() != 300 {
+		t.Errorf("expected HAvoid worth 300, got %d", avoid.Worth())
+	}
+
+	// Assert: ifPotentiallyRelevant is non-empty and tokenizes
+	ifProg := avoid.GetString("ifPotentiallyRelevant")
+	if ifProg == "" {
+		t.Fatal("expected non-empty ifPotentiallyRelevant")
+	}
+	tokens := dsl.Tokenize(ifProg)
+	if len(tokens) == 0 {
+		t.Error("expected ifPotentiallyRelevant to tokenize to non-empty tokens")
+	}
+}
+
+func TestHAvoidPromotion(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	// Create HAvoidRule type so Examples works
+	hAvoidType := unit.New("HAvoidRule")
+	hAvoidType.Set("isA", []string{"Anything"})
+	store.Put(hAvoidType)
+
+	anything := unit.New("Anything")
+	anything.Set("isA", []string{"Anything"})
+	store.Put(anything)
+
+	// Create HAvoid unit at worth 300 with 3 successes
+	avoid := unit.New("HAvoid-Test")
+	avoid.SetWorth(300)
+	avoid.Set("isA", []string{"HAvoidRule", "Heuristic", "Anything"})
+	avoid.Set("overallRecord", map[string]any{"successes": 3, "failures": 0})
+	avoid.Set("creationCycle", 10)
+	store.Put(avoid)
+
+	eng.cycle = 100
+	eng.promoteOrDemoteHAvoidRules()
+
+	if avoid.Worth() != 600 {
+		t.Errorf("expected HAvoid worth promoted to 600, got %d", avoid.Worth())
+	}
+}
+
+func TestHAvoidDemotion(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	// Create HAvoidRule type so Examples works
+	hAvoidType := unit.New("HAvoidRule")
+	hAvoidType.Set("isA", []string{"Anything"})
+	store.Put(hAvoidType)
+
+	anything := unit.New("Anything")
+	anything.Set("isA", []string{"Anything"})
+	store.Put(anything)
+
+	// Create HAvoid unit at worth 300 with zero firings, creationCycle 10
+	avoid := unit.New("HAvoid-Idle")
+	avoid.SetWorth(300)
+	avoid.Set("isA", []string{"HAvoidRule", "Heuristic", "Anything"})
+	avoid.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	avoid.Set("creationCycle", 10)
+	store.Put(avoid)
+
+	eng.cycle = 250 // age = 240 > 200
+	eng.promoteOrDemoteHAvoidRules()
+
+	if avoid.Worth() != 100 {
+		t.Errorf("expected HAvoid worth demoted to 100, got %d", avoid.Worth())
 	}
 }
 

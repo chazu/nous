@@ -115,6 +115,11 @@ func (e *Engine) Run(ctx context.Context) error {
 		if e.cycle > 0 && e.cycle%10 == 0 {
 			e.rewardForWorthGrowth()
 		}
+
+		// Periodic HAvoid evaluation (every 50 cycles)
+		if e.cycle > 0 && e.cycle%50 == 0 {
+			e.promoteOrDemoteHAvoidRules()
+		}
 	}
 
 	e.log(1, "\nReached max cycles (%d). Stopping.", e.MaxCycles)
