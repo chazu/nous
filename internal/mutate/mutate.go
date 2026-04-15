@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 
+	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -237,7 +238,7 @@ func (m *Mutator) duplicateSeq(tokens []dsl.Token) ([]dsl.Token, *Op) {
 // trial-executing it on a minimal VM. Returns true if it runs without
 // crashing (the result doesn't matter — only structural validity).
 func Validate(program string, store *unit.Store) bool {
-	vm := dsl.NewVM(store, nil)
+	vm := dsl.NewVM(store, agenda.New())
 	vm.Out = devNull{}
 
 	// Set dummy env vars that heuristic programs expect

@@ -11,7 +11,7 @@ import (
 // punishCreators halves the Worth of every unit listed in the target's creditors slot.
 // Uses the snapshot since the unit may already be deleted.
 func (e *Engine) punishCreators(unitName string, snapshot map[string]any) {
-	creditors, _ := snapshot["creditors"].([]string)
+	creditors := extractStringList(snapshot["creditors"])
 	for _, creditor := range creditors {
 		c := e.Store.Get(creditor)
 		if c == nil {
@@ -114,8 +114,8 @@ func (e *Engine) HandleDeletedUnit(unitName string) {
 	}
 
 	// Record in graveyard
-	creditors, _ := snapshot["creditors"].([]string)
-	isA, _ := snapshot["isA"].([]string)
+	creditors := extractStringList(snapshot["creditors"])
+	isA := extractStringList(snapshot["isA"])
 	worth := toInt(snapshot["worth"])
 
 	grave := GraveRecord{
@@ -261,6 +261,21 @@ func sanitizeName(name string) string {
 		".", "-",
 	)
 	return r.Replace(name)
+}
+
+// extractStringList handles both []string and single string values.
+func extractStringList(v any) []string {
+	switch x := v.(type) {
+	case []string:
+		return x
+	case string:
+		if x == "" {
+			return nil
+		}
+		return []string{x}
+	default:
+		return nil
+	}
 }
 
 func toInt(v any) int {

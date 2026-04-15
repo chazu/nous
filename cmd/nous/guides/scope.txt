@@ -1,0 +1,35 @@
+SCOPE FORMAT — Reference
+
+Format: repo_name:path
+
+The scope identifies WHERE an observation applies. It must be globally
+unambiguous because observations go to a shared store.
+
+STRUCTURE:
+
+    <repo_name>:<path>
+
+    repo_name    The repository name (e.g. myapp, pudl, nous)
+    path         The path within the repo (e.g. pkg/auth, internal/cache)
+
+EXAMPLES:
+
+    myapp:pkg/auth            The auth package in myapp
+    myapp:cmd/api             The API entrypoint in myapp
+    myapp:internal/config     The config package in myapp
+    pudl:internal/database    The database package in pudl
+    nous:internal/engine      The engine package in nous
+
+REPO-WIDE OBSERVATIONS:
+
+    Use repo name alone (no colon, no path) for observations about
+    the entire repository:
+
+    myapp                     The whole myapp repo
+
+RULES:
+
+    1. Always include the repo name — never use bare paths
+    2. Use the directory path, not file paths (pkg/auth not pkg/auth/auth.go)
+    3. Use the shortest path that identifies the concern's location
+    4. Be consistent — same package = same scope string every time

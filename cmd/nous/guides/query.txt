@@ -1,0 +1,46 @@
+QUERY — Checking Existing Observations and Discoveries
+
+Before recording observations, check what already exists to avoid duplicates.
+
+CHECK EXISTING OBSERVATIONS:
+
+    pudl facts list --relation observation
+    pudl facts list --relation observation | grep <scope>
+
+FILTER BY KIND:
+
+    pudl facts list --relation observation | grep obstacle
+    pudl facts list --relation observation | grep bug
+
+CHECK WHAT NOUS FOUND (discoveries from previous runs):
+
+    pudl facts list --relation observation --source nous
+    pudl facts list --relation scope_hotspot
+
+INSPECT A SPECIFIC OBSERVATION:
+
+    pudl facts show <id-prefix>
+
+    The ID is the short hash shown in list output. Prefix matching works —
+    you only need enough characters to be unambiguous.
+
+QUERY DERIVED FACTS (Datalog rules):
+
+    pudl query <relation>
+    pudl query <relation> key=value
+
+    Example: pudl query at_risk scope=myapp:pkg/auth
+
+BEFORE OBSERVING:
+
+    1. Run: pudl facts list --relation observation | grep <your-scope>
+    2. If your exact concern is already recorded, do not duplicate it.
+    3. If a similar concern exists but yours adds detail, record yours —
+       corroboration from multiple sources is valuable signal.
+    4. If the existing observation is from a different source than you,
+       recording the same concern is GOOD — it's corroboration.
+
+AFTER YOUR TASK:
+
+    Run: pudl facts list --relation observation
+    Verify your observations appear in the output.

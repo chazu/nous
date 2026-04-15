@@ -1,0 +1,40 @@
+NOUS — System Overview for Agents
+
+nous is a discovery engine. It finds patterns, hotspots, and systemic
+issues by reasoning over observations recorded by agents and humans.
+
+THE LOOP:
+
+    1. You work on a codebase and record observations with pudl observe
+    2. nous loads those observations and runs heuristics against them
+    3. nous writes discoveries back to pudl (hotspots, patterns, conjectures)
+    4. Those discoveries are queryable by you and future agents
+
+YOUR ROLE:
+
+    You are the eyes. nous is the pattern detector. The more specific and
+    honest your observations, the better nous can reason.
+
+    Record what you see — obstacles, bugs, patterns, suggestions — using
+    pudl observe. Run "nous guide observations" for the full protocol.
+
+WHAT NOUS DETECTS:
+
+    - Scope hotspots: areas with disproportionate observation density
+    - Corroboration: multiple sources flagging the same area
+    - Systemic patterns: the same kind of issue across many scopes
+    - Worth adjustment: validated observations rise, stale ones decay
+
+WHY THIS MATTERS:
+
+    Individual observations are useful. Observations from many agents over
+    time are powerful. nous finds signal that no single agent would notice:
+    which areas keep causing trouble, which problems are confirmed by
+    independent observers, which patterns are systemic vs local.
+
+COMMANDS:
+
+    nous guide observations    How to record observations (READ THIS FIRST)
+    nous guide query           How to check existing data before observing
+    nous guide scope           Scope format reference
+    nous guide overview        This message

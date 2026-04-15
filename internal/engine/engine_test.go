@@ -739,7 +739,7 @@ func TestSelfModificationLoop(t *testing.T) {
 	// Note: punishCreators expects creditors as []string but DSL stores a
 	// single string, so worth halving doesn't fire until that is fixed.
 	if hBadCreator.Worth() >= 500 {
-		t.Logf("H-BadCreator worth did not decrease (got %d) — punishCreators creditors format issue", hBadCreator.Worth())
+		t.Errorf("expected H-BadCreator worth to decrease below 500, got %d", hBadCreator.Worth())
 	}
 
 	// 3. Graveyard should have entries
