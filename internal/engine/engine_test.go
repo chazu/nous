@@ -249,6 +249,52 @@ func TestDumpWorths(t *testing.T) {
 	}
 }
 
+func TestTrackApplicsDeferredFailure(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	// Create heuristic H-Creator with existing successes
+	h := unit.New("H-Creator")
+	h.SetWorth(600)
+	h.Set("isA", []string{"Heuristic"})
+	h.Set("overallRecord", map[string]any{"successes": 5, "failures": 0})
+	store.Put(h)
+
+	// Create unit BadUnit with H-Creator as creditor
+	bad := unit.New("BadUnit")
+	bad.SetWorth(50)
+	bad.Set("creditors", []string{"H-Creator"})
+	bad.Set("isA", []string{"Set"})
+	store.Put(bad)
+
+	// Simulate unit death: snapshot then delete
+	eng.VM.DeletedSnapshots = map[string]map[string]any{
+		"BadUnit": {
+			"worth":     50,
+			"creditors": []string{"H-Creator"},
+			"isA":       []string{"Set"},
+		},
+	}
+	store.Delete("BadUnit")
+
+	eng.HandleDeletedUnit("BadUnit")
+
+	record := h.GetMap("overallRecord")
+	if record == nil {
+		t.Fatal("overallRecord is nil")
+	}
+	if toInt(record["successes"]) != 5 {
+		t.Errorf("expected 5 successes preserved, got %d", toInt(record["successes"]))
+	}
+	if toInt(record["failures"]) != 1 {
+		t.Errorf("expected 1 failure from deferred death, got %d", toInt(record["failures"]))
+	}
+}
+
 func TestTrackApplicsNoOpFailure(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()

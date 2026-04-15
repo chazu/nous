@@ -122,6 +122,13 @@ func (e *Engine) HandleDeletedUnit(unitName string) {
 	// Punish creditors
 	e.punishCreators(unitName, snapshot)
 
+	// Record deferred failure in each creditor's applics
+	for _, creditor := range creditors {
+		if e.Store.Get(creditor) != nil {
+			e.trackApplics(creditor, unitName, false)
+		}
+	}
+
 	// HindSight: create an avoidance heuristic
 	e.createAvoidanceRule(grave)
 }
