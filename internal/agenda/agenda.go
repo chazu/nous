@@ -10,6 +10,7 @@ type Task struct {
 	UnitName string
 	SlotName string
 	Reasons  []string
+	Extra    map[string]any
 	index    int // heap index
 }
 
@@ -32,25 +33,56 @@ func New() *Agenda {
 
 // Push adds a task. If a task with the same unit+slot exists,
 // merge: boost priority and append reasons.
+// Tasks with different Extra["SlotToChange"] values are NOT merged.
 func (a *Agenda) Push(t *Task) {
 	key := taskKey(t.UnitName, t.SlotName)
 	if existing, ok := a.lookup[key]; ok {
+		// Don't merge if both have Extra with different SlotToChange
+		if extraSlotsDiffer(existing.Extra, t.Extra) {
+			// Use a disambiguated key so both stay in the queue
+			key = key + "|" + t.Extra["SlotToChange"].(string)
+			if _, ok2 := a.lookup[key]; ok2 {
+				// Already have this exact variant — merge into it
+				a.mergeInto(a.lookup[key], t)
+				return
+			}
+			heap.Push(&a.tasks, t)
+			a.lookup[key] = t
+			return
+		}
 		// Merge: take max priority + boost, append reasons
-		newPri := existing.Priority
-		if t.Priority > newPri {
-			newPri = t.Priority
-		}
-		newPri += 50 // merge boost
-		if newPri > 1000 {
-			newPri = 1000
-		}
-		existing.Priority = newPri
-		existing.Reasons = append(existing.Reasons, t.Reasons...)
-		heap.Fix(&a.tasks, existing.index)
+		a.mergeInto(existing, t)
 		return
 	}
 	heap.Push(&a.tasks, t)
 	a.lookup[key] = t
+}
+
+func (a *Agenda) mergeInto(existing, t *Task) {
+	newPri := existing.Priority
+	if t.Priority > newPri {
+		newPri = t.Priority
+	}
+	newPri += 50 // merge boost
+	if newPri > 1000 {
+		newPri = 1000
+	}
+	existing.Priority = newPri
+	existing.Reasons = append(existing.Reasons, t.Reasons...)
+	heap.Fix(&a.tasks, existing.index)
+}
+
+// extraSlotsDiffer returns true if both extras have SlotToChange and the values differ.
+func extraSlotsDiffer(a, b map[string]any) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	aSlot, aOk := a["SlotToChange"]
+	bSlot, bOk := b["SlotToChange"]
+	if !aOk || !bOk {
+		return false
+	}
+	return aSlot != bSlot
 }
 
 // Pop removes and returns the highest-priority task, or nil if empty.

@@ -98,3 +98,46 @@ func TestAgendaPriorityCapped(t *testing.T) {
 		t.Errorf("priority should be capped at 1000, got %d", task.Priority)
 	}
 }
+
+func TestTaskExtraNonMerge(t *testing.T) {
+	ag := New()
+
+	// Two tasks with same UnitName+SlotName but different Extra["SlotToChange"]
+	// should NOT be merged.
+	ag.Push(&Task{
+		Priority: 100, UnitName: "X", SlotName: "s",
+		Reasons: []string{"r1"},
+		Extra:   map[string]any{"SlotToChange": "domain"},
+	})
+	ag.Push(&Task{
+		Priority: 100, UnitName: "X", SlotName: "s",
+		Reasons: []string{"r2"},
+		Extra:   map[string]any{"SlotToChange": "range"},
+	})
+
+	if ag.Len() != 2 {
+		t.Fatalf("expected 2 tasks (different SlotToChange), got %d", ag.Len())
+	}
+
+	// Two tasks with same UnitName+SlotName and same Extra["SlotToChange"]
+	// SHOULD be merged.
+	ag2 := New()
+	ag2.Push(&Task{
+		Priority: 100, UnitName: "X", SlotName: "s",
+		Reasons: []string{"r1"},
+		Extra:   map[string]any{"SlotToChange": "domain"},
+	})
+	ag2.Push(&Task{
+		Priority: 200, UnitName: "X", SlotName: "s",
+		Reasons: []string{"r2"},
+		Extra:   map[string]any{"SlotToChange": "domain"},
+	})
+
+	if ag2.Len() != 1 {
+		t.Fatalf("expected 1 task (same SlotToChange), got %d", ag2.Len())
+	}
+	task := ag2.Pop()
+	if len(task.Reasons) != 2 {
+		t.Errorf("expected 2 reasons after merge, got %d", len(task.Reasons))
+	}
+}
