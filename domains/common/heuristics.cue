@@ -120,6 +120,8 @@ units: [
 			"ArgU" @ "Op" isa?
 			"ArgU" @ "domain" get-slot nil !=
 			and
+			"ArgU" @ "genTaskAdded" get-slot nil =
+			and
 			"""#
 		ifTrulyRelevant: #"""
 			"ArgU" @ "-on-" concat "prefix" !
@@ -136,6 +138,7 @@ units: [
 			"""#
 		thenCompute: #"""
 			500 "ArgU" @ "generalizations" "Operation has some good results, try generalizing" add-task
+			true "ArgU" @ "genTaskAdded" set-slot
 			"Generalization task added for " "ArgU" @ concat print
 			"""#
 	},
@@ -218,6 +221,96 @@ units: [
 				"Created generalized: " "genName" @ concat print
 			then
 			then
+			"""#
+	},
+	{
+		name:    "H2-KillGarbageCreator"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "If a heuristic creates many mediocre units, punish it and kill its worst children"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Heuristic" isa?
+			"ArgU" @ "H2-KillGarbageCreator" !=
+			and
+			"""#
+		ifTrulyRelevant: #"""
+			0 "childCount" !
+			0 "mediocreCount" !
+			"Anything" examples
+			each
+				it "child" !
+				"child" @ "creditors" get-slot nil !=
+				if
+					"child" @ "creditors" get-slot "ArgU" @ list-contains
+					if
+						"childCount" @ 1 + "childCount" !
+						"child" @ "worth" get-slot 400 <
+						if
+							"mediocreCount" @ 1 + "mediocreCount" !
+						then
+					then
+				then
+			end
+			# 5+ children and 80%+ mediocre
+			"childCount" @ 5 >=
+			"mediocreCount" @ 5 * "childCount" @ 4 * >=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "worth" get-slot 3 / "ArgU" @ "worth" set-slot
+			"H2: punished " "ArgU" @ concat " (prolific garbage creator)" concat print
+			"Anything" examples
+			each
+				it "child" !
+				"child" @ "creditors" get-slot nil !=
+				if
+					"child" @ "creditors" get-slot "ArgU" @ list-contains
+					"child" @ "worth" get-slot 175 <=
+					and
+					if
+						"child" @ kill-unit
+					then
+				then
+			end
+			"""#
+	},
+	{
+		name:    "H19-EliminateDuplicates"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "Kill machine-created units whose data duplicates an existing unit"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "creditors" get-slot nil !=
+			"ArgU" @ "data" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "data" get-slot "myData" !
+			"Set" examples
+			each
+				it "other" !
+				"other" @ "ArgU" @ !=
+				"other" @ "data" get-slot nil !=
+				and
+				if
+					"myData" @ "other" @ "data" get-slot set-equal?
+					if
+						"other" @ "creditors" get-slot nil =
+						if
+							"ArgU" @ "worth" get-slot 300 - "ArgU" @ "worth" set-slot
+							"Duplicate of seed " "other" @ concat ": " concat "ArgU" @ concat print
+						else
+							"ArgU" @ "worth" get-slot "other" @ "worth" get-slot <=
+							if
+								"ArgU" @ "worth" get-slot 200 - "ArgU" @ "worth" set-slot
+								"Duplicate: " "ArgU" @ concat " = " concat "other" @ concat print
+							then
+						then
+					then
+				then
+			end
 			"""#
 	},
 ]

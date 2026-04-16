@@ -41,6 +41,8 @@ units: [
 			each
 				it "src1" !
 				"src1" @ "data" get-slot nil !=
+				"src1" @ "creditors" get-slot nil =
+				and
 				"created" @ 5 <
 				and
 				if
@@ -51,6 +53,8 @@ units: [
 						each
 							it "src2" !
 							"src2" @ "data" get-slot nil !=
+							"src2" @ "creditors" get-slot nil =
+							and
 							"src1" @ "src2" @ !=
 							and
 							"created" @ 5 <
@@ -148,6 +152,8 @@ units: [
 			and
 			"ArgU" @ "restrictedTo" get-slot nil =
 			and
+			"ArgU" @ "specTaskAdded" get-slot nil =
+			and
 			"""#
 		thenCompute: #"""
 			"ArgU" @ "domain" get-slot
@@ -167,6 +173,7 @@ units: [
 					end
 				then
 			end
+			true "ArgU" @ "specTaskAdded" set-slot
 			"""#
 	},
 	{
