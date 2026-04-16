@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/unit"
@@ -59,8 +60,9 @@ var builtins = map[string]builtinFn{
 	"add-task": bAddTask,
 
 	// String
-	"concat":    bConcat,
-	"pack-name": bPackName,
+	"concat":       bConcat,
+	"pack-name":    bPackName,
+	"starts-with?": bStartsWith,
 
 	// List
 	"list-length": bListLength,
@@ -387,6 +389,13 @@ func bPackName(vm *VM) error {
 	name := vm.pop()
 	prefix := vm.pop()
 	vm.push(StringVal(prefix.AsString() + "-" + name.AsString()))
+	return nil
+}
+
+func bStartsWith(vm *VM) error {
+	prefix := vm.pop()
+	str := vm.pop()
+	vm.push(BoolVal(strings.HasPrefix(str.AsString(), prefix.AsString())))
 	return nil
 }
 
