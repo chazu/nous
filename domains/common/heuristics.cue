@@ -23,7 +23,7 @@ units: [
 				if
 					"specName" @ "CurUnit" @ "isA" get-slot first create-unit "specUnit" !
 
-					# Copy key slots from parent
+					# Copy ALL slots from parent unchanged (domain stays as-is)
 					"CurUnit" @ "defn" get-slot nil !=
 					if "CurUnit" @ "defn" get-slot "specUnit" @ "defn" set-slot then
 					"CurUnit" @ "range" get-slot nil !=
@@ -33,12 +33,12 @@ units: [
 					"CurUnit" @ "arity" get-slot nil !=
 					if "CurUnit" @ "arity" get-slot "specUnit" @ "arity" set-slot then
 
-					# Apply the specialization
-					"specUnit" @ "slot" @ "from" @ "to" @ replace-slot-value drop
+					# Record the restriction (don't modify domain)
+					"to" @ "specUnit" @ "restrictedTo" set-slot
 
 					# Set creditors and english
 					"H-Specialize" "specUnit" @ "creditors" set-slot
-					"Specialized " "CurUnit" @ concat ": " concat "slot" @ concat " " concat "from" @ concat " -> " concat "to" @ concat
+					"Specialized " "CurUnit" @ concat " restricted to " concat "to" @ concat
 					"specUnit" @ "english" set-slot
 
 					600 "specUnit" @ "examples" "Specialized op needs testing" add-task
@@ -122,9 +122,17 @@ units: [
 			and
 			"""#
 		ifTrulyRelevant: #"""
-			"ArgU" @ applics-success-ratio 0.1 >
-			"ArgU" @ applics-success-ratio 1.0 <
-			and
+			"ArgU" @ "-on-" concat "prefix" !
+			false "hasResults" !
+			"Anything" examples
+			each
+				it "name" !
+				"name" @ "prefix" @ starts-with?
+				if
+					true "hasResults" !
+				then
+			end
+			"hasResults" @
 			"""#
 		thenCompute: #"""
 			500 "ArgU" @ "generalizations" "Operation has some good results, try generalizing" add-task

@@ -146,6 +146,8 @@ units: [
 			and
 			"ArgU" @ "defn" get-slot nil !=
 			and
+			"ArgU" @ "restrictedTo" get-slot nil =
+			and
 			"""#
 		thenCompute: #"""
 			"ArgU" @ "domain" get-slot
