@@ -680,7 +680,7 @@ func bCriterialSlots(vm *VM) error {
 	}
 	var slots []Value
 	for k := range u.Slots {
-		if vm.Store.IsA(k, "CriterialSlot") {
+		if vm.Store.IsA(slotDefName(k), "CriterialSlot") {
 			slots = append(slots, StringVal(k))
 		}
 	}
@@ -697,12 +697,22 @@ func bNonCriterialSlots(vm *VM) error {
 	}
 	var slots []Value
 	for k := range u.Slots {
-		if vm.Store.IsA(k, "NonCriterialSlot") {
+		if vm.Store.IsA(slotDefName(k), "NonCriterialSlot") {
 			slots = append(slots, StringVal(k))
 		}
 	}
 	vm.push(ListVal(slots))
 	return nil
+}
+
+// slotDefName maps a slot key (e.g. "domain") to its slot definition unit
+// name (e.g. "Domain"). Slot keys on units are lowercase-first while slot
+// definition units are PascalCase.
+func slotDefName(slotKey string) string {
+	if slotKey == "" {
+		return slotKey
+	}
+	return strings.ToUpper(slotKey[:1]) + slotKey[1:]
 }
 
 func bSibSlots(vm *VM) error {

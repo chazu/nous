@@ -136,6 +136,29 @@ func TestUnitWorthClamped(t *testing.T) {
 	}
 }
 
+// TestWorthClampedViaSet verifies worth is clamped even when written through
+// the generic Set/SetSlot path (used by DSL set-slot). Previously these
+// bypassed SetWorth's clamp and allowed worth values like -3700.
+func TestWorthClampedViaSet(t *testing.T) {
+	u := New("Test")
+	u.Set("worth", -500)
+	if u.Worth() != 0 {
+		t.Errorf("Set(worth,-500) should clamp to 0, got %d", u.Worth())
+	}
+	u.Set("worth", 5000)
+	if u.Worth() != 1000 {
+		t.Errorf("Set(worth,5000) should clamp to 1000, got %d", u.Worth())
+	}
+
+	s := NewStore()
+	u2 := New("Test2")
+	s.Put(u2)
+	s.SetSlot("Test2", "worth", -1000)
+	if u2.Worth() != 0 {
+		t.Errorf("SetSlot(Test2,worth,-1000) should clamp to 0, got %d", u2.Worth())
+	}
+}
+
 func TestInverseMaintenance(t *testing.T) {
 	s := NewStore()
 	s.RegisterInverse("range", "isRangeOf")

@@ -318,11 +318,12 @@ func TestCriterialSlots(t *testing.T) {
 	anything := unit.New("Anything")
 	store.Put(anything)
 
-	domainSlot := unit.New("domain")
+	// Slot def units are PascalCase; slot keys are lowercase-first.
+	domainSlot := unit.New("Domain")
 	domainSlot.Set("isA", []string{"Slot", "CriterialSlot", "Anything"})
 	store.Put(domainSlot)
 
-	englishSlot := unit.New("english")
+	englishSlot := unit.New("English")
 	englishSlot.Set("isA", []string{"Slot", "NonCriterialSlot", "Anything"})
 	store.Put(englishSlot)
 

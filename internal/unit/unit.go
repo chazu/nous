@@ -65,8 +65,20 @@ func (u *Unit) GetMap(slot string) map[string]any {
 	return v
 }
 
-// Set sets a slot value.
+// Set sets a slot value. Worth is clamped to [0, 1000] regardless of the
+// caller — DSL set-slot and direct mutation both write through here.
 func (u *Unit) Set(slot string, value any) {
+	if slot == "worth" {
+		if w, ok := value.(int); ok {
+			if w < 0 {
+				w = 0
+			} else if w > 1000 {
+				w = 1000
+			}
+			u.Slots[slot] = w
+			return
+		}
+	}
 	u.Slots[slot] = value
 }
 
