@@ -212,6 +212,45 @@ func (e *Engine) highestWorthUnfocused() string {
 	return best
 }
 
+// SeedInitialAgenda pushes one exploration task per Op at startup so every
+// operator gets an H-RunOnExamples / H-Specialize / H16-Generalize firing
+// via task dispatch. EURISKO seeded its initial agenda with a task per
+// concept; without an equivalent step here, the engine enters task-focus
+// on the first focused Op and never drains the agenda enough to unit-focus
+// sibling Ops — SetUnion, SetDifference, GCD etc. stay unexplored.
+//
+// Priority 700 is chosen so these seed tasks beat H-Specialize's
+// priority-600 spec-tasks: every seed Op is visited (breadth) before any
+// single Op's specialization chain runs (depth). Without this ordering the
+// first Op popped floods the queue with its own 600-priority follow-ups
+// and crowds out the remaining seeds.
+//
+// Design choice B vs C:
+//
+// This is "option B" from the coverage-gap discussion (2026-04-16). The
+// alternative "option C" — throttle H-Specialize to schedule only N tasks
+// per fire so the agenda drains faster between unit-focus cycles — would
+// also work but constrains specialization semantics. B keeps EURISKO's
+// level-1 / level-2 control rule intact ("level 2 runs when level 1 is
+// empty") and guarantees startup breadth without touching heuristic logic.
+// See docs/dynamics-and-tuning.md.
+func (e *Engine) SeedInitialAgenda() {
+	for _, name := range e.Store.All() {
+		if !e.Store.IsA(name, "Op") {
+			continue
+		}
+		if name == "Op" {
+			continue // skip the meta-unit itself
+		}
+		e.Agenda.Push(&agenda.Task{
+			Priority: 700,
+			UnitName: name,
+			SlotName: "examples",
+			Reasons:  []string{"Initial seed task for operator exploration"},
+		})
+	}
+}
+
 // processDeletedUnits handles credit assignment and HindSight for units
 // killed during the current cycle.
 func (e *Engine) processDeletedUnits() {

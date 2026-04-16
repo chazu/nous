@@ -95,6 +95,58 @@ operator paths). Conjectures per 300 cycles climbed to 1869 (all
 unique). Kills rose from 3 to 11 — derived units that reduce to existing
 sets now get penalized and culled.
 
+### 4c. Narrow Op coverage (breadth-first startup)
+
+Even after 4a/4b/4d stabilized the control loop, 300-cycle runs applied
+only `SetIntersect`. Sibling set ops (`SetUnion`, `SetDifference`) were
+never applied because the engine's level-1/level-2 rule (task-focus runs
+until the agenda is empty; only then does unit-focus run) has a
+starvation mode: the first Op to be unit-focused schedules enough
+priority-600 spec-tasks to keep the agenda non-empty indefinitely, so
+sibling Ops never win unit-focus and never get their first
+H-RunOnExamples / H-Specialize firing.
+
+**Options considered**:
+
+- **B. Seed-task per Op**: at startup, push one `{UnitName: op, SlotName:
+  "examples"}` task per Op instance at priority 700 (just above
+  H-Specialize's 600 scheduling priority). Every Op then gets its first
+  heuristic pass via task dispatch before any Op's specialization burst
+  takes over. Preserves EURISKO's level-1/level-2 semantics; matches
+  EURISKO's practice of seeding initial tasks per concept.
+- **C. Throttle H-Specialize**: cap spec tasks emitted per fire (e.g. at
+  2-3 instead of one per `(domType, specType)` pair). Would drain the
+  agenda faster and let more natural unit-focus cycles happen. Rejected
+  because it constrains specialization depth — a semantic change to a
+  core heuristic.
+- **A. Interleave unit-focus every N task cycles**: force a unit-focus
+  cycle periodically regardless of agenda state. Rejected because it
+  breaks the level-1/level-2 invariant.
+
+**Chosen**: B. See `Engine.SeedInitialAgenda`.
+
+**Effect (300-cycle math run)**:
+
+| Op | Apps before | Apps after |
+|----|------------:|-----------:|
+| SetIntersect   | 20 |  15 |
+| SetUnion       |  0 |  20 |
+| SetDifference  |  0 |  20 |
+| GCD            |  0 |   0 (blocked on domain data) |
+| DivisorsOf     |  0 |   0 (blocked on domain data) |
+| Compose        |  0 |   0 (blocked on domain data) |
+| Restrict       |  0 |   0 (blocked on domain data) |
+
+Conjectures climbed from 1869 to 27,559 (25,002 unique). New real
+theorem surfaced: `SetDifference(SetOfNumbers, SetOfOdds) = SetOfEvens`.
+
+**Remaining gap**: GCD/DivisorsOf/Compose/Restrict have domains on
+`Number`, `Op`, `Pred` — none of whose example units carry a `data`
+slot. H-RunOnExamples iterates `examples(domType)` looking for
+data-bearing sources and finds none. This is a domain-modeling gap
+(missing Pair/Number-instance units with data) rather than an engine
+behavior. Out of scope for this study.
+
 ### 4b. Orphan tasks on killed units caused agenda loops
 
 When the examination path actually started penalizing and killing

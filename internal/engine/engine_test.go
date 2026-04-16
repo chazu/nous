@@ -932,6 +932,30 @@ func TestHAnalyzeApplics(t *testing.T) {
 	}
 }
 
+// TestSeedInitialAgendaCoversAllOps verifies that SeedInitialAgenda
+// queues a task for every Op in the store at startup. Without this, the
+// engine enters task-focus on the first focused Op and never drains the
+// agenda enough to unit-focus the rest — sibling Ops (SetUnion,
+// SetDifference, GCD, DivisorsOf, Restrict) never get applied.
+func TestSeedInitialAgendaCoversAllOps(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Agenda = agenda.New()
+
+	eng.SeedInitialAgenda()
+
+	want := []string{"SetIntersect", "SetUnion", "SetDifference", "GCD", "DivisorsOf", "Compose", "Restrict"}
+	seen := map[string]bool{}
+	for eng.Agenda.Len() > 0 {
+		task := eng.Agenda.Pop()
+		seen[task.UnitName] = true
+	}
+	for _, op := range want {
+		if !seen[op] {
+			t.Errorf("SeedInitialAgenda missed Op %q", op)
+		}
+	}
+}
+
 // TestOrphanTasksPurgedOnKill verifies that when a unit is killed, pending
 // tasks targeting it are removed from the agenda. Otherwise those tasks
 // keep firing heuristics on a non-existent unit — get-slot returns nil for

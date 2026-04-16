@@ -104,6 +104,10 @@ func runCmd(args []string) {
 		eng.MutConfig.Enabled = false
 	}
 
+	// Seed the agenda with one task per Op (option B for breadth coverage;
+	// see engine.SeedInitialAgenda docstring).
+	eng.SeedInitialAgenda()
+
 	// Run with interrupt handling
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
