@@ -1,7 +1,9 @@
 # EURISKO Parity: Phased Implementation
 
-**Date:** 2026-04-15 (updated 2026-04-15)
+**Date:** 2026-04-15 (updated 2026-04-16)
 **Invariant:** Each phase produces a working system. Nothing subtracts from existing capabilities.
+
+**Companion docs:** [docs/dynamics-and-tuning.md](dynamics-and-tuning.md) records observed runtime behavior, four control-loop bugs found post-Phase-2, their fixes, and the resulting steady-state numbers.
 
 ---
 
@@ -19,7 +21,7 @@ Domain definitions moved from hardcoded Go to CUE files in `domains/`. CUE loade
 
 **Completed:** 1.1-1.5
 
-**Known bug (1.6):** Generalization inverse maintenance not producing output. `computeInverseIndex` processes the `specializations/generalizations` inverse pair, but H17 still can't find types with populated `generalizations` slots. The `generalizations` slot on units like `Set` should be populated from `Structure.specializations: ["Set", "List", "Bag"]` via inverse maintenance, but H17 reports no candidates. Needs debugging -- likely a case sensitivity or slot key mismatch issue.
+**Known bug (1.6):** RESOLVED (commit `941e4d2`). Root cause turned out to be in the `criterial-slots` DSL builtin, not in inverse maintenance: slot keys are lowercase-first (`"domain"`) but slot definition units are PascalCase (`"Domain"`), so `store.IsA("domain", "CriterialSlot")` always returned false and H17 iterated an empty list. Fix capitalizes the slot key before the IsA lookup. See `docs/dynamics-and-tuning.md`.
 
 ---
 
