@@ -70,7 +70,12 @@ units: [
 									"resultName" !
 									"resultName" @ unit-exists? not
 									if
-										"resultName" @ "Set" create-unit
+										# Use the Op's range first element as the result parent so
+										# Number-valued ops (GCD) create Number units and Set-valued
+										# ops (SetUnion, DivisorsOf) create Set units. Without this,
+										# every result is typed as Set and H-CheckExtremes treats
+										# int data as an empty set (AsList(int) = nil).
+										"resultName" @ "ArgU" @ "range" get-slot first create-unit
 										"resultUnit" !
 										"result" @ "resultUnit" @ "data" set-slot
 										"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
@@ -100,7 +105,8 @@ units: [
 							"resultName" !
 							"resultName" @ unit-exists? not
 							if
-								"resultName" @ "Set" create-unit
+								# Use range for result type (see binary branch note).
+								"resultName" @ "ArgU" @ "range" get-slot first create-unit
 								"resultUnit" !
 								"result" @ "resultUnit" @ "data" set-slot
 								"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
@@ -328,8 +334,12 @@ units: [
 		isA: ["Heuristic", "Anything"]
 		english: "Boost worth of operations that produce surprising results"
 		overallRecord: {successes: 0, failures: 0}
+		// Gated on Set: set-size operates on lists, so Number-typed data (ints)
+		// would report size 0 and trigger the false-empty branch.
 		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Set" isa?
 			"ArgU" @ "creditors" get-slot nil !=
+			and
 			"ArgU" @ "data" get-slot nil !=
 			and
 			"""#
@@ -361,8 +371,12 @@ units: [
 		isA: ["Heuristic", "Anything"]
 		english: "Penalize machine-created units with trivial (empty) data"
 		overallRecord: {successes: 0, failures: 0}
+		// Gated on Set: set-size on a scalar returns 0, which would penalize
+		// every Number-typed result as trivially empty.
 		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Set" isa?
 			"ArgU" @ "creditors" get-slot nil !=
+			and
 			"ArgU" @ "data" get-slot nil !=
 			and
 			"""#

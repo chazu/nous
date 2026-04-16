@@ -140,12 +140,53 @@ H-RunOnExamples / H-Specialize firing.
 Conjectures climbed from 1869 to 27,559 (25,002 unique). New real
 theorem surfaced: `SetDifference(SetOfNumbers, SetOfOdds) = SetOfEvens`.
 
-**Remaining gap**: GCD/DivisorsOf/Compose/Restrict have domains on
-`Number`, `Op`, `Pred` — none of whose example units carry a `data`
-slot. H-RunOnExamples iterates `examples(domType)` looking for
-data-bearing sources and finds none. This is a domain-modeling gap
-(missing Pair/Number-instance units with data) rather than an engine
-behavior. Out of scope for this study.
+**Remaining gap (addressed in 4d below)**: GCD/DivisorsOf had domains
+on `Number` but no Number instance units with data. Compose/Restrict
+still blocked — they need Op/Pred as higher-order inputs.
+
+### 4d. Number instance units + range-aware result typing
+
+Two coordinated domain-modeling fixes:
+
+1. **`N-1` … `N-20` Number instances** (`domains/math/numbers.cue`).
+   Each is tagged with every Number subtype it satisfies (e.g. `N-2`
+   `isA [EvenNum, PrimeNum]`, `N-6 isA [EvenNum, PerfectNum]`) with
+   `data = <int>`. EURISKO modeled small integers as concept units;
+   this matches that pattern. Unlocks `DivisorsOf` and `GCD`.
+
+2. **H-RunOnExamples now types results from `ArgU.range first`**
+   instead of hardcoding `"Set"`. `GCD` produces Number-typed units
+   with int data; `DivisorsOf`, `SetUnion`, `SetIntersect`,
+   `SetDifference` produce Set-typed units with list data.
+
+3. **H-BoostInteresting and H-PenalizeTrivial gate on `isA Set`** to
+   match H-CheckExtremes. Without the gate, `set-size` on scalar int
+   data returns 0 (`AsList(int) = nil`), so Number results would be
+   treated as empty sets and all GCD creditors falsely boosted or
+   penalized.
+
+**Effect (300-cycle math)**:
+
+| Op | Before 4d | After 4d |
+|----|----------:|---------:|
+| SetIntersect  | 15 | 15 |
+| SetUnion      | 20 | 20 |
+| SetDifference | 20 | 20 |
+| GCD           |  0 | 15 |
+| DivisorsOf    |  0 | 15 |
+| Compose       |  0 |  0 (higher-order, deferred) |
+| Restrict      |  0 |  0 (higher-order, deferred) |
+
+Real theorem still surfaced: `SetDifference(SetOfPrimes, SetOfOdds) is
+a singleton: {2}`.
+
+**Deferred — higher-order ops**: Compose has domain `[Op, Op]` and
+Restrict `[Op, Pred]`. Applying them to concrete data would mean
+synthesizing new operator units from two existing operators. This is
+a separate design problem (needs defn composition, new meaning for
+`data` on an Op, and H-RunOnExamples extensions to handle Op-valued
+inputs) and is tracked as a future enhancement rather than a
+control-loop issue.
 
 ### 4b. Orphan tasks on killed units caused agenda loops
 
