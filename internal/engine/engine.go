@@ -45,6 +45,10 @@ type Engine struct {
 	MutConfig MutationConfig
 	mutator   *mutate.Mutator
 	rng       *rand.Rand
+
+	// OnFocusUnit, if set, is called each time unit-focus selects a unit.
+	// Test hook; nil in production.
+	OnFocusUnit func(unit string)
 }
 
 // New creates an engine wired to the given store and agenda.
@@ -100,6 +104,9 @@ func (e *Engine) Run(ctx context.Context) error {
 			continue
 		}
 		e.log(1, "\n=== Cycle %d: Focus on %s (worth=%d) ===", e.cycle, u, e.Store.Get(u).Worth())
+		if e.OnFocusUnit != nil {
+			e.OnFocusUnit(u)
+		}
 		e.WorkOnUnit(u)
 		e.focused[u] = true
 
@@ -185,8 +192,11 @@ func (e *Engine) highestWorthUnfocused() string {
 		if u == nil {
 			continue
 		}
-		// Skip heuristics for unit-focus (they fire on others, not on themselves)
-		if e.Store.IsA(name, "Heuristic") {
+		// Skip the Heuristic meta-unit itself (the category), but allow
+		// heuristic instances to be focused — immune-system heuristics like
+		// H2-KillGarbageCreator and H-AnalyzeApplics only run when their
+		// target is a focused heuristic instance.
+		if name == "Heuristic" {
 			continue
 		}
 		// Skip meta-concepts (Slot, IfParts, ThenParts, etc.)

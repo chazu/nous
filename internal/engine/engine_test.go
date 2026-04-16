@@ -212,7 +212,7 @@ func TestHFindExamples(t *testing.T) {
 
 func TestEngineOutput(t *testing.T) {
 	eng, buf := testEngine(t)
-	eng.MaxCycles = 5
+	eng.MaxCycles = 30
 
 	eng.Run(context.Background())
 
@@ -961,4 +961,39 @@ func TestTaskOnlyHeuristicsSkippedInUnitFocus(t *testing.T) {
 	// task with slot=generalizations that was NOT added by H16 (Op-only),
 	// that's the runaway signal.
 	t.Logf("cycles=%d units=%d", eng.Cycle(), eng.Store.Count())
+}
+
+// TestHeuristicsFocusableInUnitFocus verifies that heuristic instances are
+// eligible for unit-focus. Immune-system heuristics like H2-KillGarbageCreator
+// and H-AnalyzeApplics only evaluate their conditions when a heuristic is the
+// focused unit; if highestWorthUnfocused skips all heuristics, the pruning
+// layer never gets a chance to evaluate.
+func TestHeuristicsFocusableInUnitFocus(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.MaxCycles = 20
+	eng.Verbosity = 0
+	eng.MutConfig.Enabled = false
+
+	// Instrument highestWorthUnfocused by observing which units get focused.
+	focused := map[string]bool{}
+	eng.OnFocusUnit = func(u string) { focused[u] = true }
+
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// At least one heuristic instance should have been focused.
+	heuristicFocused := false
+	for name := range focused {
+		if name != "Heuristic" && eng.Store.IsA(name, "Heuristic") {
+			heuristicFocused = true
+			break
+		}
+	}
+	if !heuristicFocused {
+		t.Errorf("no heuristic instance was focused; focus set: %v", focused)
+	}
+	if focused["Heuristic"] {
+		t.Errorf("the Heuristic meta-unit should be skipped in unit-focus, but it was focused")
+	}
 }
