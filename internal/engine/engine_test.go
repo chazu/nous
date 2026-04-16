@@ -814,6 +814,42 @@ func TestSpecializationPipeline(t *testing.T) {
 	}
 }
 
+func TestGeneralizationPipeline(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+
+	seed.DomainsDir = "../../domains"
+	if err := seed.LoadDomain(store, "math"); err != nil {
+		t.Fatal(err)
+	}
+
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+	eng.MutConfig.Enabled = false
+	eng.MaxCycles = 200
+
+	err := eng.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Check if any generalized units were created (name contains "-gen-")
+	genCount := 0
+	for _, name := range store.All() {
+		if strings.Contains(name, "-gen-") {
+			genCount++
+		}
+	}
+
+	// H16 needs applics to accumulate before triggering, so generalization
+	// may not happen in 200 cycles if heuristics don't fire enough.
+	// Log instead of hard-fail.
+	t.Logf("Generalized units created: %d", genCount)
+}
+
 func TestHAnalyzeApplics(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()

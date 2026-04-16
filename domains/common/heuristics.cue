@@ -106,4 +106,102 @@ units: [
 			end
 			"""#
 	},
+	{
+		name:    "H16-Generalize"
+		worth:   600
+		isA: ["Heuristic", "Anything"]
+		english: "If operation has some good results, try generalizing"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "domain" get-slot nil !=
+			and
+			"""#
+		ifTrulyRelevant: #"""
+			"ArgU" @ applics-success-ratio 0.1 >
+			"ArgU" @ applics-success-ratio 1.0 <
+			and
+			"""#
+		thenCompute: #"""
+			500 "ArgU" @ "generalizations" "Operation has some good results, try generalizing" add-task
+			"Generalization task added for " "ArgU" @ concat print
+			"""#
+	},
+	{
+		name:    "H17-ChooseGenSlots"
+		worth:   600
+		isA: ["Heuristic", "Anything"]
+		english: "Choose slots to generalize"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "generalizations" =
+			"SlotToChange" get-task-extra nil =
+			and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ criterial-slots random-subset
+			each
+				it "chosenSlot" !
+				"CurUnit" @ "chosenSlot" @ get-slot "curVal" !
+				"curVal" @ nil !=
+				if
+					"curVal" @ random-choice "fromType" !
+					"fromType" @ nil !=
+					"fromType" @ "generalizations" get-slot nil !=
+					and
+					if
+						"fromType" @ "generalizations" get-slot
+						each
+							it "toType" !
+							500 "CurUnit" @ "chosenSlot" @ "fromType" @ "toType" @ add-gen-task
+						end
+					then
+				then
+			end
+			"""#
+	},
+	{
+		name:    "H18-Generalize"
+		worth:   704
+		isA: ["Heuristic", "Anything"]
+		english: "Generalize a given slot of a given unit"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "generalizations" =
+			"SlotToChange" get-task-extra nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"SlotToChange" get-task-extra "slot" !
+			"GeneralizeFrom" get-task-extra "from" !
+			"GeneralizeTo" get-task-extra "to" !
+
+			"CurUnit" @ "-gen-" concat "to" @ concat "genName" !
+			"genName" @ unit-exists? not
+			if
+				"genName" @ "CurUnit" @ "isA" get-slot first create-unit "genUnit" !
+
+				# Copy key slots from parent
+				"CurUnit" @ "defn" get-slot nil !=
+				if "CurUnit" @ "defn" get-slot "genUnit" @ "defn" set-slot then
+				"CurUnit" @ "range" get-slot nil !=
+				if "CurUnit" @ "range" get-slot "genUnit" @ "range" set-slot then
+				"CurUnit" @ "domain" get-slot nil !=
+				if "CurUnit" @ "domain" get-slot "genUnit" @ "domain" set-slot then
+				"CurUnit" @ "arity" get-slot nil !=
+				if "CurUnit" @ "arity" get-slot "genUnit" @ "arity" set-slot then
+
+				# Apply the generalization
+				"genUnit" @ "slot" @ "from" @ "to" @ replace-slot-value drop
+
+				# Set creditors and english
+				"H18-Generalize" "genUnit" @ "creditors" set-slot
+				"Generalized " "CurUnit" @ concat ": " concat "slot" @ concat " " concat "from" @ concat " -> " concat "to" @ concat
+				"genUnit" @ "english" set-slot
+
+				500 "genUnit" @ "examples" "Generalized op needs testing" add-task
+				"Created generalized: " "genName" @ concat print
+			then
+			"""#
+	},
 ]
