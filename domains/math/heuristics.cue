@@ -151,23 +151,19 @@ units: [
 			"ArgU" @ "domain" get-slot
 			each
 				it "domType" !
-				"domType" @ "specializations" get-slot
-				each
-					it "specType" !
-					"ArgU" @ "-on-" concat "specType" @ concat
-					"specName" !
-					"specName" @ unit-exists? not
-					if
-						"specName" @ "ArgU" @ "isA" get-slot first create-unit
-						"specUnit" !
-						"ArgU" @ "defn" get-slot "specUnit" @ "defn" set-slot
-						"H-Specialize" "specUnit" @ "creditors" set-slot
-						"ArgU" @ "range" get-slot "specUnit" @ "range" set-slot
-						"specType" @ "specUnit" @ "domain" set-slot
-						600 "specUnit" @ "examples" "Specialized op needs testing" add-task
-						"Specialized " "ArgU" @ concat " -> " concat "specName" @ concat print
-					then
-				end
+				"domType" @ "specializations" get-slot nil !=
+				if
+					"domType" @ "specializations" get-slot
+					each
+						it "specType" !
+						"ArgU" @ "-on-" concat "specType" @ concat
+						unit-exists? not
+						if
+							600 "ArgU" @ "domain" "domType" @ "specType" @ add-spec-task
+							"Specialization task: " "ArgU" @ concat " domain " concat "domType" @ concat " -> " concat "specType" @ concat print
+						then
+					end
+				then
 			end
 			"""#
 	},

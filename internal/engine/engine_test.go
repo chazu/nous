@@ -762,6 +762,58 @@ func TestSelfModificationLoop(t *testing.T) {
 		hBadCreator.Worth(), failures, len(eng.Graveyard), avoidCount)
 }
 
+func TestSpecializationPipeline(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+
+	seed.DomainsDir = "../../domains"
+	if err := seed.LoadDomain(store, "math"); err != nil {
+		t.Fatal(err)
+	}
+
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+	eng.MutConfig.Enabled = false
+	eng.MaxCycles = 50
+
+	err := eng.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// H-Specialize should have emitted specialization tasks
+	// H6-Specialize should have created specialized units
+	// Check for at least one specialized operation
+	found := false
+	for _, name := range store.All() {
+		u := store.Get(name)
+		if u != nil && u.GetString("english") != "" {
+			if strings.Contains(u.GetString("english"), "Specialized") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		// Also check by naming pattern
+		for _, name := range store.All() {
+			if strings.Contains(name, "-on-") {
+				u := store.Get(name)
+				if u != nil && len(u.GetStrings("creditors")) > 0 {
+					found = true
+					break
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected at least one specialized operation created via pipeline")
+	}
+}
+
 func TestHAnalyzeApplics(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()
