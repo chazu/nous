@@ -931,3 +931,34 @@ func TestHAnalyzeApplics(t *testing.T) {
 		t.Error("expected a unit with creditors including H-AnalyzeApplics to be created")
 	}
 }
+
+// TestTaskOnlyHeuristicsSkippedInUnitFocus verifies that heuristics with only
+// ifWorkingOnTask (no ifPotentiallyRelevant / ifTrulyRelevant) are not fired
+// during unit-focus. Previously fireUnitRule skipped the ifWorkingOnTask check
+// and ran thenCompute unconditionally — causing H17 to add generalization
+// tasks for non-Op units, among other runaway behaviors.
+func TestTaskOnlyHeuristicsSkippedInUnitFocus(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.MaxCycles = 3
+	eng.Verbosity = 0
+	// Disable mutation so we observe only the baseline firing behavior.
+	eng.MutConfig.Enabled = false
+
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-Op types should never get X-gen-X units. H17/H18 are task-only and
+	// should not fire on unit-focus of these types.
+	for _, name := range eng.Store.All() {
+		if strings.HasPrefix(name, "Set-gen-") ||
+			strings.HasPrefix(name, "List-gen-") ||
+			strings.HasPrefix(name, "Number-gen-") {
+			t.Errorf("unit %q was created from unit-focus on a non-Op; task-only heuristics must not fire in unit-focus", name)
+		}
+	}
+	// Cycle 0 should focus on a non-Op type; if by cycle 1 there's a
+	// task with slot=generalizations that was NOT added by H16 (Op-only),
+	// that's the runaway signal.
+	t.Logf("cycles=%d units=%d", eng.Cycle(), eng.Store.Count())
+}

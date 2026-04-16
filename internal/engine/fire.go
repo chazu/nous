@@ -69,17 +69,29 @@ func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool, 
 // fireUnitRule fires a heuristic against a unit (Level 2: when agenda is empty).
 // Uses ifPotentiallyRelevant and ifTrulyRelevant, then ThenParts.
 // Returns (fired, abort, produced).
+//
+// Heuristics whose only conditions are task-phase (ifWorkingOnTask,
+// ifFinishedWorkingOnTask) are skipped in unit-focus — they're slot-triggered
+// by design and have no meaningful unit-focus trigger.
 func (e *Engine) fireUnitRule(heuristic string, targetUnit string) (bool, bool, bool) {
 	h := e.Store.Get(heuristic)
 	if h == nil {
 		return false, false, false
 	}
 
+	potProg := h.GetString("ifPotentiallyRelevant")
+	relProg := h.GetString("ifTrulyRelevant")
+	if potProg == "" && relProg == "" {
+		return false, false, false
+	}
+
 	e.VM.SetEnv("ArgU", dsl.StringVal(targetUnit))
 	e.VM.SetEnv("CurUnit", dsl.StringVal(targetUnit))
+	// CurSlot must not leak from the previous task dispatch.
+	e.VM.SetEnv("CurSlot", dsl.Nil())
 
 	// Check ifPotentiallyRelevant
-	if prog := h.GetString("ifPotentiallyRelevant"); prog != "" {
+	if prog := potProg; prog != "" {
 		v, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
@@ -94,7 +106,7 @@ func (e *Engine) fireUnitRule(heuristic string, targetUnit string) (bool, bool, 
 	}
 
 	// Check ifTrulyRelevant
-	if prog := h.GetString("ifTrulyRelevant"); prog != "" {
+	if prog := relProg; prog != "" {
 		v, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
