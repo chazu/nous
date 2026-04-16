@@ -15,31 +15,35 @@ units: [
 			"SpecializeFrom" get-task-extra "from" !
 			"SpecializeTo" get-task-extra "to" !
 
-			"CurUnit" @ "-on-" concat "to" @ concat "specName" !
-			"specName" @ unit-exists? not
+			# Guard: all extras must be non-nil
+			"to" @ nil != "from" @ nil != and "slot" @ nil != and
 			if
-				"specName" @ "CurUnit" @ "isA" get-slot first create-unit "specUnit" !
+				"CurUnit" @ "-on-" concat "to" @ concat "specName" !
+				"specName" @ unit-exists? not
+				if
+					"specName" @ "CurUnit" @ "isA" get-slot first create-unit "specUnit" !
 
-				# Copy key slots from parent
-				"CurUnit" @ "defn" get-slot nil !=
-				if "CurUnit" @ "defn" get-slot "specUnit" @ "defn" set-slot then
-				"CurUnit" @ "range" get-slot nil !=
-				if "CurUnit" @ "range" get-slot "specUnit" @ "range" set-slot then
-				"CurUnit" @ "domain" get-slot nil !=
-				if "CurUnit" @ "domain" get-slot "specUnit" @ "domain" set-slot then
-				"CurUnit" @ "arity" get-slot nil !=
-				if "CurUnit" @ "arity" get-slot "specUnit" @ "arity" set-slot then
+					# Copy key slots from parent
+					"CurUnit" @ "defn" get-slot nil !=
+					if "CurUnit" @ "defn" get-slot "specUnit" @ "defn" set-slot then
+					"CurUnit" @ "range" get-slot nil !=
+					if "CurUnit" @ "range" get-slot "specUnit" @ "range" set-slot then
+					"CurUnit" @ "domain" get-slot nil !=
+					if "CurUnit" @ "domain" get-slot "specUnit" @ "domain" set-slot then
+					"CurUnit" @ "arity" get-slot nil !=
+					if "CurUnit" @ "arity" get-slot "specUnit" @ "arity" set-slot then
 
-				# Apply the specialization
-				"specUnit" @ "slot" @ "from" @ "to" @ replace-slot-value drop
+					# Apply the specialization
+					"specUnit" @ "slot" @ "from" @ "to" @ replace-slot-value drop
 
-				# Set creditors and english
-				"H-Specialize" "specUnit" @ "creditors" set-slot
-				"Specialized " "CurUnit" @ concat ": " concat "slot" @ concat " " concat "from" @ concat " -> " concat "to" @ concat
-				"specUnit" @ "english" set-slot
+					# Set creditors and english
+					"H-Specialize" "specUnit" @ "creditors" set-slot
+					"Specialized " "CurUnit" @ concat ": " concat "slot" @ concat " " concat "from" @ concat " -> " concat "to" @ concat
+					"specUnit" @ "english" set-slot
 
-				600 "specUnit" @ "examples" "Specialized op needs testing" add-task
-				"Created specialized: " "specName" @ concat print
+					600 "specUnit" @ "examples" "Specialized op needs testing" add-task
+					"Created specialized: " "specName" @ concat print
+				then
 			then
 			"""#
 	},
@@ -176,6 +180,9 @@ units: [
 			"GeneralizeFrom" get-task-extra "from" !
 			"GeneralizeTo" get-task-extra "to" !
 
+			# Guard: all extras must be non-nil
+			"to" @ nil != "from" @ nil != and "slot" @ nil != and
+			if
 			"CurUnit" @ "-gen-" concat "to" @ concat "genName" !
 			"genName" @ unit-exists? not
 			if
@@ -201,6 +208,7 @@ units: [
 
 				500 "genUnit" @ "examples" "Generalized op needs testing" add-task
 				"Created generalized: " "genName" @ concat print
+			then
 			then
 			"""#
 	},
