@@ -1,122 +1,61 @@
 # EURISKO Parity: Phased Implementation
 
-**Date:** 2026-04-15
+**Date:** 2026-04-15 (updated 2026-04-15)
 **Invariant:** Each phase produces a working system. Nothing subtracts from existing capabilities.
 
 ---
 
-## Phase 0: CUE Data Layer
+## Phase 0: CUE Data Layer -- COMPLETE
 
-**Why first:** The EURISKO parity work adds ~200 units. Defining them in CUE from the start avoids creating a large body of hardcoded Go that would need to be migrated later. Establishes the infrastructure that all subsequent phases use to define their units.
+Domain definitions moved from hardcoded Go to CUE files in `domains/`. CUE loader at `internal/cueload/`. `-domains-dir` flag for development without recompilation. Old Go seed files deleted.
 
-### Issues
-
-**0.1: CUE schema for units**
-Define `#Unit` schema in `domains/schema.cue`. Covers: name, worth, isA, and an open slots structure that accepts any slot key. Heuristic programs (ifParts, thenParts) are string fields holding stack DSL code. Data fields (data, examples) are typed. The schema validates at load time but doesn't constrain slot names -- units are extensible.
-
-**0.2: CUE loader in Go**
-New package `internal/cueload/` that reads a directory of `.cue` files, validates against the `#Unit` schema, and returns a list of unit definitions. Uses `cuelang.org/go` to load and evaluate. Returns a Go struct that the seed loader can iterate to create units in the store.
-
-**0.3: Migrate math domain to CUE**
-Move all units from `internal/seed/math.go` into CUE files under `domains/math/`:
-- `domains/math/types.cue` -- type hierarchy (Structure, Set, List, Bag, Number, etc.)
-- `domains/math/sets.cue` -- concrete sets (SetOfPrimes, SetOfEvens, SetOfOdds, etc.)
-- `domains/math/operations.cue` -- operations (SetUnion, SetIntersect, SetDifference, GCD, DivisorsOf, Compose, Restrict)
-- `domains/math/predicates.cue` -- predicates (MemberOf, SubsetOf, SetEqual)
-- `domains/math/numbers.cue` -- number types and instances (EvenNum, OddNum, PrimeNum, etc.)
-- `domains/math/conjectures.cue` -- seed conjectures (GoldbachConjecture)
-
-**0.4: Migrate heuristics to CUE**
-Move all heuristics from `internal/seed/heuristics.go` into `domains/math/heuristics.cue`. Each heuristic is a `#Unit` with DSL program strings in its ifPart/thenPart slots. The Go helper `putHeuristic` is replaced by the CUE loader.
-
-**0.5: Migrate observation domain to CUE**
-Move `internal/seed/observations.go` types and heuristics into `domains/observations/`:
-- `domains/observations/types.cue` -- Observation, DerivedFact, Conjecture, ScopeHotspot
-- `domains/observations/heuristics.cue` -- H-FindScopeHotspots, H-CorroborateObstacles, etc.
-
-**0.6: Update seed/registry.go**
-Replace `LoadMath`/`LoadHeuristics`/`LoadObservationDomain`/`LoadObservationHeuristics` with a single `LoadDomain(name, store)` that calls the CUE loader on `domains/<name>/`. Keep the Go seed files around temporarily for comparison, remove once CUE loading is verified equivalent.
-
-**0.7: Regression test**
-Run the existing engine tests and the 300-cycle math domain run, verify identical behavior (same conjectures, same unit kills, same HAvoid rules). The CUE migration must be a pure refactor with no behavioral change.
+**Completed:** 0.1-0.7
 
 ---
 
-## Phase 1: Slot Ontology
+## Phase 1: Slot Ontology -- COMPLETE
 
-**Why second:** H3/H5/H6/H17/H18 can't be implemented without it. HindSight H12-H14 need to know which slot was changed. Now defined in CUE (from Phase 0), not Go.
+49 slot definition units in `domains/common/slots.cue`. Store-level inverse maintenance (`RegisterInverse`, `SetSlot`). 8 DSL builtins for slot reasoning. Inverse index computed after domain load.
 
-### Issues
+**Completed:** 1.1-1.5
 
-**1.1: Slot definition units**
-Create ~25 slot-definition units as first-class units in the store with isA: ["Slot"]. Each gets: DataType, SuperSlots, SubSlots, SibSlots, CriterialSlot/NonCriterialSlot classification, DontCopy flag, ElimSlots.
-
-Slots to define: Worth, IsA, Examples, NonExamples, Domain, Range, Defn, FastDefn, Alg, FastAlg, Arity, Generalizations, Specializations, Creditors, Applics, IntApplics, English, Abbrev, Interestingness, Rarity, Inverse, OverallRecord, Restrictions, Extensions, InDomainOf, IsRangeOf, Conjectures, ConjectureAbout, Generator, Format.
-
-**1.2: CriterialSlot vs NonCriterialSlot classification**
-Define CriterialSlot and NonCriterialSlot as units. Criterial slots are the ones that matter for identity/equivalence (Arity, Domain, Range, Examples, Defn). Non-criterial slots are metadata (Abbrev, English, Creditors, Worth). This classification drives H5Criterial and H19Criterial.
-
-**1.3: Inverse slot maintenance**
-When setting a slot with a known inverse (e.g., setting Range on an op), automatically maintain the inverse (IsRangeOf on the target type). Implementation: a lookup table of known inverse pairs, checked in `unit.Set()` or in a store-level hook.
-
-Pairs: Generalizations/Specializations, Domain/InDomainOf, Range/IsRangeOf, Extensions/Restrictions, Inverse/Inverse, MoreInteresting/LessInteresting, SuperSlots/SubSlots.
-
-**1.4: DSL builtins for slot reasoning**
-New builtins: `criterial-slots` (push list of criterial slot names for a unit), `non-criterial-slots`, `sib-slots` (push sibling slots), `super-slots`, `sub-slots`, `inverse-slot` (push the inverse slot name), `slot-type` (push the DataType of a slot), `all-slots` (push list of all populated slot names for a unit).
-
-**1.5: Slot definitions in CUE**
-New file `domains/slots/slots.cue` defining all slot units. Loaded by the CUE loader (Phase 0) before any domain. Both math and observation domains depend on the slot definitions being present.
+**Known bug (1.6):** Generalization inverse maintenance not producing output. `computeInverseIndex` processes the `specializations/generalizations` inverse pair, but H17 still can't find types with populated `generalizations` slots. The `generalizations` slot on units like `Set` should be populated from `Structure.specializations: ["Set", "List", "Bag"]` via inverse maintenance, but H17 reports no candidates. Needs debugging -- likely a case sensitivity or slot key mismatch issue.
 
 ---
 
-## Phase 2: Generalization/Specialization Pipeline
+## Phase 2: Generalization/Specialization Pipeline -- COMPLETE
 
-**Why second:** The biggest functional gap. EURISKO's power came from being able to systematically explore the space of concept variations. Requires slot ontology from Phase 1.
+Multi-step pipeline implemented. H-Specialize evolved to emit tasks. H6-Specialize creates units. H3/H5-Criterial select slots. H16/H17/H18 mirror for generalization. Task.Extra carries supplementary info. New builtins: `add-spec-task`, `add-gen-task`, `replace-slot-value`, `get-task-extra`, `set-task-extra`, `random-choice`, `random-subset`, `starts-with?`.
 
-### Issues
+**Completed:** 2.1-2.8
 
-**2.1: H3 -- "Randomly choose a slot to specialize"**
-IfWorkingOnTask: Specializations task without SlotToChange set. ThenCompute: randomly pick a slot from the unit's populated slots (or criterial slots). ThenAddToAgenda: add task with SlotToChange in supplementary info.
+**Stabilization fixes applied during integration testing:**
+- H6/H18 nil guard (task extras can be nil when heuristic fires during unit-focus)
+- H-RunOnExamples restricted to seed data only (prevents combinatorial explosion from result sets feeding back as inputs)
+- H-Specialize one-shot guard (`specTaskAdded` flag prevents repeated task emission)
+- H16 one-shot guard (`genTaskAdded` flag prevents agenda flooding)
+- H6 uses `restrictedTo` slot instead of modifying domain (so H-RunOnExamples can still find data via parent types)
 
-Low worth (101) because H5Criterial and H5Good are better.
-
-**2.2: H5/H5Criterial/H5Good -- "Choose specific slots to specialize"**
-Three variants of slot selection. H5: random subset. H5Criterial: only criterial slots. H5Good: worth-weighted selection (GoodSubset). Each adds multiple tasks, one per selected slot.
-
-New DSL builtins: `random-subset` (randomly select N items from a list), `good-subset` (select by worth weighting), `best-subset` (select highest worth).
-
-**2.3: H6 -- "Specialize a given slot of a given unit"**
-The workhorse specialization heuristic. Given a unit and a SlotToChange, applies SpecializeDataType to narrow the slot value. Creates new unit with specialized slot.
-
-Needs: `specialize-value` DSL builtin or Go-side helper that can narrow a type reference, add a constraint, or restrict a domain.
-
-**2.4: Enhance H-Specialize to match H6**
-Current H-Specialize only narrows domain type. Extend it to accept SlotToChange from supplementary task info and specialize any slot, not just domain.
-
-**2.5: H16 -- "If sometimes useful, try generalizing"**
-The generalization trigger (counterpart to H1). IfTrulyRelevant: checks good fraction > 0.1 in applics. ThenConjecture: creates ProtoConjec about generalizations. ThenAddToAgenda: adds task to find generalizations.
-
-**2.6: H17 -- "Choose slots to generalize"**
-Counterpart to H5. IfWorkingOnTask: Generalizations task without SlotToChange. ThenCompute: RandomSubset of slot names.
-
-**2.7: H18 -- "Generalize a given slot"**
-Counterpart to H6. Applies GeneralizeDataType to widen the slot value. Creates new unit with generalized slot.
-
-Needs: `generalize-value` DSL builtin or Go-side helper that can widen a type reference, remove a constraint, or broaden a domain.
-
-**2.8: Supplementary task info**
-EURISKO tasks carried supplementary information (SlotToChange, CurSup). The agenda Task struct needs a `Supplementary map[string]any` field (or similar) to pass slot-selection context between heuristics.
+**Self-modification loop (pre-Phase work) also complete:**
+- No-op firing detection
+- Deferred failure on unit death
+- Performance-based mutation trigger
+- Worth-growth reward
+- H-AnalyzeApplics meta-heuristic
+- HindSight validation with promotion/demotion
+- H2-KillGarbageCreator
+- H19-EliminateDuplicates
 
 ---
 
 ## Phase 3: Rich HindSight
 
-**Why third:** Requires slot ontology (Phase 1) and understanding of slot changes from the specialization/generalization pipeline (Phase 2).
+**Why next:** The current `createAvoidanceRule` generates a single crude HAvoid template that blocks by isA type. EURISKO had three distinct strategies that analyzed which slot was changed and what values were involved. Requires slot-change provenance from the specialization/generalization pipeline (Phase 2).
 
 ### Issues
 
 **3.1: Track slot changes in mutations/specializations**
-When H6/H18/mutation creates a new unit by changing a slot, record: which slot was changed (CSlot), what it was changed from (CFrom), what it was changed to (CTo). Store on the new unit as provenance metadata.
+When H6/H18/mutation creates a new unit by changing a slot, record: which slot was changed (CSlot), what it was changed from (CFrom), what it was changed to (CTo). Store on the new unit as provenance metadata. H6 already stores `restrictedTo` -- extend to also store `CSlot`, `CFrom`, `CTo`.
 
 **3.2: H12 -- "Prevent the slot type from being changed"**
 When unit dies, extract CSlot from its creation provenance. Create HAvoid rule that prevents changing objects of that slot's type (GSlot) via sibling slots (CSlotSibs).
@@ -142,22 +81,22 @@ The current `createAvoidanceRule` becomes three separate HindSight heuristic fir
 ### Issues
 
 **4.1: H1 -- "Specialize operations with >4/5 bad results"**
-Full implementation with ProtoConjec creation and targeted specialization proposals. Extends beyond H-PenalizeTrivial.
+Full implementation with ProtoConjec creation and targeted specialization proposals. Extends beyond H-PenalizeTrivial. Should use applics data to identify which operations have high failure rates and propose specific specializations based on the failure patterns.
 
-**4.2: H2 -- "Kill prolific-but-mediocre creators"**
-More nuanced than H-KillWorthless. Specifically targets heuristics that create many units with mediocre worth (the "spewing garbage" pattern).
+**~~4.2: H2 -- "Kill prolific-but-mediocre creators"~~** COMPLETE
+Implemented as H2-KillGarbageCreator during engine stabilization. Scans children of heuristics, punishes those with 5+ children and 80%+ mediocre worth.
 
 **4.3: H4 -- "Gather empirical data about new concepts"**
 Post-creation task scheduling. When new units are created, add tasks to find their instances, examples, and applics. Extends H-ExploreSlots.
 
 **4.4: H8 -- "Find applics in generalizations' applics"**
-Search up the isA tree for application records that might apply to the current unit.
+Search up the isA tree for application records that might apply to the current unit. Requires working generalization inverse (bug 1.6).
 
 **4.5: H10/H15 -- "Get examples from operations whose range is this type"**
-Uses IsRangeOf (from Phase 1 inverse maintenance) to find operations that produce this type, then extracts examples from their applics.
+Uses IsRangeOf (from Phase 1 inverse maintenance, verified working) to find operations that produce this type, then extracts examples from their applics.
 
-**4.6: H19/H19Criterial -- "Eliminate duplicate new units"**
-Post-creation sweep that compares new units' slots (or just criterial slots) against existing units and kills duplicates.
+**~~4.6: H19/H19Criterial -- "Eliminate duplicate new units"~~** H19 COMPLETE
+H19-EliminateDuplicates implemented during engine stabilization. Compares data slots via set-equal, penalizes duplicates. H19Criterial (checks only criterial slots) still needed.
 
 **4.7: H20 -- "Run f on args used for other ops"**
 Cross-pollination: when an operation shares domain types with other operations, run it on their arguments too.
@@ -265,17 +204,26 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 
 ## Summary
 
-| Phase | Focus | Issues | Dependencies |
+| Phase | Focus | Issues | Status |
 |---|---|---|---|
-| 0 | CUE data layer | 7 | None |
-| 1 | Slot ontology | 5 | Phase 0 |
-| 2 | Generalization/specialization | 8 | Phase 0, 1 |
-| 3 | Rich HindSight | 6 | Phase 0, 1, 2 |
-| 4 | Remaining heuristics | 10 | Phase 0, 1, 2, 3 |
-| 5 | Type hierarchy + operations | 12 | Phase 0, 1 |
-| 6 | Interestingness + rarity | 5 | Phase 4, 5 |
-| 7 | Definition representations | 5 | Phase 0, 1 |
+| 0 | CUE data layer | 7 | COMPLETE |
+| 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
+| 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
+| 3 | Rich HindSight | 6 | Not started |
+| 4 | Remaining heuristics | 10 (2 done) | H2, H19 done |
+| 5 | Type hierarchy + operations | 12 | Not started |
+| 6 | Interestingness + rarity | 5 | Not started |
+| 7 | Definition representations | 5 | Not started |
 
-Phases 4 and 5 can be parallelized. Phase 7 can start after Phase 1.
+**Dependencies:** Phases 4 and 5 can be parallelized. Phase 7 can start after Phase 1. Phase 6 requires Phases 4 and 5.
 
-Total: 58 issues across 8 phases.
+**Current system state (300-cycle math domain):**
+- 111 units loaded (20 heuristics), grows to ~222 units
+- 90 operations applied, 5 specializations, 1,620 conjectures
+- 32 kills, 32 HindSight events, 32 credit halvings
+- 496 duplicate detections, 10 mutations
+- Stable and bounded growth
+- H-RunOnExamples worth drops to 66 (correctly identified as prolific garbage creator)
+- 0 generalizations (blocked by bug 1.6)
+
+**Remaining issues: 36 across 5 phases + 1 bug.**
