@@ -76,6 +76,10 @@ units: [
 										"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
 										"created" @ 1 + "created" !
 										"Applied " "ArgU" @ concat ": " concat "src1" @ concat " x " concat "src2" @ concat print
+										# Schedule examination so H-CheckExtremes/H-Conjecture/
+										# H-BoostInteresting can inspect data without waiting for
+										# unit-focus (which worth-500 results rarely win).
+										300 "resultUnit" @ "data" "Examine new application result" add-task
 									then
 								then
 							then
@@ -102,6 +106,7 @@ units: [
 								"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
 								"created" @ 1 + "created" !
 								"Applied " "ArgU" @ concat ": " concat "src1" @ concat print
+								300 "resultUnit" @ "data" "Examine new application result" add-task
 							then
 						then
 					then

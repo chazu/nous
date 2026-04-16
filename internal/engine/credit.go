@@ -130,6 +130,13 @@ func (e *Engine) HandleDeletedUnit(unitName string) {
 
 	e.log(1, "  Unit %s killed (was worth %d, creditors: %v)", unitName, worth, creditors)
 
+	// Drop any pending tasks targeting this unit — they'd fire heuristics on
+	// a non-existent unit, whose get-slot returns nil for every slot and
+	// retriggers nil-matching guards in a tight loop.
+	if n := e.Agenda.PurgeUnit(unitName); n > 0 {
+		e.log(2, "  Purged %d orphan tasks for %s", n, unitName)
+	}
+
 	// Punish creditors
 	e.punishCreators(unitName, snapshot)
 

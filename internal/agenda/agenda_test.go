@@ -141,3 +141,32 @@ func TestTaskExtraNonMerge(t *testing.T) {
 		t.Errorf("expected 2 reasons after merge, got %d", len(task.Reasons))
 	}
 }
+
+// TestAgendaPurgeUnit verifies that removing a unit purges all of its
+// pending tasks. Without this, tasks targeting a killed unit keep firing
+// heuristics whose get-slot calls on the dead unit return nil for every
+// slot — and any nil-matching guard (e.g. explored=nil) triggers
+// indefinitely, re-queuing the same task each cycle.
+func TestAgendaPurgeUnit(t *testing.T) {
+	ag := New()
+	ag.Push(&Task{Priority: 100, UnitName: "Dead", SlotName: "examples"})
+	ag.Push(&Task{Priority: 200, UnitName: "Dead", SlotName: "data"})
+	ag.Push(&Task{Priority: 300, UnitName: "Alive", SlotName: "examples"})
+
+	if ag.Len() != 3 {
+		t.Fatalf("expected 3 tasks, got %d", ag.Len())
+	}
+
+	n := ag.PurgeUnit("Dead")
+	if n != 2 {
+		t.Errorf("PurgeUnit: expected 2 removed, got %d", n)
+	}
+	if ag.Len() != 1 {
+		t.Fatalf("expected 1 task after purge, got %d", ag.Len())
+	}
+
+	task := ag.Pop()
+	if task.UnitName != "Alive" {
+		t.Errorf("expected surviving task for Alive, got %s", task.UnitName)
+	}
+}

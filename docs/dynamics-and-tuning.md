@@ -74,6 +74,44 @@ bindings from the prior task don't leak.
 **Effect**: no `X-gen-X` noise on non-Op types. Specialization chain count
 dropped from 64 to 18 (removing spurious firings).
 
+### 4a. Discovered results never examined (H-RunOnExamples)
+
+The flagship EURISKO discovery `Primes \ Odds = {2}` is surfaced by
+running `SetIntersect` on `(SetOfPrimes, SetOfEvens)` and having
+`H-CheckExtremes` detect the singleton. But `H-RunOnExamples` only
+created the result unit at worth 500 and moved on — nothing scheduled
+any heuristic to inspect the data. Results sat unexamined because
+worth-500 derived units never won unit-focus against heuristics
+(600-800) and seed math units (600-700).
+
+**Fix**: `H-RunOnExamples` now emits a priority-300 examine task on each
+newly created result, so `H-CheckExtremes`, `H-Conjecture`,
+`H-BoostInteresting`, and `H-PenalizeTrivial` all fire via task
+dispatch. Priority 300 is low enough not to crowd out H-Specialize's
+spec tasks at 1000/600.
+
+**Effect**: `{2}` flagship now surfaces again (and from multiple
+operator paths). Conjectures per 300 cycles climbed to 1869 (all
+unique). Kills rose from 3 to 11 — derived units that reduce to existing
+sets now get penalized and culled.
+
+### 4b. Orphan tasks on killed units caused agenda loops
+
+When the examination path actually started penalizing and killing
+derived units, a latent bug surfaced: `Agenda` had no
+`PurgeUnit`. Tasks referencing a killed unit stayed in the queue.
+Popping such a task fires every heuristic with `ArgU = killed-unit-name`;
+`get-slot` on a missing unit returns nil for every slot. Any
+`slot=nil` guard (e.g. `H-ExploreSlots`'s `explored=nil`) matches,
+`H-ExploreSlots` re-queues its own trigger task, and the engine spins
+forever on a dead unit.
+
+Observed: one killed unit's `.examples` task fired H-ExploreSlots 966
+times across ~970 cycles, crowding out all other work.
+
+**Fix**: `Agenda.PurgeUnit(unitName)` drops every pending task for the
+named unit; `HandleDeletedUnit` calls it as part of the kill bookkeeping.
+
 ### 4. Immune-system heuristics locked out of unit-focus
 
 `highestWorthUnfocused` skipped every unit with `Heuristic` in its isA

@@ -95,6 +95,32 @@ func (a *Agenda) Pop() *Task {
 	return t
 }
 
+// PurgeUnit removes every pending task whose UnitName matches. Returns the
+// number of tasks dropped. Call this when a unit is killed — otherwise
+// orphan tasks keep firing heuristics on a non-existent unit, and any
+// "slot=nil" guard will match indefinitely because get-slot on a missing
+// unit returns nil for every slot.
+func (a *Agenda) PurgeUnit(unitName string) int {
+	removed := 0
+	kept := a.tasks[:0]
+	for _, t := range a.tasks {
+		if t.UnitName == unitName {
+			removed++
+			continue
+		}
+		kept = append(kept, t)
+	}
+	a.tasks = kept
+	for k := range a.lookup {
+		if a.lookup[k].UnitName == unitName {
+			delete(a.lookup, k)
+		}
+	}
+	heap.Init(&a.tasks)
+	// Reassign indices after heap.Init (heap.Init already sets them).
+	return removed
+}
+
 // Len returns the number of tasks.
 func (a *Agenda) Len() int {
 	return len(a.tasks)

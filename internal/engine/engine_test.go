@@ -932,6 +932,53 @@ func TestHAnalyzeApplics(t *testing.T) {
 	}
 }
 
+// TestOrphanTasksPurgedOnKill verifies that when a unit is killed, pending
+// tasks targeting it are removed from the agenda. Otherwise those tasks
+// keep firing heuristics on a non-existent unit — get-slot returns nil for
+// every slot, and any nil-matching guard (like H-ExploreSlots's
+// explored=nil) triggers repeatedly, re-queuing the same task.
+func TestOrphanTasksPurgedOnKill(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Out = &bytes.Buffer{}
+	eng.VM.Out = eng.Out
+
+	u := unit.New("Doomed")
+	u.SetWorth(50)
+	u.Set("creditors", []string{"SomeHeuristic"})
+	store.Put(u)
+
+	ag.Push(&agenda.Task{Priority: 400, UnitName: "Doomed", SlotName: "examples"})
+	ag.Push(&agenda.Task{Priority: 300, UnitName: "Doomed", SlotName: "data"})
+	ag.Push(&agenda.Task{Priority: 500, UnitName: "Alive", SlotName: "examples"})
+
+	eng.VM.DeletedUnits = []string{"Doomed"}
+	eng.VM.DeletedSnapshots = map[string]map[string]any{
+		"Doomed": {
+			"worth":     50,
+			"creditors": []string{"SomeHeuristic"},
+			"isA":       []string{"Set"},
+		},
+	}
+	store.Delete("Doomed")
+
+	before := ag.Len()
+	eng.HandleDeletedUnit("Doomed")
+	after := ag.Len()
+
+	if before != 3 {
+		t.Fatalf("expected 3 tasks before handling, got %d", before)
+	}
+	if after != 1 {
+		t.Errorf("expected 1 task after purge (only Alive), got %d", after)
+	}
+	remaining := ag.Pop()
+	if remaining.UnitName != "Alive" {
+		t.Errorf("expected Alive to survive, got %s", remaining.UnitName)
+	}
+}
+
 // TestTaskOnlyHeuristicsSkippedInUnitFocus verifies that heuristics with only
 // ifWorkingOnTask (no ifPotentiallyRelevant / ifTrulyRelevant) are not fired
 // during unit-focus. Previously fireUnitRule skipped the ifWorkingOnTask check
