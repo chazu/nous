@@ -3,6 +3,7 @@ package dsl
 import (
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 
 	"github.com/chazu/nous/internal/agenda"
@@ -16,19 +17,26 @@ type VM struct {
 	Store *unit.Store
 	Ag    *agenda.Agenda
 	Out   io.Writer
+	Rng   *rand.Rand // for random-choice, random-subset
 
 	// Set by the engine before firing rules
-	DeletedUnits    []string
+	CurrentTask      *agenda.Task
+	DeletedUnits     []string
 	DeletedSnapshots map[string]map[string]any // name -> slot snapshot at death
-	NewUnits        []string
+	NewUnits         []string
 }
 
 // NewVM creates a VM wired to the given store and agenda.
-func NewVM(store *unit.Store, ag *agenda.Agenda) *VM {
+// If rng is nil, a default deterministic RNG is used.
+func NewVM(store *unit.Store, ag *agenda.Agenda, rng *rand.Rand) *VM {
+	if rng == nil {
+		rng = rand.New(rand.NewSource(42))
+	}
 	return &VM{
 		env:   make(map[string]Value),
 		Store: store,
 		Ag:    ag,
+		Rng:   rng,
 		Out:   os.Stdout,
 	}
 }

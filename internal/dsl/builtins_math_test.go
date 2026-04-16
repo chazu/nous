@@ -79,7 +79,7 @@ func TestDivisors(t *testing.T) {
 func TestApplyOp(t *testing.T) {
 	s := unit.NewStore()
 	ag := agenda.New()
-	vm := NewVM(s, ag)
+	vm := NewVM(s, ag, nil)
 	vm.Out = &bytes.Buffer{}
 
 	// Create an operation unit with a defn
@@ -105,7 +105,7 @@ func TestApplyOp(t *testing.T) {
 func TestApplyOpWithStoreData(t *testing.T) {
 	s := unit.NewStore()
 	ag := agenda.New()
-	vm := NewVM(s, ag)
+	vm := NewVM(s, ag, nil)
 	vm.Out = &bytes.Buffer{}
 
 	// Simulate what H-RunOnExamples does

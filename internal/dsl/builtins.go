@@ -93,6 +93,14 @@ var builtins = map[string]builtinFn{
 	"inverse-slot":        bInverseSlot,
 	"slot-type":           bSlotType,
 
+	// Task extra
+	"get-task-extra": bGetTaskExtra,
+	"set-task-extra": bSetTaskExtra,
+
+	// Random
+	"random-choice": bRandomChoice,
+	"random-subset": bRandomSubset,
+
 	// Misc
 	"noop": func(vm *VM) error { return nil },
 }
@@ -772,6 +780,72 @@ func bSlotType(vm *VM) error {
 		return nil
 	}
 	vm.push(StringVal(dt))
+	return nil
+}
+
+// Task extra builtins
+
+func bGetTaskExtra(vm *VM) error {
+	key := vm.pop()
+	if vm.CurrentTask == nil || vm.CurrentTask.Extra == nil {
+		vm.push(Nil())
+		return nil
+	}
+	val, ok := vm.CurrentTask.Extra[key.AsString()]
+	if !ok {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(anyToValue(val))
+	return nil
+}
+
+func bSetTaskExtra(vm *VM) error {
+	key := vm.pop()
+	value := vm.pop()
+	if vm.CurrentTask == nil {
+		return nil
+	}
+	if vm.CurrentTask.Extra == nil {
+		vm.CurrentTask.Extra = make(map[string]any)
+	}
+	vm.CurrentTask.Extra[key.AsString()] = valueToAny(value)
+	return nil
+}
+
+// Random builtins
+
+func bRandomChoice(vm *VM) error {
+	list := vm.pop()
+	items := list.AsList()
+	if len(items) == 0 {
+		vm.push(Nil())
+		return nil
+	}
+	idx := vm.Rng.Intn(len(items))
+	vm.push(items[idx])
+	return nil
+}
+
+func bRandomSubset(vm *VM) error {
+	list := vm.pop()
+	items := list.AsList()
+	if len(items) == 0 {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	var result []Value
+	for _, item := range items {
+		if vm.Rng.Intn(2) == 0 {
+			result = append(result, item)
+		}
+	}
+	// Ensure at least one element if input was non-empty
+	if len(result) == 0 {
+		idx := vm.Rng.Intn(len(items))
+		result = append(result, items[idx])
+	}
+	vm.push(ListVal(result))
 	return nil
 }
 

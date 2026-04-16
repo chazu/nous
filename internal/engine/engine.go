@@ -49,8 +49,8 @@ type Engine struct {
 
 // New creates an engine wired to the given store and agenda.
 func New(store *unit.Store, ag *agenda.Agenda) *Engine {
-	vm := dsl.NewVM(store, ag)
 	rng := rand.New(rand.NewSource(42))
+	vm := dsl.NewVM(store, ag, rng)
 	return &Engine{
 		Store:     store,
 		Agenda:    ag,
@@ -130,6 +130,7 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) WorkOnTask(task *agenda.Task) {
 	e.TaskNum++
 
+	e.VM.CurrentTask = task
 	e.VM.SetEnv("CurUnit", dsl.StringVal(task.UnitName))
 	e.VM.SetEnv("CurSlot", dsl.StringVal(task.SlotName))
 	e.VM.SetEnv("CurPri", dsl.IntVal(task.Priority))
@@ -144,9 +145,11 @@ func (e *Engine) WorkOnTask(task *agenda.Task) {
 		}
 		if abort {
 			e.log(2, "  Task aborted by %s", h)
+			e.VM.CurrentTask = nil
 			return
 		}
 	}
+	e.VM.CurrentTask = nil
 }
 
 // WorkOnUnit tries every heuristic against the given unit.

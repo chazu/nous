@@ -238,7 +238,7 @@ func (m *Mutator) duplicateSeq(tokens []dsl.Token) ([]dsl.Token, *Op) {
 // trial-executing it on a minimal VM. Returns true if it runs without
 // crashing (the result doesn't matter — only structural validity).
 func Validate(program string, store *unit.Store) bool {
-	vm := dsl.NewVM(store, agenda.New())
+	vm := dsl.NewVM(store, agenda.New(), nil)
 	vm.Out = devNull{}
 
 	// Set dummy env vars that heuristic programs expect

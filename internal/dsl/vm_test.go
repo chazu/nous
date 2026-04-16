@@ -12,7 +12,7 @@ func testVM(t *testing.T) *VM {
 	t.Helper()
 	s := unit.NewStore()
 	ag := agenda.New()
-	vm := NewVM(s, ag)
+	vm := NewVM(s, ag, nil)
 	vm.Out = &bytes.Buffer{}
 	return vm
 }
@@ -281,7 +281,7 @@ func TestGetApplics(t *testing.T) {
 func TestAllSlots(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()
-	vm := NewVM(store, ag)
+	vm := NewVM(store, ag, nil)
 	vm.Out = &bytes.Buffer{}
 
 	u := unit.New("TestUnit")
@@ -303,7 +303,7 @@ func TestAllSlots(t *testing.T) {
 func TestCriterialSlots(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()
-	vm := NewVM(store, ag)
+	vm := NewVM(store, ag, nil)
 	vm.Out = &bytes.Buffer{}
 
 	// Create slot ontology units
@@ -356,7 +356,7 @@ func TestCriterialSlots(t *testing.T) {
 func TestSibSlots(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()
-	vm := NewVM(store, ag)
+	vm := NewVM(store, ag, nil)
 	vm.Out = &bytes.Buffer{}
 
 	domainSlot := unit.New("Domain")
@@ -377,7 +377,7 @@ func TestSibSlots(t *testing.T) {
 func TestInverseSlot(t *testing.T) {
 	store := unit.NewStore()
 	ag := agenda.New()
-	vm := NewVM(store, ag)
+	vm := NewVM(store, ag, nil)
 	vm.Out = &bytes.Buffer{}
 
 	domainSlot := unit.New("Domain")
@@ -425,5 +425,83 @@ func TestApplicsByType(t *testing.T) {
 	// anyToValue converts map[string]any to StringVal, so result should be non-empty
 	if v.AsString() == "" {
 		t.Error("expected non-empty string representation")
+	}
+}
+
+func TestGetTaskExtra(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag, nil)
+	vm.Out = &bytes.Buffer{}
+
+	vm.CurrentTask = &agenda.Task{
+		Extra: map[string]any{"SlotToChange": "domain"},
+	}
+
+	v, err := vm.Execute(`"SlotToChange" get-task-extra`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.AsString() != "domain" {
+		t.Errorf("expected 'domain', got %s", v.AsString())
+	}
+}
+
+func TestGetTaskExtraNil(t *testing.T) {
+	vm := testVM(t)
+
+	// No CurrentTask set
+	v, err := vm.Execute(`"SlotToChange" get-task-extra`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.IsNil() {
+		t.Errorf("expected nil, got %v", v)
+	}
+}
+
+func TestRandomChoice(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag, nil)
+	vm.Out = &bytes.Buffer{}
+
+	u := unit.New("TestUnit")
+	u.Set("items", []string{"a", "b", "c"})
+	store.Put(u)
+
+	v, err := vm.Execute(`"TestUnit" "items" get-slot random-choice`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := v.AsString()
+	if s != "a" && s != "b" && s != "c" {
+		t.Errorf("expected one of a/b/c, got %s", s)
+	}
+}
+
+func TestRandomSubset(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag, nil)
+	vm.Out = &bytes.Buffer{}
+
+	u := unit.New("TestUnit")
+	u.Set("items", []string{"a", "b", "c", "d"})
+	store.Put(u)
+
+	v, err := vm.Execute(`"TestUnit" "items" get-slot random-subset`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := v.AsList()
+	if len(list) == 0 {
+		t.Error("expected at least one element in random subset")
+	}
+	for _, item := range list {
+		s := item.AsString()
+		if s != "a" && s != "b" && s != "c" && s != "d" {
+			t.Errorf("unexpected item %s in subset", s)
+		}
 	}
 }

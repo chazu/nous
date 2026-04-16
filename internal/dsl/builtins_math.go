@@ -384,7 +384,7 @@ func bApplyOp(vm *VM) error {
 		return nil
 	}
 
-	sub := NewVM(vm.Store, vm.Ag)
+	sub := NewVM(vm.Store, vm.Ag, vm.Rng)
 	sub.Out = vm.Out
 	for k, v := range vm.env {
 		sub.env[k] = v
