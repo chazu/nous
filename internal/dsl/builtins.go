@@ -101,6 +101,11 @@ var builtins = map[string]builtinFn{
 	"random-choice": bRandomChoice,
 	"random-subset": bRandomSubset,
 
+	// Specialization pipeline
+	"add-spec-task":      bAddSpecTask,
+	"add-gen-task":       bAddGenTask,
+	"replace-slot-value": bReplaceSlotValue,
+
 	// Misc
 	"noop": func(vm *VM) error { return nil },
 }
@@ -846,6 +851,99 @@ func bRandomSubset(vm *VM) error {
 		result = append(result, items[idx])
 	}
 	vm.push(ListVal(result))
+	return nil
+}
+
+// Specialization pipeline builtins
+
+// add-spec-task: (priority unitName slotToChange specFrom specTo --)
+// Creates a task on "specializations" slot with Extra values set.
+func bAddSpecTask(vm *VM) error {
+	specTo := vm.pop()
+	specFrom := vm.pop()
+	slotToChange := vm.pop()
+	unitName := vm.pop()
+	priority := vm.pop()
+	vm.Ag.Push(&agenda.Task{
+		Priority: priority.AsInt(),
+		UnitName: unitName.AsString(),
+		SlotName: "specializations",
+		Reasons:  []string{"Specialize " + slotToChange.AsString()},
+		Extra: map[string]any{
+			"SlotToChange":   slotToChange.AsString(),
+			"SpecializeFrom": specFrom.AsString(),
+			"SpecializeTo":   specTo.AsString(),
+		},
+	})
+	return nil
+}
+
+// add-gen-task: (priority unitName slotToChange genFrom genTo --)
+// Creates a task on "generalizations" slot with Extra values set.
+func bAddGenTask(vm *VM) error {
+	genTo := vm.pop()
+	genFrom := vm.pop()
+	slotToChange := vm.pop()
+	unitName := vm.pop()
+	priority := vm.pop()
+	vm.Ag.Push(&agenda.Task{
+		Priority: priority.AsInt(),
+		UnitName: unitName.AsString(),
+		SlotName: "generalizations",
+		Reasons:  []string{"Generalize " + slotToChange.AsString()},
+		Extra: map[string]any{
+			"SlotToChange":   slotToChange.AsString(),
+			"GeneralizeFrom": genFrom.AsString(),
+			"GeneralizeTo":   genTo.AsString(),
+		},
+	})
+	return nil
+}
+
+// replace-slot-value: (unitName slotName from to -- bool)
+// Replaces first occurrence of 'from' with 'to' in the slot value.
+func bReplaceSlotValue(vm *VM) error {
+	to := vm.pop()
+	from := vm.pop()
+	slotName := vm.pop()
+	unitName := vm.pop()
+
+	u := vm.Store.Get(unitName.AsString())
+	if u == nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	slot := slotName.AsString()
+	val := u.Get(slot)
+
+	switch v := val.(type) {
+	case []string:
+		newVal := make([]string, len(v))
+		copy(newVal, v)
+		replaced := false
+		for i, s := range newVal {
+			if s == from.AsString() && !replaced {
+				newVal[i] = to.AsString()
+				replaced = true
+			}
+		}
+		if replaced {
+			vm.Store.SetSlot(unitName.AsString(), slot, newVal)
+			vm.push(BoolVal(true))
+		} else {
+			vm.push(BoolVal(false))
+		}
+	case string:
+		if v == from.AsString() {
+			vm.Store.SetSlot(unitName.AsString(), slot, to.AsString())
+			vm.push(BoolVal(true))
+		} else {
+			vm.push(BoolVal(false))
+		}
+	default:
+		vm.push(BoolVal(false))
+	}
 	return nil
 }
 
