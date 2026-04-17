@@ -211,12 +211,28 @@ units: [{
 	dataType: "LispPred"
 	english:  "Predicate for judging interestingness"
 }, {
+	name:     "IntExamples"
+	worth:    500
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Unit"
+	inverse:  "IsAInt"
+	superSlots: ["Examples"]
+	dontCopy: true
+	english:  "Interesting examples: subset of Examples that pass this unit's Interestingness predicate"
+}, {
+	name:     "IsAInt"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Unit"
+	inverse:  "IntExamples"
+	english:  "Inverse of IntExamples: categories this unit is an interesting example of"
+}, {
 	name:     "Rarity"
 	worth:    500
 	isA:      ["Slot", "NonCriterialSlot", "Anything"]
-	dataType: "Number"
+	dataType: "List"
 	dontCopy: true
-	english:  "How uncommon this concept is"
+	english:  "Rarity record [frequency-True, num-True, num-False]. On predicate units; updated on each evaluation. Population deferred to Phase 5.10 (predicates as first-class units)."
 }, {
 	name:     "OverallRecord"
 	worth:    300

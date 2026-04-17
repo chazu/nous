@@ -180,26 +180,26 @@ Once MultEleStruc exists, implement element multiplicity mutation for generating
 
 ---
 
-## Phase 6: Interestingness and Rarity
+## Phase 6: Interestingness and Rarity -- COMPLETE (scaffolding)
 
-**Why sixth:** Requires a critical mass of predicates and operations (Phase 5) to be useful. The interestingness calculus is an evaluation layer that sits on top of the concept space.
+Scaffolding only. The heuristics that actually populate these slots (H22/H23/H24) live in Phase 4. Phase 6 installs the slot ontology so Phase 4b can drop in without further infrastructure.
 
 ### Issues
 
-**6.1: Interestingness slot and predicate**
-Define Interestingness as a slot holding a computable predicate for each unit. Default: based on worth, rarity of type, structural novelty.
+**6.1: Interestingness slot and predicate** -- COMPLETE (slot defined; no default compute)
+Interestingness slot present in `domains/common/slots.cue` with dataType LispPred. Per-unit predicate; default compute deferred — in EURISKO, units without an Interestingness predicate simply don't trigger H23. That's acceptable behaviour for now.
 
-**6.2: IntExamples and IsAInt**
-IntExamples (interesting examples) as a sub-slot of Examples. IsAInt as its inverse. H23 populates IntExamples.
+**6.2: IntExamples and IsAInt** -- COMPLETE
+Both slots defined with proper inverse wiring (IntExamples ↔ IsAInt) and `IntExamples.superSlots = [Examples]` so IntExamples ⊆ Examples. Inverse maintenance verified by test (setting intExamples on a unit automatically writes isAInt on the target).
 
-**6.3: Rarity tracking**
-Rarity slot on predicates: (frequency-True, number-T, number-F). Updated each time a predicate is evaluated. Used by H24 to find rare predicates that all examples of a category satisfy.
+**6.3: Rarity tracking** -- COMPLETE (slot shape only; population deferred)
+Rarity slot defined with dataType `List` and format `[frequency-True, num-True, num-False]` matching EURISKO's tuple. Population hook deferred until Phase 5.10 (predicates as first-class units) — there's nothing to track until predicates are callable-by-name and we can wrap the call site.
 
-**6.4: WhyInt explanations**
-When a concept is judged interesting, record WHY in a WhyInt slot. Enables meta-reasoning about interestingness.
+**6.4: WhyInt explanations** -- COMPLETE
+WhyInt slot defined (Text dataType).
 
-**6.5: MoreInteresting/LessInteresting ordering**
-Relative interestingness between concepts. Maintained as an inverse pair.
+**6.5: MoreInteresting/LessInteresting ordering** -- COMPLETE
+Both slots defined with inverse pair wiring. Verified by test.
 
 ---
 
@@ -236,7 +236,7 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 (2 done) | H2, H19 done |
 | 5 | Type hierarchy + operations | 12 | Not started |
-| 6 | Interestingness + rarity | 5 | Not started |
+| 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | Not started |
 
 **Dependencies:** Phases 4 and 5 can be parallelized. Phase 7 can start after Phase 1. Phase 6 requires Phases 4 and 5.
