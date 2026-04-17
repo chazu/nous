@@ -221,8 +221,16 @@ FastDefn, FastAlg, CompiledDefn, UnitizedDefn, IterativeDefn, RecursiveDefn. All
 **7.2: Generator slot**
 Enable concepts to specify how to generate new instances systematically. NNumber's Generator `((0) (ADD1) (old))` means: start at 0, apply ADD1 to get the next, reuse previous results.
 
-**7.3: Applics enrichment**
-Record full input/output pairs in applics (not just target + success boolean). Per-ThenPart Record/FailedRecord tracking. IntApplics (interesting applications) and IndirectApplics.
+**7.3: Applics enrichment** -- COMPLETE
+Applic entries now carry `args []string`, `output string`, and `direct bool` alongside the pre-existing `taskNum/target/result`. Pre-7.3 entries keep working — extras are optional.
+
+- `record-applic (opName argList output --)` DSL builtin appends rich applic entries. H-RunOnExamples now calls it after each successful op application (binary and unary branches), so e.g. SetUnion gets entries like `{args:[SetOfNumbers SetOfPrimes], output:SetUnion-on-SetOfNumbers-SetOfPrimes, direct:true}`.
+- Accessors: `applics-outputs`, `applics-args`, `applics-direct` — give H8/H10/H15/H20 the I/O data they need without exposing raw map internals to DSL.
+- `list-of (v1..vn n -- list)` builtin for constructing argument tuples in DSL.
+- Per-ThenPart records: `executeThenParts` now calls `trackThenPartRecord` after each slot, writing `<slot>Record = {successes, failures}` on the heuristic. Enables finer-grained credit assignment than the single overallRecord.
+- IntApplics, DirectApplics, IndirectApplics slot units already existed in slots.cue; added IndirectApplics to Applics.subSlots.
+
+Deferred: actual IntApplics/IndirectApplics population — nothing writes them yet, awaits H22 variants or H23 extension. DirectApplics is implicit (default direct=true).
 
 **~~7.4: IfAboutToWorkOnTask slot~~** COMPLETE
 Pulled forward during Phase 3.2. Wired as the first gate in `fireTaskRule` and included in IfPartSlots/programSlots.

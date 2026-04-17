@@ -80,6 +80,9 @@ units: [
 										"result" @ "resultUnit" @ "data" set-slot
 										"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
 										"created" @ 1 + "created" !
+										# Phase 7.3: record full I/O applic on the op so H8/H10/H15/H20
+										# can read args and outputs later.
+										"ArgU" @ "src1" @ "src2" @ 2 list-of "resultUnit" @ record-applic
 										"Applied " "ArgU" @ concat ": " concat "src1" @ concat " x " concat "src2" @ concat print
 										# Schedule examination so H-CheckExtremes/H-Conjecture/
 										# H-BoostInteresting can inspect data without waiting for
@@ -111,6 +114,8 @@ units: [
 								"result" @ "resultUnit" @ "data" set-slot
 								"H-RunOnExamples" "resultUnit" @ "creditors" set-slot
 								"created" @ 1 + "created" !
+								# Phase 7.3: unary applic with single arg.
+								"ArgU" @ "src1" @ 1 list-of "resultUnit" @ record-applic
 								"Applied " "ArgU" @ concat ": " concat "src1" @ concat print
 								300 "resultUnit" @ "data" "Examine new application result" add-task
 							then

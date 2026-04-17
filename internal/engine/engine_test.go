@@ -1667,3 +1667,48 @@ func TestH22SchedulesIntExamplesTask(t *testing.T) {
 		t.Error("H22 should schedule an intExamples task on the target unit")
 	}
 }
+
+// Phase 7.3: per-ThenPart Record tracks success/failure counts on each
+// action slot separately, stored as <slot>Record on the heuristic.
+func TestPerThenPartRecord(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	// Heuristic with a clean thenCompute and a broken thenAddToAgenda.
+	h := unit.New("H-PerPart")
+	h.SetWorth(600)
+	h.Set("isA", []string{"Heuristic", "Anything"})
+	h.Set("ifWorkingOnTask", `true`)
+	h.Set("thenCompute", `1 drop`) // runs cleanly
+	h.Set("thenAddToAgenda", `undefined-builtin`) // errors
+	store.Put(h)
+
+	target := unit.New("Target")
+	target.Set("isA", []string{"Anything"})
+	store.Put(target)
+
+	task := &agenda.Task{Priority: 500, UnitName: "Target", SlotName: "examples"}
+	eng.WorkOnTask(task)
+	eng.WorkOnTask(task)
+
+	tc := h.GetMap("thenComputeRecord")
+	if tc == nil {
+		t.Fatal("thenComputeRecord should be populated")
+	}
+	if toInt(tc["successes"]) != 2 || toInt(tc["failures"]) != 0 {
+		t.Errorf("thenComputeRecord: got %v, want 2s/0f", tc)
+	}
+
+	ta := h.GetMap("thenAddToAgendaRecord")
+	if ta == nil {
+		t.Fatal("thenAddToAgendaRecord should be populated")
+	}
+	if toInt(ta["successes"]) != 0 || toInt(ta["failures"]) != 2 {
+		t.Errorf("thenAddToAgendaRecord: got %v, want 0s/2f", ta)
+	}
+}

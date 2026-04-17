@@ -551,3 +551,56 @@ func TestRandomInt(t *testing.T) {
 		t.Errorf("0 random-int: got %d, want 0", v.AsInt())
 	}
 }
+
+func TestListOf(t *testing.T) {
+	vm := testVM(t)
+	v, err := vm.Execute(`"a" "b" "c" 3 list-of`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := v.AsList()
+	if len(list) != 3 || list[0].AsString() != "a" || list[1].AsString() != "b" || list[2].AsString() != "c" {
+		t.Errorf("list-of result: got %v, want [a b c]", list)
+	}
+}
+
+func TestRecordApplicAndAccessors(t *testing.T) {
+	vm := testVM(t)
+	op := unit.New("MyOp")
+	op.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	vm.Store.Put(op)
+
+	// Record two applics with different args/outputs.
+	_, err := vm.Execute(`"MyOp" "A" "B" 2 list-of "Out1" record-applic`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = vm.Execute(`"MyOp" "C" "D" 2 list-of "Out2" record-applic`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// applics-outputs should yield [Out1 Out2]
+	v, _ := vm.Execute(`"MyOp" applics-outputs`)
+	outs := v.AsList()
+	if len(outs) != 2 || outs[0].AsString() != "Out1" || outs[1].AsString() != "Out2" {
+		t.Errorf("applics-outputs: got %v, want [Out1 Out2]", outs)
+	}
+
+	// applics-args should yield [[A B] [C D]]
+	v, _ = vm.Execute(`"MyOp" applics-args`)
+	args := v.AsList()
+	if len(args) != 2 {
+		t.Fatalf("applics-args: got %d tuples, want 2", len(args))
+	}
+	first := args[0].AsList()
+	if len(first) != 2 || first[0].AsString() != "A" || first[1].AsString() != "B" {
+		t.Errorf("applics-args[0]: got %v, want [A B]", first)
+	}
+
+	// applics-direct should count 2
+	v, _ = vm.Execute(`"MyOp" applics-direct`)
+	if v.AsInt() != 2 {
+		t.Errorf("applics-direct: got %d, want 2", v.AsInt())
+	}
+}

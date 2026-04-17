@@ -111,6 +111,11 @@ var builtins = map[string]builtinFn{
 	"record-slot-change":  bRecordSlotChange,
 	"new-units":           bNewUnits,
 	"add-to-slot":         bAddToSlot,
+	"record-applic":       bRecordApplic,
+	"list-of":             bListOf,
+	"applics-outputs":     bApplicsOutputs,
+	"applics-args":        bApplicsArgs,
+	"applics-direct":      bApplicsDirect,
 	// "is-interesting?" is registered in init() to avoid an init cycle
 	// (it calls vm.Execute, which looks up builtins).
 
@@ -1071,6 +1076,135 @@ func bAddToSlot(vm *VM) error {
 		}
 	}
 	vm.Store.SetSlot(name, slotKey, append(existing, v))
+	return nil
+}
+
+// list-of: (x1 ... xn n -- list)
+// Pops n from the top of the stack, then pops n values beneath and pushes
+// them as a list in original order. `a b 2 list-of` → `[a b]`.
+func bListOf(vm *VM) error {
+	n := vm.pop().AsInt()
+	if n < 0 {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	if n == 0 {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	vals := make([]Value, n)
+	for i := n - 1; i >= 0; i-- {
+		vals[i] = vm.pop()
+	}
+	vm.push(ListVal(vals))
+	return nil
+}
+
+// record-applic: (opName argList output --)
+// Appends a rich applic entry on opName, recording the inputs (argList, a
+// DSL list of strings) and the output unit name. Marks direct=true. Used
+// by H-RunOnExamples (and any other heuristic that applies an op to data)
+// so H8/H10/H15/H20 can later read actual I/O pairs.
+//
+// Caps the applics list at 50 most-recent entries, same policy as
+// trackApplics for heuristic firings.
+func bRecordApplic(vm *VM) error {
+	output := vm.pop()
+	argList := vm.pop()
+	opName := vm.pop().AsString()
+	u := vm.Store.Get(opName)
+	if u == nil {
+		return nil
+	}
+	args := make([]string, 0, len(argList.AsList()))
+	for _, v := range argList.AsList() {
+		args = append(args, v.AsString())
+	}
+	applic := map[string]any{
+		"target": opName,
+		"result": true,
+		"args":   args,
+		"output": output.AsString(),
+		"direct": true,
+	}
+	applics, _ := u.Get("applics").([]map[string]any)
+	applics = append(applics, applic)
+	if len(applics) > 50 {
+		applics = applics[len(applics)-50:]
+	}
+	u.Set("applics", applics)
+	return nil
+}
+
+// applics-outputs: (opName -- list)
+// Returns the list of output unit names recorded across this op's applics.
+// Empty-string outputs (from heuristic firings, not op applications) are
+// skipped. Duplicates preserved in order.
+func bApplicsOutputs(vm *VM) error {
+	name := vm.pop().AsString()
+	u := vm.Store.Get(name)
+	if u == nil {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	applics, _ := u.Get("applics").([]map[string]any)
+	var out []Value
+	for _, a := range applics {
+		if s, ok := a["output"].(string); ok && s != "" {
+			out = append(out, StringVal(s))
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+// applics-args: (opName -- list-of-lists)
+// Returns the list of arg-tuples recorded across this op's applics.
+// Each arg-tuple is a DSL list of unit-name strings. Applics without args
+// are skipped.
+func bApplicsArgs(vm *VM) error {
+	name := vm.pop().AsString()
+	u := vm.Store.Get(name)
+	if u == nil {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	applics, _ := u.Get("applics").([]map[string]any)
+	var out []Value
+	for _, a := range applics {
+		args, ok := a["args"].([]string)
+		if !ok || len(args) == 0 {
+			continue
+		}
+		vals := make([]Value, len(args))
+		for i, s := range args {
+			vals[i] = StringVal(s)
+		}
+		out = append(out, ListVal(vals))
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+// applics-direct: (opName -- int)
+// Returns the count of direct applics on opName. Entries with no direct
+// field are treated as direct (pre-7.3 default).
+func bApplicsDirect(vm *VM) error {
+	name := vm.pop().AsString()
+	u := vm.Store.Get(name)
+	if u == nil {
+		vm.push(IntVal(0))
+		return nil
+	}
+	applics, _ := u.Get("applics").([]map[string]any)
+	n := 0
+	for _, a := range applics {
+		d, ok := a["direct"].(bool)
+		if !ok || d {
+			n++
+		}
+	}
+	vm.push(IntVal(n))
 	return nil
 }
 

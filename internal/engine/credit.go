@@ -76,6 +76,18 @@ func (e *Engine) rewardForWorthGrowth() {
 }
 
 // trackApplics records that a heuristic fired on a unit.
+//
+// Since Phase 7.3, applic entries carry richer fields:
+//   - taskNum: the task that triggered this firing
+//   - target:  the unit being worked on
+//   - result:  success/failure
+//   - args:    input units for op applications (nil for heuristic firings)
+//   - output:  the result unit name for op applications (empty otherwise)
+//   - direct:  true if this was a direct application (vs. inherited from
+//              generalization). Defaults to true.
+//
+// Older code that writes only {taskNum, target, result} keeps working —
+// the extra fields are optional.
 func (e *Engine) trackApplics(heuristicName, targetUnit string, succeeded bool) {
 	h := e.Store.Get(heuristicName)
 	if h == nil {
@@ -97,6 +109,7 @@ func (e *Engine) trackApplics(heuristicName, targetUnit string, succeeded bool) 
 		"taskNum": e.TaskNum,
 		"target":  targetUnit,
 		"result":  succeeded,
+		"direct":  true,
 	}
 	applics, _ := h.Get("applics").([]map[string]any)
 	applics = append(applics, applic)
@@ -104,6 +117,31 @@ func (e *Engine) trackApplics(heuristicName, targetUnit string, succeeded bool) 
 		applics = applics[len(applics)-50:]
 	}
 	h.Set("applics", applics)
+}
+
+// trackThenPartRecord updates per-ThenPart success/failure counters on a
+// heuristic. EURISKO tracked each ThenCompute/ThenAddToAgenda/etc with its
+// own (successes . failures) dotted pair so heuristics could be compared
+// on individual action slots, not just overall.
+//
+// Stored as map[string]any{"successes": n, "failures": n} under
+// <slotName>Record on the heuristic unit (e.g. thenComputeRecord).
+func (e *Engine) trackThenPartRecord(heuristicName, slotName string, succeeded bool) {
+	h := e.Store.Get(heuristicName)
+	if h == nil {
+		return
+	}
+	key := slotName + "Record"
+	record := h.GetMap(key)
+	if record == nil {
+		record = map[string]any{"successes": 0, "failures": 0}
+	}
+	if succeeded {
+		record["successes"] = toInt(record["successes"]) + 1
+	} else {
+		record["failures"] = toInt(record["failures"]) + 1
+	}
+	h.Set(key, record)
 }
 
 // HandleDeletedUnit processes credit assignment and HindSight when a unit is killed.

@@ -177,10 +177,15 @@ func (e *Engine) executeThenParts(h *unit.Unit, heuristicName string) (bool, boo
 		_, err := e.VM.Execute(prog)
 		if err != nil {
 			if dsl.IsAbort(err) {
+				// Abort counts neither as success nor failure — it's
+				// a deliberate veto signal, not an execution error.
 				return true, false
 			}
 			e.log(3, "    %s.%s error: %v", heuristicName, slot, err)
+			e.trackThenPartRecord(heuristicName, slot, false)
+			continue
 		}
+		e.trackThenPartRecord(heuristicName, slot, true)
 	}
 
 	produced := e.Store.Count() > storeBefore || e.Agenda.Len() > agendaBefore

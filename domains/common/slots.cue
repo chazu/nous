@@ -163,7 +163,7 @@ units: [{
 	worth:    500
 	isA:      ["Slot", "NonCriterialSlot", "Anything"]
 	dataType: "IOPair"
-	subSlots: ["IntApplics", "DirectApplics"]
+	subSlots: ["IntApplics", "DirectApplics", "IndirectApplics"]
 	dontCopy: true
 	english:  "Recorded input-output applications"
 }, {
