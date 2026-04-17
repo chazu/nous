@@ -113,17 +113,20 @@ Implemented as H2-KillGarbageCreator during engine stabilization. Scans children
 **4.3: H4 -- "Gather empirical data about new concepts"** -- COMPLETE
 Implemented as a CUE heuristic in `domains/common/heuristics.cue`. Uses `ifFinishedWorkingOnTask` + the `new-units` builtin (both landed in Phase 3.3) to schedule an `examples` task for each newly-created unit that doesn't yet have examples populated. Fires reliably — a 100-cycle math run leaves ~13 pending "After synthesis, seek instances" tasks on the agenda.
 
-**4.4: H8 -- "Find applics in generalizations' applics"**
-Search up the isA tree for application records that might apply to the current unit. Requires working generalization inverse (bug 1.6).
+**4.4: H8 -- "Find applics in generalizations' applics"** -- BLOCKED on type predicates
+Needs `DomainTests` — running each domain type's `defn` as a predicate against a candidate arg to check type applicability. We don't have type defn predicates on our type units (Set, Number, etc.). Deferred until Phase 5.6 (meta-ops with executable defns) or hand-seeded domain-type predicates.
+Workable shape when unblocked: walk `generalizations` chain, read `applics-args`, filter by domain-type predicates, apply this unit's alg, record.
 
-**4.5: H10/H15 -- "Get examples from operations whose range is this type"**
-Uses IsRangeOf (from Phase 1 inverse maintenance, verified working) to find operations that produce this type, then extracts examples from their applics.
+**4.5: H10/H15 -- "Get examples from operations whose range is this type"** -- COMPLETE
+Both in `domains/common/heuristics.cue`. H10 picks one random op from `isRangeOf` via `random-choice`; H15 iterates them all. Both use the Phase 7.3 `applics-outputs` builtin and `add-to-slot` (inverse-maintained) to append each recorded output as an Example. Dormant unless the target unit is in some op's range — works for Set/Number in the math domain once applics accumulate.
 
 **~~4.6: H19/H19Criterial -- "Eliminate duplicate new units"~~** COMPLETE
 H19-EliminateDuplicates implemented during engine stabilization. H19Criterial added as a CUE heuristic in Phase 4a — `ifFinishedWorkingOnTask` iterates new-units, compares all criterial slots against peers in its isA category, kills structurally-identical duplicates. Skips H-Specialize/H18-Generalize-created units (our H6 stores the restriction in `restrictedTo` rather than modifying criterial slots, so specs would false-positive against their parents).
 
-**4.7: H20 -- "Run f on args used for other ops"**
-Cross-pollination: when an operation shares domain types with other operations, run it on their arguments too.
+**4.7: H20 -- "Run f on args used for other ops"** -- COMPLETE
+Unit-focus heuristic: for each sibling op (same first-isA category) with recorded applics, take its arg tuples and apply CurUnit's alg to them, recording the new applic and creating a result unit. Uses new `apply-op-args (argList opName -- result)` builtin that resolves arg unit names to their `data` slot before running the defn. Caps at 3 cross-applications per firing to avoid flooding. 300-cycle math run produced ~115 cross-applications (e.g. SetDifference run on GCD's numeric args).
+
+New DSL builtins: `apply-op-args`, `list-join`.
 
 **4.8: H21 extension -- structured conjecture creation**
 Enhance H-Conjecture to create ProtoConjec units with provenance metadata, not just print output.
@@ -248,7 +251,7 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 | 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
-| 4 | Remaining heuristics | 10 (6 done) | H2, H4, H19, H19Criterial, H22, H23 done |
+| 4 | Remaining heuristics | 10 (9 done, H8 blocked) | H1, H24 pending; H8 needs type predicates |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | Not started |

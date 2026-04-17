@@ -336,6 +336,105 @@ units: [
 			"""#
 	},
 	{
+		name:    "H20"
+		worth:   600
+		isA: ["Heuristic", "Anything"]
+		english: "Run this op on arg tuples recorded on sibling ops' applics — cross-pollination"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"ArgU" @ "isA" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			0 "created" !
+			"ArgU" @ "isA" get-slot first "cat" !
+			"cat" @ examples
+			each
+				it "sib" !
+				"sib" @ "ArgU" @ !=
+				"sib" @ "Op" isa?
+				and
+				"created" @ 3 <
+				and
+				if
+					"sib" @ applics-args
+					each
+						it "argTup" !
+						"created" @ 3 <
+						if
+							"argTup" @ "-" list-join "argsuffix" !
+							"ArgU" @ "-on-" concat "argsuffix" @ concat "rname" !
+							"rname" @ unit-exists? not
+							if
+								"argTup" @ "ArgU" @ apply-op-args "res" !
+								"res" @ nil !=
+								if
+									"rname" @ "ArgU" @ "range" get-slot first create-unit "rUnit" !
+									"res" @ "rUnit" @ "data" set-slot
+									"H20" "rUnit" @ "creditors" set-slot
+									"ArgU" @ "argTup" @ "rUnit" @ record-applic
+									"created" @ 1 + "created" !
+									"H20 cross-applied " "ArgU" @ concat " on " concat "sib" @ concat "'s args -> " concat "rUnit" @ concat print
+								then
+							then
+						then
+					end
+				then
+			end
+			"""#
+	},
+	{
+		name:    "H10"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "Find examples of a type by extracting outputs from one op that ranges into it"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "examples" =
+			"CurUnit" @ "isRangeOf" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "isRangeOf" get-slot random-choice "op" !
+			"op" @ nil !=
+			if
+				"op" @ applics-outputs
+				each
+					it "out" !
+					"out" @ unit-exists?
+					if "out" @ "CurUnit" @ "examples" add-to-slot then
+				end
+			then
+			"""#
+	},
+	{
+		name:    "H15"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "Find examples of a type by extracting outputs from every op that ranges into it"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "examples" =
+			"CurUnit" @ "isRangeOf" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "isRangeOf" get-slot
+			each
+				it "op" !
+				"op" @ applics-outputs
+				each
+					it "out" !
+					"out" @ unit-exists?
+					if "out" @ "CurUnit" @ "examples" add-to-slot then
+				end
+			end
+			"""#
+	},
+	{
 		name:    "H22"
 		worth:   500
 		isA: ["Heuristic", "Anything"]

@@ -113,6 +113,7 @@ var builtins = map[string]builtinFn{
 	"add-to-slot":         bAddToSlot,
 	"record-applic":       bRecordApplic,
 	"list-of":             bListOf,
+	"list-join":           bListJoin,
 	"applics-outputs":     bApplicsOutputs,
 	"applics-args":        bApplicsArgs,
 	"applics-direct":      bApplicsDirect,
@@ -1076,6 +1077,19 @@ func bAddToSlot(vm *VM) error {
 		}
 	}
 	vm.Store.SetSlot(name, slotKey, append(existing, v))
+	return nil
+}
+
+// list-join: (list sep -- string)
+// Concatenates list elements with sep between each. `["a" "b" "c"] "-" list-join` → "a-b-c".
+func bListJoin(vm *VM) error {
+	sep := vm.pop().AsString()
+	list := vm.pop().AsList()
+	parts := make([]string, len(list))
+	for i, v := range list {
+		parts[i] = v.AsString()
+	}
+	vm.push(StringVal(strings.Join(parts, sep)))
 	return nil
 }
 

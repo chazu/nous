@@ -71,6 +71,7 @@ func init() {
 
 	// Functional
 	builtins["apply-op"] = bApplyOp // ( arg1 arg2 opUnitName -- result ) run defn slot
+	builtins["apply-op-args"] = bApplyOpArgs // ( argList opName -- result )
 	builtins["apply-pred"] = bApplyPred
 }
 
@@ -411,6 +412,54 @@ func bApplyOp(vm *VM) error {
 // apply-pred: ( args... predUnitName -- bool )
 func bApplyPred(vm *VM) error {
 	return bApplyOp(vm)
+}
+
+// apply-op-args: ( argList opName -- result )
+// Applies opName's defn to args looked up from the unit names in argList.
+// Each arg name is resolved to its `data` slot value; those values are
+// pushed onto a sub-VM and opName's defn is executed. Used by H20 to
+// cross-apply an op to arg tuples recorded on sibling ops' applics.
+//
+// Returns Nil on: missing unit, empty defn, missing data for any arg,
+// or errors during defn execution.
+func bApplyOpArgs(vm *VM) error {
+	opName := vm.pop().AsString()
+	argList := vm.pop()
+	u := vm.Store.Get(opName)
+	if u == nil {
+		vm.push(Nil())
+		return nil
+	}
+	defn := u.GetString("defn")
+	if defn == "" {
+		vm.push(Nil())
+		return nil
+	}
+	sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+	sub.Out = vm.Out
+	for k, v := range vm.env {
+		sub.env[k] = v
+	}
+	for _, argName := range argList.AsList() {
+		argUnit := vm.Store.Get(argName.AsString())
+		if argUnit == nil {
+			vm.push(Nil())
+			return nil
+		}
+		data := argUnit.Get("data")
+		if data == nil {
+			vm.push(Nil())
+			return nil
+		}
+		sub.stack = append(sub.stack, anyToValue(data))
+	}
+	result, err := subExecute(sub, defn)
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(result)
+	return nil
 }
 
 // subExecute runs a program on a fresh VM and returns the top of stack.
