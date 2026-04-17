@@ -148,11 +148,12 @@ func (e *Engine) HandleDeletedUnit(unitName string) {
 	}
 
 	// HindSight: create an avoidance heuristic. If the dying unit carries
-	// slot-change provenance (cSlot/cFrom/cTo/gSlot from H6/H18), prefer the
-	// EURISKO-style H12 rule that blocks future tasks by slot identity.
-	// Otherwise fall back to the crude type-based avoidance rule.
+	// slot-change provenance (cSlot/cFrom/cTo/gSlot from H6/H18), emit the
+	// EURISKO-style H12 and H13 rules that block and post-hoc-kill bad
+	// slot changes. Otherwise fall back to the crude type-based rule.
 	if hasSlotChangeProvenance(snapshot) {
 		e.createH12Rule(grave)
+		e.createH13Rule(grave)
 	} else {
 		e.createAvoidanceRule(grave)
 	}
@@ -232,6 +233,79 @@ func (e *Engine) createH12Rule(grave GraveRecord) {
 	e.Store.Put(avoid)
 	e.log(1, "  HindSight: created %s (blocks %s tasks that alter %s slot, from %s)",
 		avoidName, gSlot, cSlot, grave.Name)
+}
+
+// createH13Rule generates an HAvoid2-N heuristic (EURISKO's H13 behaviour)
+// that kills newly-created units whose cFrom matches the dying unit's cFrom.
+// Uses ifFinishedWorkingOnTask — post-hoc, runs after ThenParts complete
+// and reaches into new-units to delete the bad ones.
+func (e *Engine) createH13Rule(grave GraveRecord) {
+	cSlot, _ := grave.Slots["cSlot"].(string)
+	gSlot, _ := grave.Slots["gSlot"].(string)
+	cFrom, _ := grave.Slots["cFrom"].(string)
+	if cSlot == "" || gSlot == "" || cFrom == "" {
+		return
+	}
+
+	sibs := siblingSlots(e.Store, cSlot)
+	if len(sibs) > 50 {
+		sibs = nil
+	}
+	blockSet := append([]string{cSlot}, sibs...)
+
+	avoidName := nextHAvoidName(e.Store, "HAvoid2")
+	if avoidName == "" {
+		return
+	}
+
+	// Guard: CurSlot == gSlot AND SlotToChange ∈ blockSet.
+	// If match, iterate new-units; any whose cFrom equals the doomed cFrom
+	// gets killed.
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `"CurSlot" @ "%s" =`+"\n", gSlot)
+	sb.WriteString(`"SlotToChange" get-task-extra "stc" !` + "\n")
+	sb.WriteString(`false "match" !` + "\n")
+	for _, s := range blockSet {
+		fmt.Fprintf(&sb, `"stc" @ "%s" = if true "match" ! then`+"\n", s)
+	}
+	sb.WriteString(`"match" @ and` + "\n")
+	sb.WriteString(`if` + "\n")
+	sb.WriteString(`  new-units` + "\n")
+	sb.WriteString(`  each` + "\n")
+	sb.WriteString(`    it "nu" !` + "\n")
+	fmt.Fprintf(&sb, `    "nu" @ "cFrom" get-slot "%s" =`+"\n", cFrom)
+	sb.WriteString(`    if "nu" @ kill-unit then` + "\n")
+	sb.WriteString(`  end` + "\n")
+	sb.WriteString(`then` + "\n")
+	sb.WriteString(`false` + "\n")
+	ifProg := sb.String()
+
+	tokens := dsl.Tokenize(ifProg)
+	if len(tokens) == 0 {
+		e.log(1, "  HindSight: H13 produced untokenizable program for %s", grave.Name)
+		return
+	}
+
+	avoid := unit.New(avoidName)
+	avoid.SetWorth(700)
+	avoid.Set("isA", []string{"Heuristic", "HAvoidRule", "HindSightRule", "Anything"})
+	avoid.Set("english", fmt.Sprintf(
+		"Avoid: when computing %s, kill units that changed %s (or siblings) away from %s — learned from %s dying",
+		gSlot, cSlot, cFrom, grave.Name))
+	avoid.Set("creditors", []string{"H13"})
+	avoid.Set("ifFinishedWorkingOnTask", ifProg)
+	avoid.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	avoid.Set("creationCycle", e.cycle)
+	avoid.Set("avoidance_of", grave.Name)
+	avoid.Set("avoidance_variant", "H13")
+	avoid.Set("gSlot", gSlot)
+	avoid.Set("cSlot", cSlot)
+	avoid.Set("cSlotSibs", blockSet)
+	avoid.Set("cFrom", cFrom)
+
+	e.Store.Put(avoid)
+	e.log(1, "  HindSight: created %s (kills post-hoc when %s tasks alter %s away from %s, from %s)",
+		avoidName, gSlot, cSlot, cFrom, grave.Name)
 }
 
 // siblingSlots returns the sibSlots list of the slot unit corresponding to

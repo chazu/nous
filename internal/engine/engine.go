@@ -138,6 +138,7 @@ func (e *Engine) WorkOnTask(task *agenda.Task) {
 	e.TaskNum++
 
 	e.VM.CurrentTask = task
+	e.VM.NewUnits = nil // reset per-task so ifFinishedWorkingOnTask sees only this task's creations
 	e.VM.SetEnv("CurUnit", dsl.StringVal(task.UnitName))
 	e.VM.SetEnv("CurSlot", dsl.StringVal(task.SlotName))
 	e.VM.SetEnv("CurPri", dsl.IntVal(task.Priority))
@@ -155,6 +156,14 @@ func (e *Engine) WorkOnTask(task *agenda.Task) {
 			e.VM.CurrentTask = nil
 			return
 		}
+	}
+
+	// Post-task phase: run every heuristic's ifFinishedWorkingOnTask.
+	// Used by HAvoid2/HAvoid3 (H13/H14) to kill newly-created units that
+	// made a bad slot change. Runs after all ThenParts have completed so
+	// that NewUnits contains this task's full output.
+	for _, h := range heuristics {
+		e.fireFinishedRule(h, task)
 	}
 	e.VM.CurrentTask = nil
 }

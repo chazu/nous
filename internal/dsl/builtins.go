@@ -108,6 +108,7 @@ var builtins = map[string]builtinFn{
 	"add-gen-task":        bAddGenTask,
 	"replace-slot-value":  bReplaceSlotValue,
 	"record-slot-change":  bRecordSlotChange,
+	"new-units":           bNewUnits,
 
 	// Misc
 	"noop": func(vm *VM) error { return nil },
@@ -991,6 +992,20 @@ func bRecordSlotChange(vm *VM) error {
 	if gSlot := vm.GetEnv("CurSlot"); gSlot.AsString() != "" {
 		vm.Store.SetSlot(name, "gSlot", gSlot.AsString())
 	}
+	return nil
+}
+
+// new-units: ( -- list)
+// Pushes the list of units created during the current task. Populated by
+// create-unit calls from any ThenPart firing; cleared at task start by the
+// engine. Intended for HAvoid2/HAvoid3 (H13/H14) ifFinishedWorkingOnTask
+// guards that need to inspect or kill units this task just produced.
+func bNewUnits(vm *VM) error {
+	vals := make([]Value, len(vm.NewUnits))
+	for i, n := range vm.NewUnits {
+		vals[i] = StringVal(n)
+	}
+	vm.push(ListVal(vals))
 	return nil
 }
 

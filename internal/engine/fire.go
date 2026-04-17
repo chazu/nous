@@ -84,6 +84,25 @@ func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool, 
 	return true, abort, produced
 }
 
+// fireFinishedRule runs a heuristic's ifFinishedWorkingOnTask slot if present.
+// Executed after all ThenParts of the current task have completed.
+// Used by HAvoid2/HAvoid3 (H13/H14) to kill bad newly-created units.
+func (e *Engine) fireFinishedRule(heuristic string, task *agenda.Task) {
+	h := e.Store.Get(heuristic)
+	if h == nil {
+		return
+	}
+	prog := h.GetString("ifFinishedWorkingOnTask")
+	if prog == "" {
+		return
+	}
+	e.VM.SetEnv("ArgU", dsl.StringVal(task.UnitName))
+	_, err := e.VM.Execute(prog)
+	if err != nil && !dsl.IsAbort(err) {
+		e.log(3, "    %s.ifFinishedWorkingOnTask error: %v", heuristic, err)
+	}
+}
+
 // fireUnitRule fires a heuristic against a unit (Level 2: when agenda is empty).
 // Uses ifPotentiallyRelevant and ifTrulyRelevant, then ThenParts.
 // Returns (fired, abort, produced).

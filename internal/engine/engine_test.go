@@ -1212,3 +1212,117 @@ func TestHAvoidAbortsMatchingTask(t *testing.T) {
 		t.Errorf("unexpected abort on non-matching task:\n%s", buf.String())
 	}
 }
+
+// Phase 3.3: H13 — creates HAvoid2-N with ifFinishedWorkingOnTask that kills
+// post-hoc any newly-created unit whose cFrom matches the doomed cFrom.
+func TestCreateH13Rule(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	domainSlot := unit.New("Domain")
+	domainSlot.Set("sibSlots", []string{"range"})
+	store.Put(domainSlot)
+
+	grave := GraveRecord{
+		Name:      "BadSpec",
+		IsA:       []string{"Op"},
+		Creditors: []string{"H6-Specialize"},
+		Cycle:     5,
+		Slots: map[string]any{
+			"cSlot": "domain",
+			"cFrom": "Set",
+			"cTo":   "EmptySet",
+			"gSlot": "specializations",
+		},
+	}
+
+	eng.createH13Rule(grave)
+
+	if !store.Has("HAvoid2-1") {
+		t.Fatal("expected HAvoid2-1 to be created")
+	}
+	avoid := store.Get("HAvoid2-1")
+	if avoid.Worth() != 700 {
+		t.Errorf("HAvoid2 worth: got %d, want 700", avoid.Worth())
+	}
+	if avoid.GetString("avoidance_variant") != "H13" {
+		t.Errorf("avoidance_variant: got %q, want H13", avoid.GetString("avoidance_variant"))
+	}
+	if avoid.GetString("cFrom") != "Set" {
+		t.Errorf("cFrom: got %q, want Set", avoid.GetString("cFrom"))
+	}
+	if avoid.GetString("ifFinishedWorkingOnTask") == "" {
+		t.Error("expected non-empty ifFinishedWorkingOnTask")
+	}
+	if avoid.GetString("ifAboutToWorkOnTask") != "" {
+		t.Error("H13 HAvoid should not use ifAboutToWorkOnTask (that's H12)")
+	}
+}
+
+// Phase 3.3: after a task runs, HAvoid2 should kill newly-created units
+// whose cFrom matches. Task runs fully (not aborted).
+func TestHAvoid2KillsBadNewUnits(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 2
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	h := unit.New("Heuristic")
+	h.Set("isA", []string{"Anything"})
+	store.Put(h)
+
+	// Create a simple heuristic that will create a unit during ThenParts,
+	// recording cFrom on it — this simulates what H6 does.
+	creator := unit.New("Fake-Creator")
+	creator.SetWorth(600)
+	creator.Set("isA", []string{"Heuristic"})
+	creator.Set("ifWorkingOnTask", `"CurSlot" @ "specializations" =`)
+	creator.Set("thenCompute", `
+		"TestChild" "Anything" create-unit "child" !
+		"child" @ "domain" "Set" "EmptySet" record-slot-change
+	`)
+	store.Put(creator)
+
+	// Install an HAvoid2 via the grave record.
+	grave := GraveRecord{
+		Name:      "PriorBadSpec",
+		Creditors: []string{"H6-Specialize"},
+		Cycle:     1,
+		Slots: map[string]any{
+			"cSlot": "domain",
+			"cFrom": "Set",
+			"cTo":   "SomethingElse",
+			"gSlot": "specializations",
+		},
+	}
+	eng.createH13Rule(grave)
+
+	task := &agenda.Task{
+		Priority: 500,
+		UnitName: "SomeOp",
+		SlotName: "specializations",
+		Extra: map[string]any{
+			"SlotToChange":   "domain",
+			"SpecializeFrom": "Set",
+			"SpecializeTo":   "EmptySet",
+		},
+	}
+	// Target unit must exist for CurUnit binding.
+	target := unit.New("SomeOp")
+	target.Set("isA", []string{"Op", "Anything"})
+	store.Put(target)
+
+	eng.WorkOnTask(task)
+
+	// TestChild should have been created by Fake-Creator, then killed by HAvoid2.
+	if store.Has("TestChild") {
+		t.Errorf("expected TestChild to be killed by HAvoid2; still present\noutput:\n%s", buf.String())
+	}
+}

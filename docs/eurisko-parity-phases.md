@@ -76,8 +76,16 @@ New infrastructure:
 
 Siblings computed at HAvoid-creation time via `siblingSlots` — reads the slot unit's pre-computed `sibSlots` list. EURISKO's 50-sibling cap preserved; overflow falls back to cSlot alone.
 
-**3.3: H13 -- "Prevent changing CFrom into anything"**
-When unit dies, extract CFrom. Create HAvoid2 rule that blocks changing CFrom in the relevant slot or its siblings.
+**3.3: H13 -- "Prevent changing CFrom into anything"** -- COMPLETE
+When unit dies, extract cFrom. Create HAvoid2-N rule that post-hoc kills newly-created units whose cFrom matches.
+
+Implementation: `createH13Rule` in `internal/engine/credit.go`, called from `HandleDeletedUnit` alongside H12 when provenance is present. Unlike H12 (pre-abort), H13 uses `ifFinishedWorkingOnTask`: the task is allowed to run, then the HAvoid2 iterates new-units and kills any whose stored cFrom matches the dying unit's cFrom.
+
+New infrastructure:
+- `ifFinishedWorkingOnTask` firing phase added to `WorkOnTask` (previously declared but never executed). Runs after all ThenParts of all heuristics complete, with VM.NewUnits populated from the task's creations.
+- `VM.NewUnits` now cleared per-task at task start so the post-task phase sees only this task's creations, not cumulative output.
+- `new-units` DSL builtin pushes the current NewUnits list as a string list.
+- HAvoid2-N naming; starting worth 700; isA includes HAvoidRule and HindSightRule.
 
 **3.4: H14 -- "Prevent any transformation into CTo"**
 When unit dies, extract CTo. Create HAvoid3 rule that blocks any transformation resulting in CTo in the relevant slot or its siblings.
