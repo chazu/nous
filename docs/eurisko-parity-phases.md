@@ -140,8 +140,18 @@ New DSL builtins: `is-interesting? (unit cand -- bool)` runs the unit's interest
 
 Both dormant in current math-domain runs — no seeded unit has an Interestingness predicate. Will activate when H1 or Phase 5.10 introduces predicates, or when we hand-seed a few. Tested directly: `TestH23FillsIntExamples` and `TestH22SchedulesIntExamplesTask`.
 
-**4.10: H24 -- "Do all examples satisfy the same rare predicate?"**
-Requires Rarity tracking on predicates. Tests all examples of a category against rare predicates to find shared properties.
+**4.10: H24 -- "Do all examples satisfy the same rare predicate?"** -- COMPLETE
+Dual-mode heuristic: ifPotentiallyRelevant (unit-focus) AND ifWorkingOnTask (task-focus on whyInt). For each unary predicate whose rarity is ≤0.3 (or yet-unknown) AND whose domain matches the examples' type, tests whether every data-bearing example with matching type returns true. If ≥4 examples passed, appends the predicate to the category's whyInt slot.
+
+Companion heuristic **H24-Seeder** schedules whyInt tasks when an examples task finishes on a category with ≥4 examples (guarded against re-scheduling via `whyIntScheduled` flag).
+
+**Bootstrap**: `SeedInitialAgenda` now also seeds whyInt tasks for categories with ≥4 examples pre-populated from CUE (priority 700), so categories like Set/Number/PrimeNum get H24 runs even when their examples never require an H-FindExamples pass.
+
+**Bugs fixed along the way** (both surfaced by H24):
+- `anyToValue` now handles `[]any` recursively — the Rarity `[freq, numT, numF]` tuple was stringifying so `first` never returned a useful number. Filter was permanently accepting everything.
+- `<`, `>`, `<=`, `>=` now compare as floats when either operand is a float. Fractional rarity thresholds (0.3) were truncating to int and misfiring.
+
+**Honest state**: H24 plumbing works end-to-end. Real discovery density is low with our current 4-predicate set (only AlwaysT matches broadly, gets filtered after first firing; IsEmpty/IsSingleton are Set-typed so don't cross into Number-valued categories). Richer predicate seeding or learned predicates from H1 will give it more to work with.
 
 ---
 
@@ -256,7 +266,7 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 | 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
-| 4 | Remaining heuristics | 10 (9 done, H8 blocked) | H1, H24 pending; H8 needs type predicates |
+| 4 | Remaining heuristics | 10 (10 done, H8 blocked) | H1 pending (needs Phase 7.5); H8 blocked on type predicates |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | Not started |

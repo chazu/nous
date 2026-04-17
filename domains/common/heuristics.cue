@@ -336,6 +336,100 @@ units: [
 			"""#
 	},
 	{
+		name:    "H24-Seeder"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "After examples of a category are populated, schedule a whyInt task so H24 can search for shared rare predicates"
+		overallRecord: {successes: 0, failures: 0}
+		ifFinishedWorkingOnTask: #"""
+			"CurSlot" @ "examples" =
+			if
+				"CurUnit" @ "examples" get-slot "exs" !
+				"exs" @ nil !=
+				if
+					"exs" @ list-length 4 >=
+					"CurUnit" @ "whyIntScheduled" get-slot nil =
+					and
+					if
+						400 "CurUnit" @ "whyInt" "Check if all examples share a rare predicate" add-task
+						true "CurUnit" @ "whyIntScheduled" set-slot
+						"H24-Seeder: scheduled whyInt for " "CurUnit" @ concat print
+					then
+				then
+			then
+			"""#
+	},
+	{
+		name:    "H24"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "If a category has many examples, see if all satisfy the same rare unary predicate — that's what makes it interesting"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "examples" get-slot nil !=
+			if
+				"ArgU" @ "examples" get-slot list-length 4 >=
+			else
+				false
+			then
+			"""#
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "whyInt" =
+			"CurUnit" @ "examples" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "examples" get-slot "exs" !
+			"UnaryPred" examples
+			each
+				it "pred" !
+				# Filter: accept predicate if rarity unknown (never tested) OR freqT ≤ 0.3
+				true "rare" !
+				"pred" @ "rarity" get-slot "rar" !
+				"rar" @ nil !=
+				if
+					"rar" @ first 0.3 >
+					if false "rare" ! then
+				then
+				# Domain-type check: predicate's domain[0] must be a generalization
+				# of the candidate examples' type (or Anything). Otherwise we'd
+				# get IsEmpty matching Number via set-size coercion artifacts.
+				"pred" @ "domain" get-slot first "predDomain" !
+				"rare" @
+				"predDomain" @ nil !=
+				and
+				if
+					# Test predicate against every example with data of matching type
+					true "allPass" !
+					0 "testedCount" !
+					"exs" @
+					each
+						it "ex" !
+						"ex" @ unit-exists?
+						"ex" @ "data" get-slot nil !=
+						and
+						"ex" @ "predDomain" @ isa?
+						"predDomain" @ "Anything" =
+						or
+						and
+						if
+							"ex" @ "data" get-slot "pred" @ apply-op "res" !
+							"testedCount" @ 1 + "testedCount" !
+							"res" @
+							if else false "allPass" ! then
+						then
+					end
+					# Require we actually tested ≥4 examples (skipping data-less / type-mismatched ones)
+					"allPass" @ "testedCount" @ 4 >= and
+					if
+						"pred" @ "ArgU" @ "whyInt" add-to-slot
+						"H24: every example of " "ArgU" @ concat " satisfies " concat "pred" @ concat print
+					then
+				then
+			end
+			"""#
+	},
+	{
 		name:    "H20"
 		worth:   600
 		isA: ["Heuristic", "Anything"]

@@ -211,23 +211,49 @@ func bEq(vm *VM) error  { b, a := vm.pop(), vm.pop(); vm.push(BoolVal(a.Equal(b)
 func bNeq(vm *VM) error { b, a := vm.pop(), vm.pop(); vm.push(BoolVal(!a.Equal(b))); return nil }
 func bLt(vm *VM) error {
 	b, a := vm.pop(), vm.pop()
-	vm.push(BoolVal(a.AsInt() < b.AsInt()))
+	vm.push(BoolVal(cmpNumeric(a, b) < 0))
 	return nil
 }
 func bGt(vm *VM) error {
 	b, a := vm.pop(), vm.pop()
-	vm.push(BoolVal(a.AsInt() > b.AsInt()))
+	vm.push(BoolVal(cmpNumeric(a, b) > 0))
 	return nil
 }
 func bLte(vm *VM) error {
 	b, a := vm.pop(), vm.pop()
-	vm.push(BoolVal(a.AsInt() <= b.AsInt()))
+	vm.push(BoolVal(cmpNumeric(a, b) <= 0))
 	return nil
 }
 func bGte(vm *VM) error {
 	b, a := vm.pop(), vm.pop()
-	vm.push(BoolVal(a.AsInt() >= b.AsInt()))
+	vm.push(BoolVal(cmpNumeric(a, b) >= 0))
 	return nil
+}
+
+// cmpNumeric compares two numeric Values, preferring float comparison when
+// either is a float so fractional rarity/interestingness values compare
+// correctly instead of truncating to int.
+func cmpNumeric(a, b Value) int {
+	if a.kind == VFloat || b.kind == VFloat {
+		af, bf := a.AsFloat(), b.AsFloat()
+		switch {
+		case af < bf:
+			return -1
+		case af > bf:
+			return 1
+		default:
+			return 0
+		}
+	}
+	ai, bi := a.AsInt(), b.AsInt()
+	switch {
+	case ai < bi:
+		return -1
+	case ai > bi:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // Logic
@@ -1275,6 +1301,12 @@ func anyToValue(v any) Value {
 		return ListVal(vals)
 	case []Value:
 		return ListVal(x)
+	case []any:
+		vals := make([]Value, len(x))
+		for i, e := range x {
+			vals[i] = anyToValue(e)
+		}
+		return ListVal(vals)
 	case []map[string]any:
 		// Structured examples — return count for now
 		return IntVal(len(x))

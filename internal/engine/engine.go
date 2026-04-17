@@ -245,18 +245,33 @@ func (e *Engine) highestWorthUnfocused() string {
 // See docs/dynamics-and-tuning.md.
 func (e *Engine) SeedInitialAgenda() {
 	for _, name := range e.Store.All() {
-		if !e.Store.IsA(name, "Op") {
+		u := e.Store.Get(name)
+		if u == nil {
 			continue
 		}
-		if name == "Op" {
-			continue // skip the meta-unit itself
+		if e.Store.IsA(name, "Op") && name != "Op" {
+			e.Agenda.Push(&agenda.Task{
+				Priority: 700,
+				UnitName: name,
+				SlotName: "examples",
+				Reasons:  []string{"Initial seed task for operator exploration"},
+			})
+			continue
 		}
-		e.Agenda.Push(&agenda.Task{
-			Priority: 700,
-			UnitName: name,
-			SlotName: "examples",
-			Reasons:  []string{"Initial seed task for operator exploration"},
-		})
+		// Phase 4.10: seed whyInt tasks for categories that already have
+		// ≥4 examples pre-populated from CUE (Set, PrimeNum, EvenNum etc).
+		// H24 can then search for shared rare predicates; without this
+		// bootstrap these categories never get a whyInt task scheduled
+		// because H-FindExamples doesn't run on them (their examples are
+		// already set) and H24-Seeder only triggers after an examples task.
+		if exs := u.GetStrings("examples"); len(exs) >= 4 {
+			e.Agenda.Push(&agenda.Task{
+				Priority: 700,
+				UnitName: name,
+				SlotName: "whyInt",
+				Reasons:  []string{"Bootstrap H24 on pre-populated category"},
+			})
+		}
 	}
 }
 

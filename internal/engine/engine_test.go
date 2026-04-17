@@ -1712,3 +1712,46 @@ func TestPerThenPartRecord(t *testing.T) {
 		t.Errorf("thenAddToAgendaRecord: got %v, want 0s/2f", ta)
 	}
 }
+
+// Phase 4.10: H24 finds predicates satisfied by every example of a category.
+// If a category has ≥4 examples and a predicate returns true on all of them,
+// the predicate gets appended to the category's whyInt slot.
+func TestH24FindsCategoricalPredicates(t *testing.T) {
+	eng, buf := testEngine(t)
+	eng.Verbosity = 2
+
+	if !eng.Store.Has("H24") {
+		t.Fatal("H24 not loaded")
+	}
+	if !eng.Store.Has("IsEmpty") {
+		t.Fatal("IsEmpty predicate not loaded")
+	}
+
+	// Seed a category whose examples are all empty sets — IsEmpty should hit
+	// for every one, so H24 should flag it.
+	cat := unit.New("EmptySetExemplars")
+	cat.Set("isA", []string{"Anything"})
+	cat.Set("examples", []string{"E1", "E2", "E3", "E4", "E5"})
+	eng.Store.Put(cat)
+
+	for _, n := range []string{"E1", "E2", "E3", "E4", "E5"} {
+		u := unit.New(n)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", []int{}) // empty set
+		eng.Store.Put(u)
+	}
+
+	// Fire H24 on unit-focus of EmptySetExemplars.
+	eng.fireUnitRule("H24", "EmptySetExemplars")
+
+	whyInt := eng.Store.Get("EmptySetExemplars").GetStrings("whyInt")
+	found := false
+	for _, p := range whyInt {
+		if p == "IsEmpty" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected IsEmpty in whyInt; got %v\noutput:\n%s", whyInt, buf.String())
+	}
+}
