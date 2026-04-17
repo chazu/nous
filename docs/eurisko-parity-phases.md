@@ -128,8 +128,14 @@ Cross-pollination: when an operation shares domain types with other operations, 
 **4.8: H21 extension -- structured conjecture creation**
 Enhance H-Conjecture to create ProtoConjec units with provenance metadata, not just print output.
 
-**4.9: H22/H23 -- Interestingness evaluation**
-Require the Interestingness calculus (IntExamples, IsAInt, WhyInt). Check instances/examples against interestingness predicates.
+**4.9: H22/H23 -- Interestingness evaluation** -- COMPLETE (dormant until seeded)
+Both heuristics live in `domains/common/heuristics.cue`.
+- **H22**: `ifFinishedWorkingOnTask` — when an examples-task finishes and the unit has an Interestingness predicate, schedule an intExamples-task.
+- **H23**: `ifWorkingOnTask` on CurSlot==intExamples — iterates the unit's examples, runs the Interestingness predicate against each via new `is-interesting?` builtin, appends passers to intExamples via `add-to-slot` (inverse-maintained so isAInt auto-wires).
+
+New DSL builtins: `is-interesting? (unit cand -- bool)` runs the unit's interestingness slot as a DSL program with env `candidate` bound; `add-to-slot (value unit slot --)` appends unique through Store.SetSlot so inverses fire.
+
+Both dormant in current math-domain runs — no seeded unit has an Interestingness predicate. Will activate when H1 or Phase 5.10 introduces predicates, or when we hand-seed a few. Tested directly: `TestH23FillsIntExamples` and `TestH22SchedulesIntExamplesTask`.
 
 **4.10: H24 -- "Do all examples satisfy the same rare predicate?"**
 Requires Rarity tracking on predicates. Tests all examples of a category against rare predicates to find shared properties.
@@ -234,7 +240,7 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 | 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
-| 4 | Remaining heuristics | 10 (4 done) | H2, H4, H19, H19Criterial done |
+| 4 | Remaining heuristics | 10 (6 done) | H2, H4, H19, H19Criterial, H22, H23 done |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | Not started |

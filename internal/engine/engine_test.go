@@ -1564,3 +1564,106 @@ func TestH19CriterialSparesSpecializations(t *testing.T) {
 	}
 	t.Logf("%d specializations survived H19Criterial", specs)
 }
+
+// Phase 4.9a: H23 applies a unit's Interestingness predicate to its
+// examples and populates intExamples. Inverse (isAInt) should auto-wire.
+func TestH23FillsIntExamples(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H23") {
+		t.Fatal("H23 not loaded from domain CUE")
+	}
+
+	// Seed a category with three examples and a simple interestingness
+	// predicate: "candidate has worth >= 500".
+	cat := unit.New("TestCat")
+	cat.Set("isA", []string{"Anything"})
+	cat.Set("examples", []string{"ExA", "ExB", "ExC"})
+	cat.Set("interestingness", `"candidate" @ "worth" get-slot 500 >=`)
+	eng.Store.Put(cat)
+
+	mk := func(name string, worth int) {
+		u := unit.New(name)
+		u.SetWorth(worth)
+		u.Set("isA", []string{"Anything"})
+		eng.Store.Put(u)
+	}
+	mk("ExA", 600) // interesting
+	mk("ExB", 300) // boring
+	mk("ExC", 700) // interesting
+
+	task := &agenda.Task{
+		Priority: 500,
+		UnitName: "TestCat",
+		SlotName: "intExamples",
+	}
+	eng.WorkOnTask(task)
+
+	intEx := eng.Store.Get("TestCat").GetStrings("intExamples")
+	wantSet := map[string]bool{"ExA": true, "ExC": true}
+	if len(intEx) != 2 {
+		t.Errorf("intExamples: got %v, want exactly [ExA ExC]", intEx)
+	}
+	for _, name := range intEx {
+		if !wantSet[name] {
+			t.Errorf("intExamples contains unexpected %q", name)
+		}
+	}
+
+	// Inverse maintenance: ExA.isAInt should include TestCat.
+	if ss := eng.Store.Get("ExA").GetStrings("isAInt"); len(ss) != 1 || ss[0] != "TestCat" {
+		t.Errorf("ExA.isAInt: got %v, want [TestCat]", ss)
+	}
+	// ExB (boring) should not appear.
+	if ss := eng.Store.Get("ExB").GetStrings("isAInt"); len(ss) != 0 {
+		t.Errorf("ExB.isAInt should be empty; got %v", ss)
+	}
+}
+
+// Phase 4.9a: H22 schedules an intExamples task after an examples task
+// completes, when the unit has an Interestingness predicate.
+func TestH22SchedulesIntExamplesTask(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H22") {
+		t.Fatal("H22 not loaded from domain CUE")
+	}
+
+	cat := unit.New("Cat")
+	cat.Set("isA", []string{"Anything"})
+	cat.Set("examples", []string{"X"})
+	cat.Set("interestingness", `true`)
+	eng.Store.Put(cat)
+
+	// Drain pre-existing agenda.
+	for eng.Agenda.Len() > 0 {
+		eng.Agenda.Pop()
+	}
+
+	task := &agenda.Task{
+		Priority: 500,
+		UnitName: "Cat",
+		SlotName: "examples",
+	}
+	eng.VM.CurrentTask = task
+	eng.VM.SetEnv("CurUnit", dsl.StringVal(task.UnitName))
+	eng.VM.SetEnv("CurSlot", dsl.StringVal(task.SlotName))
+
+	eng.fireFinishedRule("H22", task)
+
+	found := false
+	for eng.Agenda.Len() > 0 {
+		t := eng.Agenda.Pop()
+		if t == nil {
+			break
+		}
+		if t.UnitName == "Cat" && t.SlotName == "intExamples" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("H22 should schedule an intExamples task on the target unit")
+	}
+}

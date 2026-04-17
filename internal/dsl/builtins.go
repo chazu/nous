@@ -110,6 +110,9 @@ var builtins = map[string]builtinFn{
 	"replace-slot-value":  bReplaceSlotValue,
 	"record-slot-change":  bRecordSlotChange,
 	"new-units":           bNewUnits,
+	"add-to-slot":         bAddToSlot,
+	// "is-interesting?" is registered in init() to avoid an init cycle
+	// (it calls vm.Execute, which looks up builtins).
 
 	// Misc
 	"noop": func(vm *VM) error { return nil },
@@ -1005,6 +1008,69 @@ func bRecordSlotChange(vm *VM) error {
 	if gSlot := vm.GetEnv("CurSlot"); gSlot.AsString() != "" {
 		vm.Store.SetSlot(name, "gSlot", gSlot.AsString())
 	}
+	return nil
+}
+
+func init() {
+	builtins["is-interesting?"] = bIsInteresting
+}
+
+// is-interesting?: (unit candidate -- bool)
+// Runs the unit's `interestingness` slot as a DSL program, with env
+// "candidate" bound to the candidate name. Returns the truthiness of the
+// program's top-of-stack result. False if the unit has no interestingness
+// predicate, or if the predicate errors (including abort).
+func bIsInteresting(vm *VM) error {
+	cand := vm.pop()
+	unitName := vm.pop()
+	u := vm.Store.Get(unitName.AsString())
+	if u == nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	prog := u.GetString("interestingness")
+	if prog == "" {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	prev, hadPrev := vm.env["candidate"]
+	vm.env["candidate"] = cand
+	v, err := vm.Execute(prog)
+	if hadPrev {
+		vm.env["candidate"] = prev
+	} else {
+		delete(vm.env, "candidate")
+	}
+	if err != nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	vm.push(BoolVal(v.Truthy()))
+	return nil
+}
+
+// add-to-slot: (value unit slot --)
+// Appends value (string) to a list-valued slot on the unit, via Store.SetSlot
+// so inverse maintenance fires. Idempotent — skips if value already present.
+// No-op if unit does not exist.
+func bAddToSlot(vm *VM) error {
+	slot := vm.pop()
+	unitName := vm.pop()
+	value := vm.pop()
+	name := unitName.AsString()
+	u := vm.Store.Get(name)
+	if u == nil {
+		return nil
+	}
+	slotKey := slot.AsString()
+	existing := u.GetStrings(slotKey)
+	v := value.AsString()
+	for _, e := range existing {
+		if e == v {
+			return nil
+		}
+	}
+	vm.Store.SetSlot(name, slotKey, append(existing, v))
 	return nil
 }
 

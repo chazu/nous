@@ -336,6 +336,49 @@ units: [
 			"""#
 	},
 	{
+		name:    "H22"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "When examples of a unit are found, schedule a task to check which are unusually interesting"
+		overallRecord: {successes: 0, failures: 0}
+		ifFinishedWorkingOnTask: #"""
+			"CurSlot" @ "examples" =
+			"CurUnit" @ "interestingness" get-slot nil !=
+			"CurUnit" @ "examples" get-slot nil !=
+			and and
+			if
+				500 "CurUnit" @ "intExamples" "Check which examples are unusually interesting" add-task
+			then
+			"""#
+	},
+	{
+		name:    "H23"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "Find interesting examples by applying the unit's Interestingness predicate to each known example"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "intExamples" =
+			"CurUnit" @ "interestingness" get-slot nil !=
+			and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "examples" get-slot "exList" !
+			"exList" @ nil !=
+			if
+				"exList" @
+				each
+					it "ex" !
+					"CurUnit" @ "ex" @ is-interesting?
+					if
+						"ex" @ "CurUnit" @ "intExamples" add-to-slot
+						"Interesting: " "ex" @ concat " is in intExamples of " concat "CurUnit" @ concat print
+					then
+				end
+			then
+			"""#
+	},
+	{
 		name:    "H4"
 		worth:   703
 		isA: ["Heuristic", "Anything"]
