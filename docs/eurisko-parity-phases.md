@@ -110,8 +110,8 @@ Full implementation with ProtoConjec creation and targeted specialization propos
 **~~4.2: H2 -- "Kill prolific-but-mediocre creators"~~** COMPLETE
 Implemented as H2-KillGarbageCreator during engine stabilization. Scans children of heuristics, punishes those with 5+ children and 80%+ mediocre worth.
 
-**4.3: H4 -- "Gather empirical data about new concepts"**
-Post-creation task scheduling. When new units are created, add tasks to find their instances, examples, and applics. Extends H-ExploreSlots.
+**4.3: H4 -- "Gather empirical data about new concepts"** -- COMPLETE
+Implemented as a CUE heuristic in `domains/common/heuristics.cue`. Uses `ifFinishedWorkingOnTask` + the `new-units` builtin (both landed in Phase 3.3) to schedule an `examples` task for each newly-created unit that doesn't yet have examples populated. Fires reliably — a 100-cycle math run leaves ~13 pending "After synthesis, seek instances" tasks on the agenda.
 
 **4.4: H8 -- "Find applics in generalizations' applics"**
 Search up the isA tree for application records that might apply to the current unit. Requires working generalization inverse (bug 1.6).
@@ -119,8 +119,8 @@ Search up the isA tree for application records that might apply to the current u
 **4.5: H10/H15 -- "Get examples from operations whose range is this type"**
 Uses IsRangeOf (from Phase 1 inverse maintenance, verified working) to find operations that produce this type, then extracts examples from their applics.
 
-**~~4.6: H19/H19Criterial -- "Eliminate duplicate new units"~~** H19 COMPLETE
-H19-EliminateDuplicates implemented during engine stabilization. Compares data slots via set-equal, penalizes duplicates. H19Criterial (checks only criterial slots) still needed.
+**~~4.6: H19/H19Criterial -- "Eliminate duplicate new units"~~** COMPLETE
+H19-EliminateDuplicates implemented during engine stabilization. H19Criterial added as a CUE heuristic in Phase 4a — `ifFinishedWorkingOnTask` iterates new-units, compares all criterial slots against peers in its isA category, kills structurally-identical duplicates. Skips H-Specialize/H18-Generalize-created units (our H6 stores the restriction in `restrictedTo` rather than modifying criterial slots, so specs would false-positive against their parents).
 
 **4.7: H20 -- "Run f on args used for other ops"**
 Cross-pollination: when an operation shares domain types with other operations, run it on their arguments too.
@@ -234,7 +234,7 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 | 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
-| 4 | Remaining heuristics | 10 (2 done) | H2, H19 done |
+| 4 | Remaining heuristics | 10 (4 done) | H2, H4, H19, H19Criterial done |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | Not started |

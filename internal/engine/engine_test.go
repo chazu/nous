@@ -1481,3 +1481,86 @@ func TestHAvoidIfWorking(t *testing.T) {
 		t.Errorf("HAvoidIfWorking aborted a non-matching task:\n%s", buf.String())
 	}
 }
+
+// Phase 4.3: H4 schedules an examples task for each newly-created unit.
+// Unit-level test — drives H4 directly by populating VM.NewUnits and
+// running the post-task phase, rather than relying on a stochastic run.
+func TestH4SchedulesExamplesTasks(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H4") {
+		t.Fatal("H4 not loaded from domain CUE")
+	}
+
+	// Seed two brand-new units with no examples slot.
+	for _, n := range []string{"NewConceptA", "NewConceptB"} {
+		u := unit.New(n)
+		u.Set("isA", []string{"Anything"})
+		eng.Store.Put(u)
+	}
+
+	// Simulate what WorkOnTask does around the post-task phase.
+	eng.VM.NewUnits = []string{"NewConceptA", "NewConceptB"}
+	task := &agenda.Task{Priority: 500, UnitName: "NewConceptA", SlotName: "examples"}
+	eng.VM.CurrentTask = task
+	eng.VM.SetEnv("CurUnit", dsl.StringVal(task.UnitName))
+	eng.VM.SetEnv("CurSlot", dsl.StringVal(task.SlotName))
+
+	// Drain any pre-existing agenda content so we can count H4's additions cleanly.
+	for eng.Agenda.Len() > 0 {
+		eng.Agenda.Pop()
+	}
+
+	// Run ifFinishedWorkingOnTask on H4 directly.
+	eng.fireFinishedRule("H4", task)
+
+	found := 0
+	for eng.Agenda.Len() > 0 {
+		t := eng.Agenda.Pop()
+		if t == nil {
+			break
+		}
+		for _, r := range t.Reasons {
+			if strings.Contains(r, "After synthesis") {
+				found++
+			}
+		}
+	}
+	if found != 2 {
+		t.Errorf("H4 should schedule one task per new unit; got %d, want 2", found)
+	}
+}
+
+// Phase 4.6: H19Criterial kills structurally-duplicate new units but leaves
+// legitimate specializations alone (H6 output has shared criterial slots
+// with its parent; H19Criterial must skip those).
+func TestH19CriterialSparesSpecializations(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+	eng.MaxCycles = 60
+	eng.MutConfig.Enabled = false
+
+	if !eng.Store.Has("H19Criterial") {
+		t.Fatal("H19Criterial not loaded from domain CUE")
+	}
+
+	eng.Run(context.Background())
+
+	// At least one specialized unit should survive — if H19Criterial were
+	// over-aggressive it would kill them all for sharing criterial slots
+	// with their parent.
+	specs := 0
+	for _, name := range eng.Store.All() {
+		if strings.Contains(name, "-on-") {
+			u := eng.Store.Get(name)
+			if u != nil && u.GetString("restrictedTo") != "" {
+				specs++
+			}
+		}
+	}
+	if specs == 0 {
+		t.Error("H19Criterial appears to have killed all specializations; should skip H-Specialize output")
+	}
+	t.Logf("%d specializations survived H19Criterial", specs)
+}

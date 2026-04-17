@@ -335,4 +335,73 @@ units: [
 			end
 			"""#
 	},
+	{
+		name:    "H4"
+		worth:   703
+		isA: ["Heuristic", "Anything"]
+		english: "If a new unit was synthesized, schedule a task to gather empirical data about it"
+		overallRecord: {successes: 0, failures: 0}
+		ifFinishedWorkingOnTask: #"""
+			new-units
+			each
+				it "nu" !
+				"nu" @ unit-exists?
+				if
+					"nu" @ "examples" get-slot nil =
+					if
+						500 "nu" @ "examples" "After synthesis, seek instances" add-task
+					then
+				then
+			end
+			"""#
+	},
+	{
+		name:    "H19Criterial"
+		worth:   700
+		isA: ["Heuristic", "Anything"]
+		english: "Kill newly-created units whose criterial slots duplicate an existing unit"
+		overallRecord: {successes: 0, failures: 0}
+		ifFinishedWorkingOnTask: #"""
+			new-units
+			each
+				it "nu" !
+				"nu" @ unit-exists?
+				if
+					"nu" @ "creditors" get-slot "H-Specialize" list-contains
+					"nu" @ "creditors" get-slot "H18-Generalize" list-contains
+					or not
+					"nu" @ criterial-slots "csList" !
+					"csList" @ list-length 0 >
+					"nu" @ "isA" get-slot nil !=
+					and and
+					if
+						"nu" @ "isA" get-slot first "cat" !
+						"cat" @ examples
+						each
+							it "cand" !
+							"cand" @ "nu" @ !=
+							"cand" @ unit-exists?
+							and
+							if
+								true "allMatch" !
+								"csList" @
+								each
+									it "cs" !
+									"nu" @ "cs" @ get-slot
+									"cand" @ "cs" @ get-slot
+									=
+									if else false "allMatch" ! then
+								end
+								"allMatch" @
+								if
+									"Duplicate on criterial slots, killing: " "nu" @ concat " (matches " concat "cand" @ concat ")" concat print
+									"nu" @ kill-unit
+								then
+							then
+						end
+					then
+				then
+			end
+			"""#
+	},
 ]
