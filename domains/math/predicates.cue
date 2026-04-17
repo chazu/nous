@@ -29,4 +29,44 @@ units: [
 			set-equal?
 			"""#
 	},
+	{
+		name:   "IsEmpty"
+		worth:  500
+		isA: ["UnaryPred", "Pred", "MathPred", "Anything"]
+		domain: ["Set"]
+		range: ["TruthValue"]
+		defn:   #"""
+			set-size 0 =
+			"""#
+	},
+	{
+		name:   "IsSingleton"
+		worth:  500
+		isA: ["UnaryPred", "Pred", "MathPred", "Anything"]
+		domain: ["Set"]
+		range: ["TruthValue"]
+		defn:   #"""
+			set-size 1 =
+			"""#
+	},
+	{
+		name:   "AlwaysT"
+		worth:  500
+		isA: ["UnaryPred", "Pred", "ConstantPred", "Anything"]
+		domain: ["Anything"]
+		range: ["TruthValue"]
+		defn:   #"""
+			drop true
+			"""#
+	},
+	{
+		name:   "AlwaysNIL"
+		worth:  500
+		isA: ["UnaryPred", "Pred", "ConstantPred", "Anything"]
+		domain: ["Anything"]
+		range: ["TruthValue"]
+		defn:   #"""
+			drop false
+			"""#
+	},
 ]

@@ -178,8 +178,13 @@ AND, OR, NOT, Implies, TheFirstOf, TheSecondOf as operation units with defn and 
 **5.9: Numeric operations as units**
 Add, Multiply, Successor, Square as operation units (currently exist only as DSL builtins, not as units in the store).
 
-**5.10: Additional predicates**
-Equality predicates per structure type. Numeric comparison predicates with Transpose. Constant predicates (AlwaysT, AlwaysNIL). UndefinedPred.
+**5.10: Additional predicates** -- COMPLETE (core set + Rarity hook)
+Predicates as first-class units were already usable (MemberOf/SubsetOf/SetEqual in `domains/math/predicates.cue`). This phase added:
+- `IsEmpty`, `IsSingleton` unary set predicates
+- `AlwaysT`, `AlwaysNIL` constant predicates (the key ConstantPred subcategory members)
+- Rarity tracking hook in `apply-op`: any call to a unit whose isA includes "Pred" now increments the Rarity tuple `[freqTrue, numT, numF]` on the predicate unit. Unblocks H24 and the Phase 6.3 population gap.
+
+Deferred: numeric comparison predicates (IEQP, IGEQ, IGREATERP, ILESSP) with Transpose — natural to add alongside 5.6 meta-ops, not needed yet.
 
 **5.11: H25-H28 -- Predicate set analysis**
 Once predicate units exist, implement the satisfying/failing set heuristics.
@@ -201,8 +206,8 @@ Interestingness slot present in `domains/common/slots.cue` with dataType LispPre
 **6.2: IntExamples and IsAInt** -- COMPLETE
 Both slots defined with proper inverse wiring (IntExamples ↔ IsAInt) and `IntExamples.superSlots = [Examples]` so IntExamples ⊆ Examples. Inverse maintenance verified by test (setting intExamples on a unit automatically writes isAInt on the target).
 
-**6.3: Rarity tracking** -- COMPLETE (slot shape only; population deferred)
-Rarity slot defined with dataType `List` and format `[frequency-True, num-True, num-False]` matching EURISKO's tuple. Population hook deferred until Phase 5.10 (predicates as first-class units) — there's nothing to track until predicates are callable-by-name and we can wrap the call site.
+**6.3: Rarity tracking** -- COMPLETE
+Rarity slot defined with format `[frequency-True, num-True, num-False]`. Population hook landed in Phase 5.10: `apply-op` checks if the target op isA Pred and, if so, updates Rarity on the predicate unit after each call. H24 can now read rarity values to find rare predicates.
 
 **6.4: WhyInt explanations** -- COMPLETE
 WhyInt slot defined (Text dataType).

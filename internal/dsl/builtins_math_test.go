@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/chazu/nous/internal/agenda"
@@ -136,5 +137,42 @@ func TestApplyOpWithStoreData(t *testing.T) {
 	list := v.AsList()
 	if len(list) != 1 || list[0].AsInt() != 2 {
 		t.Errorf("expected [2], got %v", v)
+	}
+}
+
+func TestRarityTracking(t *testing.T) {
+	vm := testVM(t)
+	// Create a simple predicate unit that returns whether input > 0.
+	pred := unit.New("IsPositive")
+	pred.Set("isA", []string{"UnaryPred", "Pred", "Anything"})
+	pred.Set("defn", `0 >`)
+	vm.Store.Put(pred)
+
+	// Apply it to several inputs via direct stack push. apply-op pops
+	// a single arg for unary ops (isA UnaryPred or checked via BinaryOp/BinaryPred branch).
+	// UnaryPred isn't in the binary branch of bApplyOp, so it takes one arg.
+	for _, n := range []int{5, 3, -1, 0, -7, 2} {
+		_, err := vm.Execute(fmt.Sprintf(`%d "IsPositive" apply-op drop`, n))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Expect 3 trues (5, 3, 2) and 3 falses (-1, 0, -7)
+	rarity, ok := vm.Store.Get("IsPositive").Get("rarity").([]any)
+	if !ok {
+		t.Fatalf("rarity not populated: got %T", vm.Store.Get("IsPositive").Get("rarity"))
+	}
+	if len(rarity) != 3 {
+		t.Fatalf("rarity len: got %d, want 3", len(rarity))
+	}
+	freq, _ := rarity[0].(float64)
+	numT, _ := rarity[1].(int)
+	numF, _ := rarity[2].(int)
+	if numT != 3 || numF != 3 {
+		t.Errorf("rarity counts: got T=%d F=%d, want T=3 F=3", numT, numF)
+	}
+	if freq != 0.5 {
+		t.Errorf("rarity freq: got %v, want 0.5", freq)
 	}
 }

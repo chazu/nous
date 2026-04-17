@@ -3,6 +3,8 @@ package dsl
 import (
 	"math"
 	"sort"
+
+	"github.com/chazu/nous/internal/unit"
 )
 
 func init() {
@@ -405,8 +407,51 @@ func bApplyOp(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	// Phase 5.10: if this op is a Pred, update its Rarity record
+	// [freqT, numT, numF] so H24 and interestingness heuristics can find
+	// rare predicates. Applies regardless of arity.
+	if vm.Store.IsA(opName, "Pred") {
+		updateRarity(vm.Store, opName, result.Truthy())
+	}
 	vm.push(result)
 	return nil
+}
+
+// updateRarity increments the True or False counter on a predicate unit's
+// Rarity slot and recomputes frequency-True. The slot value is stored as
+// a 3-element []any: [freqTrue (float64), numT (int), numF (int)].
+func updateRarity(store *unit.Store, predName string, truthy bool) {
+	u := store.Get(predName)
+	if u == nil {
+		return
+	}
+	numT, numF := 0, 0
+	if existing, ok := u.Get("rarity").([]any); ok && len(existing) == 3 {
+		numT = toInt(existing[1])
+		numF = toInt(existing[2])
+	}
+	if truthy {
+		numT++
+	} else {
+		numF++
+	}
+	total := numT + numF
+	freq := 0.0
+	if total > 0 {
+		freq = float64(numT) / float64(total)
+	}
+	u.Set("rarity", []any{freq, numT, numF})
+}
+
+func toInt(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case float64:
+		return int(x)
+	default:
+		return 0
+	}
 }
 
 // apply-pred: ( args... predUnitName -- bool )
