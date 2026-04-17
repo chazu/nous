@@ -230,6 +230,22 @@ units: [
 			"""#
 	},
 	{
+		name:    "HAvoidIfWorking"
+		worth:   700
+		isA: ["Heuristic", "HAvoidRule", "HindSightRule", "Anything"]
+		english: "If generalizing IfWorkingOnTask, abort 90% of the time — ifWorkingOnTask is the most dangerous slot to mutate"
+		overallRecord: {successes: 0, failures: 0}
+		ifAboutToWorkOnTask: #"""
+			"CurSlot" @ "generalizations" =
+			"SlotToChange" get-task-extra "ifWorkingOnTask" =
+			and
+			if
+				10 random-int 0 != if abort then
+			then
+			false
+			"""#
+	},
+	{
 		name:    "H2-KillGarbageCreator"
 		worth:   700
 		isA: ["Heuristic", "Anything"]

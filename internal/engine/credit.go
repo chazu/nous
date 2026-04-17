@@ -154,6 +154,7 @@ func (e *Engine) HandleDeletedUnit(unitName string) {
 	if hasSlotChangeProvenance(snapshot) {
 		e.createH12Rule(grave)
 		e.createH13Rule(grave)
+		e.createH14Rule(grave)
 	} else {
 		e.createAvoidanceRule(grave)
 	}
@@ -306,6 +307,76 @@ func (e *Engine) createH13Rule(grave GraveRecord) {
 	e.Store.Put(avoid)
 	e.log(1, "  HindSight: created %s (kills post-hoc when %s tasks alter %s away from %s, from %s)",
 		avoidName, gSlot, cSlot, cFrom, grave.Name)
+}
+
+// createH14Rule generates an HAvoid3-N heuristic (EURISKO's H14 behaviour)
+// that kills newly-created units whose cTo matches the dying unit's cTo.
+// Mirror of H13 but inverted — blocks transformations *into* the bad value
+// rather than transformations *away from* it.
+func (e *Engine) createH14Rule(grave GraveRecord) {
+	cSlot, _ := grave.Slots["cSlot"].(string)
+	gSlot, _ := grave.Slots["gSlot"].(string)
+	cTo, _ := grave.Slots["cTo"].(string)
+	if cSlot == "" || gSlot == "" || cTo == "" {
+		return
+	}
+
+	sibs := siblingSlots(e.Store, cSlot)
+	if len(sibs) > 50 {
+		sibs = nil
+	}
+	blockSet := append([]string{cSlot}, sibs...)
+
+	avoidName := nextHAvoidName(e.Store, "HAvoid3")
+	if avoidName == "" {
+		return
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `"CurSlot" @ "%s" =`+"\n", gSlot)
+	sb.WriteString(`"SlotToChange" get-task-extra "stc" !` + "\n")
+	sb.WriteString(`false "match" !` + "\n")
+	for _, s := range blockSet {
+		fmt.Fprintf(&sb, `"stc" @ "%s" = if true "match" ! then`+"\n", s)
+	}
+	sb.WriteString(`"match" @ and` + "\n")
+	sb.WriteString(`if` + "\n")
+	sb.WriteString(`  new-units` + "\n")
+	sb.WriteString(`  each` + "\n")
+	sb.WriteString(`    it "nu" !` + "\n")
+	fmt.Fprintf(&sb, `    "nu" @ "cTo" get-slot "%s" =`+"\n", cTo)
+	sb.WriteString(`    if "nu" @ kill-unit then` + "\n")
+	sb.WriteString(`  end` + "\n")
+	sb.WriteString(`then` + "\n")
+	sb.WriteString(`false` + "\n")
+	ifProg := sb.String()
+
+	tokens := dsl.Tokenize(ifProg)
+	if len(tokens) == 0 {
+		e.log(1, "  HindSight: H14 produced untokenizable program for %s", grave.Name)
+		return
+	}
+
+	avoid := unit.New(avoidName)
+	avoid.SetWorth(700)
+	avoid.Set("isA", []string{"Heuristic", "HAvoidRule", "HindSightRule", "Anything"})
+	avoid.Set("english", fmt.Sprintf(
+		"Avoid: when computing %s, kill units that changed %s (or siblings) into %s — learned from %s dying",
+		gSlot, cSlot, cTo, grave.Name))
+	avoid.Set("creditors", []string{"H14"})
+	avoid.Set("ifFinishedWorkingOnTask", ifProg)
+	avoid.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	avoid.Set("creationCycle", e.cycle)
+	avoid.Set("avoidance_of", grave.Name)
+	avoid.Set("avoidance_variant", "H14")
+	avoid.Set("gSlot", gSlot)
+	avoid.Set("cSlot", cSlot)
+	avoid.Set("cSlotSibs", blockSet)
+	avoid.Set("cTo", cTo)
+
+	e.Store.Put(avoid)
+	e.log(1, "  HindSight: created %s (kills post-hoc when %s tasks alter %s into %s, from %s)",
+		avoidName, gSlot, cSlot, cTo, grave.Name)
 }
 
 // siblingSlots returns the sibSlots list of the slot unit corresponding to

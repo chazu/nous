@@ -532,3 +532,22 @@ func TestRecordSlotChange(t *testing.T) {
 		t.Errorf("cTo: got %q, want Number", got.GetString("cTo"))
 	}
 }
+
+func TestRandomInt(t *testing.T) {
+	vm := testVM(t)
+	for i := 0; i < 20; i++ {
+		v, err := vm.Execute(`10 random-int`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := v.AsInt()
+		if n < 0 || n >= 10 {
+			t.Errorf("random-int 10 returned %d, want [0, 10)", n)
+		}
+	}
+	// n <= 0 returns 0
+	v, _ := vm.Execute(`0 random-int`)
+	if v.AsInt() != 0 {
+		t.Errorf("0 random-int: got %d, want 0", v.AsInt())
+	}
+}

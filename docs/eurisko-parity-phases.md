@@ -87,14 +87,14 @@ New infrastructure:
 - `new-units` DSL builtin pushes the current NewUnits list as a string list.
 - HAvoid2-N naming; starting worth 700; isA includes HAvoidRule and HindSightRule.
 
-**3.4: H14 -- "Prevent any transformation into CTo"**
-When unit dies, extract CTo. Create HAvoid3 rule that blocks any transformation resulting in CTo in the relevant slot or its siblings.
+**3.4: H14 -- "Prevent any transformation into CTo"** -- COMPLETE
+Mirror of H13 but inverted: HAvoid3-N kills newly-created units whose cTo matches the dying unit's cTo. Same `ifFinishedWorkingOnTask` mechanism as H13. Implementation: `createH14Rule` in `internal/engine/credit.go`.
 
-**3.5: Replace createAvoidanceRule with H12/H13/H14**
-The current `createAvoidanceRule` becomes three separate HindSight heuristic firings. Each generates a different HAvoid variant. Keep the existing avoidance mechanism as a fallback for units without slot-change provenance.
+**3.5: Replace createAvoidanceRule with H12/H13/H14** -- COMPLETE
+`HandleDeletedUnit` in `internal/engine/credit.go` dispatches: if the grave snapshot carries `cSlot` and `gSlot` (i.e. the unit was created via H6/H18), fire H12+H13+H14 in sequence; otherwise fall back to the legacy `createAvoidanceRule`. All three variants always fire together when provenance is present — each looks at a different aspect of the slot change.
 
-**3.6: HAvoidIfWorking -- probabilistic gate**
-"If generalizing IfWorkingOnTask, abort 90% of the time." A learned safety heuristic that prevents the most dangerous mutation target.
+**3.6: HAvoidIfWorking -- probabilistic gate** -- COMPLETE
+Seeded domain heuristic (not HindSight-generated) in `domains/common/heuristics.cue`. Uses `ifAboutToWorkOnTask`: if CurSlot=="generalizations" AND SlotToChange=="ifWorkingOnTask", calls abort 9 times out of 10. Requires new `random-int` DSL builtin. Defensive guard against the system generalizing its own heuristics' trigger conditions — rarely fires in math-domain runs but protects against meta-level self-destruction.
 
 ---
 
@@ -218,8 +218,8 @@ Enable concepts to specify how to generate new instances systematically. NNumber
 **7.3: Applics enrichment**
 Record full input/output pairs in applics (not just target + success boolean). Per-ThenPart Record/FailedRecord tracking. IntApplics (interesting applications) and IndirectApplics.
 
-**7.4: IfAboutToWorkOnTask slot**
-Add the pre-execution condition slot to the firing sequence. HAvoid variants that need to abort before any ThenParts run use this instead of ifPotentiallyRelevant.
+**~~7.4: IfAboutToWorkOnTask slot~~** COMPLETE
+Pulled forward during Phase 3.2. Wired as the first gate in `fireTaskRule` and included in IfPartSlots/programSlots.
 
 **7.5: Structured conjecture system**
 ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status tracking. H1 and H16 create ProtoConjec units instead of printing text.
@@ -233,7 +233,7 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 | 0 | CUE data layer | 7 | COMPLETE |
 | 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
-| 3 | Rich HindSight | 6 | Not started |
+| 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 (2 done) | H2, H19 done |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | Not started |

@@ -102,6 +102,7 @@ var builtins = map[string]builtinFn{
 	// Random
 	"random-choice": bRandomChoice,
 	"random-subset": bRandomSubset,
+	"random-int":    bRandomInt,
 
 	// Specialization pipeline
 	"add-spec-task":       bAddSpecTask,
@@ -851,6 +852,18 @@ func bRandomChoice(vm *VM) error {
 	}
 	idx := vm.Rng.Intn(len(items))
 	vm.push(items[idx])
+	return nil
+}
+
+// random-int: (n -- i)
+// Pushes a pseudo-random integer in [0, n). Returns 0 for n <= 0.
+func bRandomInt(vm *VM) error {
+	n := vm.pop().AsInt()
+	if n <= 0 {
+		vm.push(IntVal(0))
+		return nil
+	}
+	vm.push(IntVal(vm.Rng.Intn(n)))
 	return nil
 }
 

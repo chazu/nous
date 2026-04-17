@@ -1326,3 +1326,158 @@ func TestHAvoid2KillsBadNewUnits(t *testing.T) {
 		t.Errorf("expected TestChild to be killed by HAvoid2; still present\noutput:\n%s", buf.String())
 	}
 }
+
+// Phase 3.4: H14 — HAvoid3-N kills newly-created units whose cTo matches.
+func TestCreateH14Rule(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	domainSlot := unit.New("Domain")
+	domainSlot.Set("sibSlots", []string{"range"})
+	store.Put(domainSlot)
+
+	grave := GraveRecord{
+		Name:      "BadSpec",
+		IsA:       []string{"Op"},
+		Creditors: []string{"H6-Specialize"},
+		Cycle:     5,
+		Slots: map[string]any{
+			"cSlot": "domain",
+			"cFrom": "Set",
+			"cTo":   "EmptySet",
+			"gSlot": "specializations",
+		},
+	}
+
+	eng.createH14Rule(grave)
+
+	if !store.Has("HAvoid3-1") {
+		t.Fatal("expected HAvoid3-1 to be created")
+	}
+	avoid := store.Get("HAvoid3-1")
+	if avoid.GetString("avoidance_variant") != "H14" {
+		t.Errorf("avoidance_variant: got %q, want H14", avoid.GetString("avoidance_variant"))
+	}
+	if avoid.GetString("cTo") != "EmptySet" {
+		t.Errorf("cTo: got %q, want EmptySet", avoid.GetString("cTo"))
+	}
+	if avoid.GetString("ifFinishedWorkingOnTask") == "" {
+		t.Error("expected non-empty ifFinishedWorkingOnTask")
+	}
+}
+
+// Phase 3.4: three HAvoids (H12, H13, H14) should be created together when
+// provenance is complete, and the crude fallback should NOT fire.
+func TestHindSightDispatchesAllThreeVariants(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	h := unit.New("H6-Specialize")
+	h.SetWorth(700)
+	h.Set("isA", []string{"Heuristic"})
+	store.Put(h)
+
+	dead := unit.New("BadSpec")
+	dead.Set("creditors", []string{"H6-Specialize"})
+	dead.Set("isA", []string{"Op"})
+	dead.Set("cSlot", "domain")
+	dead.Set("cFrom", "Set")
+	dead.Set("cTo", "EmptySet")
+	dead.Set("gSlot", "specializations")
+	store.Put(dead)
+
+	eng.VM.DeletedSnapshots = map[string]map[string]any{
+		"BadSpec": {
+			"worth":     20,
+			"creditors": []string{"H6-Specialize"},
+			"isA":       []string{"Op"},
+			"cSlot":     "domain",
+			"cFrom":     "Set",
+			"cTo":       "EmptySet",
+			"gSlot":     "specializations",
+		},
+	}
+	store.Delete("BadSpec")
+	eng.HandleDeletedUnit("BadSpec")
+
+	if !store.Has("HAvoid-1") {
+		t.Error("expected HAvoid-1 (H12)")
+	}
+	if !store.Has("HAvoid2-1") {
+		t.Error("expected HAvoid2-1 (H13)")
+	}
+	if !store.Has("HAvoid3-1") {
+		t.Error("expected HAvoid3-1 (H14)")
+	}
+	if store.Has("HAvoid-BadSpec") {
+		t.Error("legacy fallback HAvoid-BadSpec should not be created when provenance present")
+	}
+}
+
+// Phase 3.6: HAvoidIfWorking is a seeded domain heuristic that aborts
+// ~90% of generalization tasks targeting ifWorkingOnTask. Over many tasks,
+// abort rate should be near 90%.
+func TestHAvoidIfWorking(t *testing.T) {
+	eng, buf := testEngine(t)
+	eng.Verbosity = 2
+
+	if !eng.Store.Has("HAvoidIfWorking") {
+		t.Fatal("expected HAvoidIfWorking to be seeded from domain CUE")
+	}
+
+	aborts := 0
+	runs := 0
+	// Target unit for the tasks
+	target := eng.Store.Get("SetUnion") // any op from the math domain
+	if target == nil {
+		t.Fatal("math domain missing SetUnion")
+	}
+
+	for i := 0; i < 100; i++ {
+		buf.Reset()
+		eng.WorkOnTask(&agenda.Task{
+			Priority: 500,
+			UnitName: "SetUnion",
+			SlotName: "generalizations",
+			Extra: map[string]any{
+				"SlotToChange":   "ifWorkingOnTask",
+				"GeneralizeFrom": "foo",
+				"GeneralizeTo":   "bar",
+			},
+		})
+		runs++
+		if strings.Contains(buf.String(), "aborted by HAvoidIfWorking") {
+			aborts++
+		}
+	}
+	// Expect ~90 aborts out of 100; allow wide band for RNG variance.
+	if aborts < 70 || aborts > 100 {
+		t.Errorf("HAvoidIfWorking abort rate: got %d/%d, want ~90", aborts, runs)
+	}
+	t.Logf("HAvoidIfWorking aborted %d/%d tasks (want ~90)", aborts, runs)
+
+	// Non-matching task (SlotToChange != ifWorkingOnTask) should never abort
+	// via HAvoidIfWorking.
+	buf.Reset()
+	eng.WorkOnTask(&agenda.Task{
+		Priority: 500,
+		UnitName: "SetUnion",
+		SlotName: "generalizations",
+		Extra: map[string]any{
+			"SlotToChange":   "thenCompute",
+			"GeneralizeFrom": "x",
+			"GeneralizeTo":   "y",
+		},
+	})
+	if strings.Contains(buf.String(), "aborted by HAvoidIfWorking") {
+		t.Errorf("HAvoidIfWorking aborted a non-matching task:\n%s", buf.String())
+	}
+}
