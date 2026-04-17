@@ -56,8 +56,12 @@ Multi-step pipeline implemented. H-Specialize evolved to emit tasks. H6-Speciali
 
 ### Issues
 
-**3.1: Track slot changes in mutations/specializations**
-When H6/H18/mutation creates a new unit by changing a slot, record: which slot was changed (CSlot), what it was changed from (CFrom), what it was changed to (CTo). Store on the new unit as provenance metadata. H6 already stores `restrictedTo` -- extend to also store `CSlot`, `CFrom`, `CTo`.
+**3.1: Track slot changes in mutations/specializations** -- COMPLETE (H6/H18)
+When H6/H18/mutation creates a new unit by changing a slot, record: which slot was changed (cSlot), what it was changed from (cFrom), what it was changed to (cTo). Store on the new unit as provenance metadata.
+
+Implemented via DSL builtin `record-slot-change (unitName slot from to --)` in `internal/dsl/builtins.go`. H6-Specialize and H18-Generalize in `domains/common/heuristics.cue` each call it after their existing slot write. Mutation path (`internal/engine/mutation.go`) is deferred until H12-14 land — code-edit mutation conflates with data-slot change, so we defer until we know what H12-14 actually need to read.
+
+Direction convention: `cFrom` is pre-change, `cTo` is post-change. For specialization `cFrom` is the wider type and `cTo` the narrower; for generalization the reverse. H13 (block CFrom) and H14 (block CTo) read the correct slot accordingly.
 
 **3.2: H12 -- "Prevent the slot type from being changed"**
 When unit dies, extract CSlot from its creation provenance. Create HAvoid rule that prevents changing objects of that slot's type (GSlot) via sibling slots (CSlotSibs).

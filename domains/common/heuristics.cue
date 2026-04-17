@@ -36,6 +36,9 @@ units: [
 					# Record the restriction (don't modify domain)
 					"to" @ "specUnit" @ "restrictedTo" set-slot
 
+					# Record slot-change provenance for Phase 3 HindSight (H12/H13/H14)
+					"specUnit" @ "slot" @ "from" @ "to" @ record-slot-change
+
 					# Set creditors and english
 					"H-Specialize" "specUnit" @ "creditors" set-slot
 					"Specialized " "CurUnit" @ concat " restricted to " concat "to" @ concat
@@ -211,6 +214,9 @@ units: [
 
 				# Apply the generalization
 				"genUnit" @ "slot" @ "from" @ "to" @ replace-slot-value drop
+
+				# Record slot-change provenance for Phase 3 HindSight (H12/H13/H14)
+				"genUnit" @ "slot" @ "from" @ "to" @ record-slot-change
 
 				# Set creditors and english
 				"H18-Generalize" "genUnit" @ "creditors" set-slot

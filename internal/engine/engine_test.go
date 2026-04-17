@@ -798,6 +798,22 @@ func TestSpecializationPipeline(t *testing.T) {
 	if !found {
 		t.Error("expected at least one specialized operation created via pipeline")
 	}
+
+	// Phase 3.1: every specialized unit should carry cSlot/cFrom/cTo provenance
+	// so H12/H13/H14 can later analyze what changed when it dies.
+	provCount := 0
+	for _, name := range store.All() {
+		u := store.Get(name)
+		if u == nil || !strings.Contains(u.GetString("english"), "Specialized") {
+			continue
+		}
+		if u.GetString("cSlot") != "" && u.GetString("cFrom") != "" && u.GetString("cTo") != "" {
+			provCount++
+		}
+	}
+	if provCount == 0 {
+		t.Error("expected at least one specialized unit to carry cSlot/cFrom/cTo provenance")
+	}
 }
 
 func TestGeneralizationPipeline(t *testing.T) {

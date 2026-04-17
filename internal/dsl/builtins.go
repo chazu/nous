@@ -104,9 +104,10 @@ var builtins = map[string]builtinFn{
 	"random-subset": bRandomSubset,
 
 	// Specialization pipeline
-	"add-spec-task":      bAddSpecTask,
-	"add-gen-task":       bAddGenTask,
-	"replace-slot-value": bReplaceSlotValue,
+	"add-spec-task":       bAddSpecTask,
+	"add-gen-task":        bAddGenTask,
+	"replace-slot-value":  bReplaceSlotValue,
+	"record-slot-change":  bRecordSlotChange,
 
 	// Misc
 	"noop": func(vm *VM) error { return nil },
@@ -963,6 +964,27 @@ func bReplaceSlotValue(vm *VM) error {
 	default:
 		vm.push(BoolVal(false))
 	}
+	return nil
+}
+
+// record-slot-change: (unitName slot from to --)
+// Writes cSlot/cFrom/cTo provenance onto the unit so HindSight heuristics
+// (H12/H13/H14) can later analyze what was changed. Direction convention:
+// cFrom is the pre-change value, cTo is the post-change value — for
+// specialization cFrom is wider and cTo narrower; for generalization the
+// reverse. No-op if the unit does not exist.
+func bRecordSlotChange(vm *VM) error {
+	to := vm.pop()
+	from := vm.pop()
+	slot := vm.pop()
+	unitName := vm.pop()
+	name := unitName.AsString()
+	if vm.Store.Get(name) == nil {
+		return nil
+	}
+	vm.Store.SetSlot(name, "cSlot", slot.AsString())
+	vm.Store.SetSlot(name, "cFrom", from.AsString())
+	vm.Store.SetSlot(name, "cTo", to.AsString())
 	return nil
 }
 

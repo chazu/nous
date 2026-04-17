@@ -506,3 +506,29 @@ func TestRandomSubset(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordSlotChange(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag, nil)
+	vm.Out = &bytes.Buffer{}
+
+	u := unit.New("Child")
+	store.Put(u)
+
+	_, err := vm.Execute(`"Child" "domain" "Anything" "Number" record-slot-change`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := store.Get("Child")
+	if got.GetString("cSlot") != "domain" {
+		t.Errorf("cSlot: got %q, want domain", got.GetString("cSlot"))
+	}
+	if got.GetString("cFrom") != "Anything" {
+		t.Errorf("cFrom: got %q, want Anything", got.GetString("cFrom"))
+	}
+	if got.GetString("cTo") != "Number" {
+		t.Errorf("cTo: got %q, want Number", got.GetString("cTo"))
+	}
+}
