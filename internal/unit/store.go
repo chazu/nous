@@ -132,6 +132,7 @@ func (s *Store) Specializations(name string) []string {
 // IfPartSlots returns the canonical ordering of condition slots.
 func IfPartSlots() []string {
 	return []string{
+		"ifAboutToWorkOnTask",
 		"ifPotentiallyRelevant",
 		"ifTrulyRelevant",
 		"ifWorkingOnTask",

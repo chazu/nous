@@ -1084,3 +1084,131 @@ func TestHeuristicsFocusableInUnitFocus(t *testing.T) {
 		t.Errorf("the Heuristic meta-unit should be skipped in unit-focus, but it was focused")
 	}
 }
+
+// Phase 3.2: H12 — when a unit dies with slot-change provenance, create an
+// HAvoid-N rule that vetoes future tasks matching (gSlot, cSlot ∈ sibs).
+func TestCreateH12Rule(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 0
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+
+	// Seed the Domain slot unit so siblingSlots finds something (optional —
+	// H12 also works with no siblings, blockSet then contains only cSlot).
+	domainSlot := unit.New("Domain")
+	domainSlot.Set("sibSlots", []string{"range", "arity"})
+	store.Put(domainSlot)
+
+	grave := GraveRecord{
+		Name:      "BadSpec",
+		IsA:       []string{"Op"},
+		Creditors: []string{"H6-Specialize"},
+		Worth:     40,
+		Cycle:     5,
+		Slots: map[string]any{
+			"cSlot": "domain",
+			"cFrom": "Anything",
+			"cTo":   "Set",
+			"gSlot": "specializations",
+		},
+	}
+
+	eng.createH12Rule(grave)
+
+	if !store.Has("HAvoid-1") {
+		t.Fatal("expected HAvoid-1 to be created")
+	}
+	avoid := store.Get("HAvoid-1")
+	if avoid.Worth() != 700 {
+		t.Errorf("HAvoid worth: got %d, want 700", avoid.Worth())
+	}
+	if avoid.GetString("avoidance_variant") != "H12" {
+		t.Errorf("avoidance_variant: got %q, want H12", avoid.GetString("avoidance_variant"))
+	}
+	if g := avoid.GetString("gSlot"); g != "specializations" {
+		t.Errorf("gSlot: got %q, want specializations", g)
+	}
+	sibs := avoid.GetStrings("cSlotSibs")
+	if len(sibs) != 3 {
+		t.Errorf("cSlotSibs: got %v, want [domain range arity]", sibs)
+	}
+	ifProg := avoid.GetString("ifAboutToWorkOnTask")
+	if ifProg == "" {
+		t.Fatal("expected non-empty ifAboutToWorkOnTask")
+	}
+	if len(dsl.Tokenize(ifProg)) == 0 {
+		t.Error("ifAboutToWorkOnTask failed to tokenize")
+	}
+}
+
+// Phase 3.2: an HAvoid rule with ifAboutToWorkOnTask should abort a task
+// whose CurSlot and SlotToChange match the stored (gSlot, cSlotSibs).
+func TestHAvoidAbortsMatchingTask(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	eng := New(store, ag)
+	eng.Verbosity = 2
+	buf := &bytes.Buffer{}
+	eng.Out = buf
+	eng.VM.Out = buf
+
+	// Minimal Heuristic meta-unit so Store.Examples("Heuristic") returns our HAvoid.
+	h := unit.New("Heuristic")
+	h.Set("isA", []string{"Anything"})
+	store.Put(h)
+
+	// Target unit the task will work on.
+	target := unit.New("SomeOp")
+	target.Set("isA", []string{"Op", "Anything"})
+	store.Put(target)
+
+	// Build a grave record matching what H6 would produce.
+	grave := GraveRecord{
+		Name:      "BadSpec",
+		IsA:       []string{"Op"},
+		Creditors: []string{"H6-Specialize"},
+		Cycle:     1,
+		Slots: map[string]any{
+			"cSlot": "domain",
+			"gSlot": "specializations",
+		},
+	}
+	eng.createH12Rule(grave)
+
+	// Task that should trip the veto: working on specializations, changing domain.
+	task := &agenda.Task{
+		Priority: 500,
+		UnitName: "SomeOp",
+		SlotName: "specializations",
+		Extra: map[string]any{
+			"SlotToChange":   "domain",
+			"SpecializeFrom": "Anything",
+			"SpecializeTo":   "Set",
+		},
+	}
+	eng.WorkOnTask(task)
+
+	out := buf.String()
+	if !strings.Contains(out, "Task aborted") {
+		t.Errorf("expected task abort message; got output:\n%s", out)
+	}
+
+	// Task that should NOT trip (different SlotToChange).
+	buf.Reset()
+	task2 := &agenda.Task{
+		Priority: 500,
+		UnitName: "SomeOp",
+		SlotName: "specializations",
+		Extra: map[string]any{
+			"SlotToChange":   "range",
+			"SpecializeFrom": "Anything",
+			"SpecializeTo":   "Set",
+		},
+	}
+	eng.WorkOnTask(task2)
+	if strings.Contains(buf.String(), "Task aborted") {
+		t.Errorf("unexpected abort on non-matching task:\n%s", buf.String())
+	}
+}

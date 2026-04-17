@@ -193,6 +193,7 @@ func (e *Engine) pickProgramSlot(h *unit.Unit) (string, string) {
 
 func programSlots() []string {
 	return []string{
+		"ifAboutToWorkOnTask",
 		"ifPotentiallyRelevant",
 		"ifTrulyRelevant",
 		"ifWorkingOnTask",

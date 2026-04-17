@@ -630,8 +630,9 @@ func bAnalyzeAndSpecialize(vm *VM) error {
 
 	// Copy program slots, prepending type check to ifPotentiallyRelevant
 	for _, slot := range []string{
-		"ifPotentiallyRelevant", "ifTrulyRelevant", "ifWorkingOnTask",
-		"ifFinishedWorkingOnTask", "thenCompute", "thenAddToAgenda",
+		"ifAboutToWorkOnTask", "ifPotentiallyRelevant", "ifTrulyRelevant",
+		"ifWorkingOnTask", "ifFinishedWorkingOnTask",
+		"thenCompute", "thenAddToAgenda",
 		"thenDefineNewConcepts", "thenDeleteOldConcepts", "thenPrintToUser",
 		"thenConjecture",
 	} {
@@ -972,7 +973,9 @@ func bReplaceSlotValue(vm *VM) error {
 // (H12/H13/H14) can later analyze what was changed. Direction convention:
 // cFrom is the pre-change value, cTo is the post-change value — for
 // specialization cFrom is wider and cTo narrower; for generalization the
-// reverse. No-op if the unit does not exist.
+// reverse. Also copies the current task's CurSlot as gSlot — the task slot
+// being computed when the unit was created (e.g. "specializations"),
+// EURISKO's GSlot. No-op if the unit does not exist.
 func bRecordSlotChange(vm *VM) error {
 	to := vm.pop()
 	from := vm.pop()
@@ -985,6 +988,9 @@ func bRecordSlotChange(vm *VM) error {
 	vm.Store.SetSlot(name, "cSlot", slot.AsString())
 	vm.Store.SetSlot(name, "cFrom", from.AsString())
 	vm.Store.SetSlot(name, "cTo", to.AsString())
+	if gSlot := vm.GetEnv("CurSlot"); gSlot.AsString() != "" {
+		vm.Store.SetSlot(name, "gSlot", gSlot.AsString())
+	}
 	return nil
 }
 

@@ -63,8 +63,18 @@ Implemented via DSL builtin `record-slot-change (unitName slot from to --)` in `
 
 Direction convention: `cFrom` is pre-change, `cTo` is post-change. For specialization `cFrom` is the wider type and `cTo` the narrower; for generalization the reverse. H13 (block CFrom) and H14 (block CTo) read the correct slot accordingly.
 
-**3.2: H12 -- "Prevent the slot type from being changed"**
-When unit dies, extract CSlot from its creation provenance. Create HAvoid rule that prevents changing objects of that slot's type (GSlot) via sibling slots (CSlotSibs).
+**3.2: H12 -- "Prevent the slot type from being changed"** -- COMPLETE
+When unit dies, extract cSlot/gSlot from its creation provenance. Create HAvoid-N rule that vetoes any future task whose CurSlot == gSlot and whose SlotToChange ∈ (cSlot ∪ siblings). HAvoid uses `ifAboutToWorkOnTask`, aborts the task before H6/H18 fires.
+
+Implementation: `createH12Rule` in `internal/engine/credit.go`, called from `HandleDeletedUnit` when the graveyard snapshot carries both `cSlot` and `gSlot`. Legacy `createAvoidanceRule` remains as fallback for units without provenance (H-RunOnExamples output, seed units).
+
+New infrastructure:
+- `ifAboutToWorkOnTask` wired as first gate in `fireTaskRule` (previously the slot existed in IfPartSlots and programSlots lists but was never executed). Pulled forward from Phase 7.4 — H13/H14 don't need it; only H12 and HAvoidIfWorking do.
+- `record-slot-change` DSL builtin now also captures the task's CurSlot as `gSlot` on the created unit.
+- HAvoid naming: `HAvoid-N` gensym (EURISKO does no up-front dedup; duplicates resolved later by H19).
+- Starting worth 700 (EURISKO value), isA includes HAvoidRule and HindSightRule.
+
+Siblings computed at HAvoid-creation time via `siblingSlots` — reads the slot unit's pre-computed `sibSlots` list. EURISKO's 50-sibling cap preserved; overflow falls back to cSlot alone.
 
 **3.3: H13 -- "Prevent changing CFrom into anything"**
 When unit dies, extract CFrom. Create HAvoid2 rule that blocks changing CFrom in the relevant slot or its siblings.

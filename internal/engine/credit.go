@@ -147,8 +147,119 @@ func (e *Engine) HandleDeletedUnit(unitName string) {
 		}
 	}
 
-	// HindSight: create an avoidance heuristic
-	e.createAvoidanceRule(grave)
+	// HindSight: create an avoidance heuristic. If the dying unit carries
+	// slot-change provenance (cSlot/cFrom/cTo/gSlot from H6/H18), prefer the
+	// EURISKO-style H12 rule that blocks future tasks by slot identity.
+	// Otherwise fall back to the crude type-based avoidance rule.
+	if hasSlotChangeProvenance(snapshot) {
+		e.createH12Rule(grave)
+	} else {
+		e.createAvoidanceRule(grave)
+	}
+}
+
+func hasSlotChangeProvenance(snapshot map[string]any) bool {
+	cSlot, _ := snapshot["cSlot"].(string)
+	gSlot, _ := snapshot["gSlot"].(string)
+	return cSlot != "" && gSlot != ""
+}
+
+// createH12Rule generates an HAvoid heuristic (EURISKO's H12 behaviour) that
+// blocks any future task whose CurSlot matches the dying unit's gSlot and
+// whose SlotToChange matches the dying unit's cSlot (or any sibling of it).
+//
+// The HAvoid uses ifAboutToWorkOnTask — it vetoes the task before H6/H18
+// even fires.
+func (e *Engine) createH12Rule(grave GraveRecord) {
+	cSlot, _ := grave.Slots["cSlot"].(string)
+	gSlot, _ := grave.Slots["gSlot"].(string)
+	if cSlot == "" || gSlot == "" {
+		return
+	}
+
+	// Siblings of cSlot: look up the slot unit (PascalCase) and read its
+	// pre-computed sibSlots list. EURISKO caps at 50 siblings; beyond that
+	// falls back to just cSlot itself.
+	sibs := siblingSlots(e.Store, cSlot)
+	if len(sibs) > 50 {
+		sibs = nil
+	}
+	// Always include cSlot itself in the block set.
+	blockSet := append([]string{cSlot}, sibs...)
+
+	// Gensym an HAvoid-N name.
+	avoidName := nextHAvoidName(e.Store, "HAvoid")
+	if avoidName == "" {
+		return
+	}
+
+	// Build the ifAboutToWorkOnTask DSL program. Guard: CurSlot == gSlot
+	// AND SlotToChange ∈ blockSet. If matched, call abort.
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `"CurSlot" @ "%s" =`+"\n", gSlot)
+	sb.WriteString(`"SlotToChange" get-task-extra "stc" !` + "\n")
+	sb.WriteString(`false "match" !` + "\n")
+	for _, s := range blockSet {
+		fmt.Fprintf(&sb, `"stc" @ "%s" = if true "match" ! then`+"\n", s)
+	}
+	sb.WriteString(`"match" @ and` + "\n")
+	sb.WriteString(`if abort then` + "\n")
+	sb.WriteString(`false` + "\n")
+	ifProg := sb.String()
+
+	tokens := dsl.Tokenize(ifProg)
+	if len(tokens) == 0 {
+		e.log(1, "  HindSight: H12 produced untokenizable program for %s", grave.Name)
+		return
+	}
+
+	avoid := unit.New(avoidName)
+	avoid.SetWorth(700) // EURISKO HAvoid starting worth
+	avoid.Set("isA", []string{"Heuristic", "HAvoidRule", "HindSightRule", "Anything"})
+	avoid.Set("english", fmt.Sprintf(
+		"Avoid: when computing %s, don't alter %s (or siblings) — learned from %s dying",
+		gSlot, cSlot, grave.Name))
+	avoid.Set("creditors", []string{"H12"})
+	avoid.Set("ifAboutToWorkOnTask", ifProg)
+	avoid.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	avoid.Set("creationCycle", e.cycle)
+	avoid.Set("avoidance_of", grave.Name)
+	avoid.Set("avoidance_variant", "H12")
+	avoid.Set("gSlot", gSlot)
+	avoid.Set("cSlot", cSlot)
+	avoid.Set("cSlotSibs", blockSet)
+
+	e.Store.Put(avoid)
+	e.log(1, "  HindSight: created %s (blocks %s tasks that alter %s slot, from %s)",
+		avoidName, gSlot, cSlot, grave.Name)
+}
+
+// siblingSlots returns the sibSlots list of the slot unit corresponding to
+// the given lowercase-first slot key. Returns nil if the slot unit is not
+// found.
+func siblingSlots(store *unit.Store, slotKey string) []string {
+	if slotKey == "" {
+		return nil
+	}
+	// Slot keys are lowercase-first; slot definition units are PascalCase.
+	pascalKey := strings.ToUpper(slotKey[:1]) + slotKey[1:]
+	slotUnit := store.Get(pascalKey)
+	if slotUnit == nil {
+		return nil
+	}
+	return slotUnit.GetStrings("sibSlots")
+}
+
+// nextHAvoidName returns the next unused name with the given prefix,
+// using the pattern "<prefix>-<n>" starting at 1.
+func nextHAvoidName(store *unit.Store, prefix string) string {
+	for i := 1; i < 100000; i++ {
+		name := fmt.Sprintf("%s-%d", prefix, i)
+		if !store.Has(name) {
+			return name
+		}
+	}
+	return ""
 }
 
 // createAvoidanceRule generates an HAvoid heuristic that prevents the same

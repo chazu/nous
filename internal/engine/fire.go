@@ -16,6 +16,24 @@ func (e *Engine) fireTaskRule(heuristic string, task *agenda.Task) (bool, bool, 
 
 	e.VM.SetEnv("ArgU", dsl.StringVal(task.UnitName))
 
+	// Check ifAboutToWorkOnTask first — pre-flight veto slot used by HAvoid
+	// rules (H12) and HAvoidIfWorking to abort the whole task before any
+	// other heuristic fires. Falsy result means "this heuristic doesn't
+	// match, skip it"; calling `abort` from inside aborts the task.
+	if prog := h.GetString("ifAboutToWorkOnTask"); prog != "" {
+		v, err := e.VM.Execute(prog)
+		if err != nil {
+			if dsl.IsAbort(err) {
+				return true, true, false
+			}
+			e.log(3, "    %s.ifAboutToWorkOnTask error: %v", heuristic, err)
+			return false, false, false
+		}
+		if !v.Truthy() {
+			return false, false, false
+		}
+	}
+
 	// Check ifPotentiallyRelevant first (quick filter)
 	if prog := h.GetString("ifPotentiallyRelevant"); prog != "" {
 		v, err := e.VM.Execute(prog)
