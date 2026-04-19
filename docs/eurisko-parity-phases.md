@@ -117,9 +117,10 @@ Implemented as H2-KillGarbageCreator during engine stabilization. Scans children
 **4.3: H4 -- "Gather empirical data about new concepts"** -- COMPLETE
 Implemented as a CUE heuristic in `domains/common/heuristics.cue`. Uses `ifFinishedWorkingOnTask` + the `new-units` builtin (both landed in Phase 3.3) to schedule an `examples` task for each newly-created unit that doesn't yet have examples populated. Fires reliably — a 100-cycle math run leaves ~13 pending "After synthesis, seek instances" tasks on the agenda.
 
-**4.4: H8 -- "Find applics in generalizations' applics"** -- BLOCKED on type predicates
-Needs `DomainTests` — running each domain type's `defn` as a predicate against a candidate arg to check type applicability. We don't have type defn predicates on our type units (Set, Number, etc.). Deferred until Phase 5.6 (meta-ops with executable defns) or hand-seeded domain-type predicates.
-Workable shape when unblocked: walk `generalizations` chain, read `applics-args`, filter by domain-type predicates, apply this unit's alg, record.
+**4.4: H8 -- "Find applics in generalizations' applics"** -- COMPLETE (via Phase 5.6 C.2)
+Type-predicate defns landed on Set/List/Bag (`is-list?`) and Number (`is-int?`) — see 5.6 C.1 below. H8 itself in `domains/common/heuristics.cue` walks `generalizations`, filters each parent's `applics-args` by positional domain-type match via `apply-pred` on the dereferenced arg's data, and when the tuple passes it applies this op's defn and records the new applic. One-shot per op (`h8Ran` flag), bounded by configurable `h8Cap` (default 3).
+H6-Specialize now links new specs to parent via `specializations` (inverse-wires `generalizations` on the spec) so H8's walk finds something.
+300-cycle math run: 8 H8 firings, 2-3 propagated applics per firing across SetIntersect/SetUnion/GCD/DivisorsOf/SetDifference specializations.
 
 **4.5: H10/H15 -- "Get examples from operations whose range is this type"** -- COMPLETE
 Both in `domains/common/heuristics.cue`. H10 picks one random op from `isRangeOf` via `random-choice`; H15 iterates them all. Both use the Phase 7.3 `applics-outputs` builtin and `add-to-slot` (inverse-maintained) to append each recorded output as an Example. Dormant unless the target unit is in some op's range — works for Set/Number in the math domain once applics accumulate.
@@ -191,8 +192,15 @@ OrdStruc/UnOrdStruc, MultEleStruc/NoMultEleStruc, EmptyStruc/NonEmptyStruc, SetO
 **5.5: Per-type operations**
 ListInsert/Delete/Intersect/Union/Difference, BagInsert/Delete/Intersect/Union/Difference. Each as a unit with defn and domain/range.
 
-**5.6: Meta-operations with algorithms**
-Give Compose and Restrict executable defn slots. Implement InvertOp. Implement Transpose (swap binary op argument order).
+**5.6: Meta-operations with algorithms** -- PARTIAL (C.1 + C.2 complete; A/B/D deferred)
+
+Phase 5.6 was sliced into four independent pieces. Slices C.1 and C.2 shipped together and unblock H8 (Phase 4.4).
+
+- **C.1 Type predicates** -- COMPLETE. New `is-int?`/`is-list?`/`is-string?` DSL builtins introspecting Value kind. `defn` slots added to `Number` (`is-int?`) and `Set`/`List`/`Bag` (`is-list?` — finer discrimination is semantic work, not type-kind work). `apply-pred` on a type unit now acts as a type test.
+- **C.2 H8** -- COMPLETE (see 4.4 above).
+- **A Transpose** -- deferred. `transpose-op` builtin + H-Transpose heuristic that creates `Transpose-<op>` variants for non-commutative binary ops.
+- **B Compose** -- deferred. `compose-ops` builtin synthesizing a new op whose defn chains `apply-op(f)` then `apply-op(g)`, with range/domain compatibility checks. Supersedes the ad-hoc H-CheckDomain SelfCompose code path.
+- **D Restrict + InvertOp** -- deferred. Restrict partially exists via `restrictedTo` (H6-Specialize); InvertOp is genuinely complex and low priority.
 
 **5.7: Choice operations**
 RandomChoose, RandomSubset, GoodChoose, GoodSubset, BestChoose, BestSubset as unit concepts (they exist as behaviors in H3/H5 but need to be first-class units that other heuristics can discover and reason about).
@@ -296,7 +304,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
-| 4 | Remaining heuristics | 10 | COMPLETE (H8 blocked on type predicates) |
+| 4 | Remaining heuristics | 10 | COMPLETE |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | Not started |
