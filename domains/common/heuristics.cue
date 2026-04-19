@@ -659,4 +659,54 @@ units: [
 			"H1: flagged " "ArgU" @ concat " for specialization" concat print
 			"""#
 	},
+	{
+		name:    "H27"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "For an interesting unary predicate, define the category of domain elements that satisfy it"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "UnaryPred" isa?
+			"ArgU" @ "worth" get-slot 600 >=
+			"ArgU" @ "isAInt" get-slot nil !=
+			or
+			"ArgU" @ "rarity" get-slot nil !=
+			"ArgU" @ "rarity" get-slot first 0.3 <
+			and
+			or
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "domain" get-slot first "srcCat" !
+			"srcCat" @ nil !=
+			if
+				"SatisfyingSetFor-" "ArgU" @ concat "resName" !
+				"resName" @ unit-exists? not
+				if
+					"resName" @ "srcCat" @ "isA" get-slot first create-unit drop
+					"srcCat" @ "resName" @ "generalizations" add-to-slot
+					"ArgU" @ "resName" @ "defn" set-slot
+					"H27" "resName" @ "creditors" set-slot
+					"Satisfying " "srcCat" @ concat "s for " concat "ArgU" @ concat
+					"resName" @ "english" set-slot
+
+					"srcCat" @ "examples" get-slot
+					each
+						it "ex" !
+						"ex" @ "data" get-slot "ArgU" @ apply-pred
+						if
+							"ex" @ "resName" @ "examples" add-to-slot
+						then
+					end
+
+					"resName" @ "examples" get-slot list-length 4 >=
+					if
+						500 "resName" @ "whyInt" "H27: explore why this predicate set is interesting" add-task
+					then
+
+					"H27: created " "resName" @ concat print
+				then
+			then
+			"""#
+	},
 ]

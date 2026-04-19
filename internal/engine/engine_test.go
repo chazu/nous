@@ -1925,3 +1925,141 @@ func TestH1SpecTaskReachesProposers(t *testing.T) {
 		t.Error("expected H3/H5 to emit a populated spec task after H1's bare task ran")
 	}
 }
+
+// Phase 5.11: H27 defines the SatisfyingSetFor<pred> category when fired on
+// an interesting unary predicate.
+func TestH27CreatesSatisfyingSet(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H27") {
+		t.Fatal("H27 not loaded")
+	}
+	if !eng.Store.Has("IsEmpty") {
+		t.Fatal("IsEmpty predicate not loaded")
+	}
+
+	// Make IsEmpty 'interesting' by bumping worth >= 600.
+	eng.Store.SetSlot("IsEmpty", "worth", 700)
+
+	// Seed a Set category with 5 examples: 3 empty, 2 non-empty.
+	src := unit.New("TestSetCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"E1", "E2", "E3", "NE1", "NE2"})
+	eng.Store.Put(src)
+
+	mk := func(name string, data []int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", data)
+		eng.Store.Put(u)
+	}
+	mk("E1", []int{})
+	mk("E2", []int{})
+	mk("E3", []int{})
+	mk("NE1", []int{1})
+	mk("NE2", []int{1, 2})
+
+	// Override IsEmpty's domain to point at our test category so H27 picks
+	// TestSetCat as the source.
+	eng.Store.SetSlot("IsEmpty", "domain", []string{"TestSetCat"})
+
+	eng.fireUnitRule("H27", "IsEmpty")
+
+	result := eng.Store.Get("SatisfyingSetFor-IsEmpty")
+	if result == nil {
+		t.Fatalf("SatisfyingSetFor-IsEmpty not created. Store: %v", eng.Store.All())
+	}
+	exs := result.GetStrings("examples")
+	if len(exs) != 3 {
+		t.Errorf("expected 3 satisfying examples, got %d: %v", len(exs), exs)
+	}
+	wantSet := map[string]bool{"E1": true, "E2": true, "E3": true}
+	for _, e := range exs {
+		if !wantSet[e] {
+			t.Errorf("unexpected satisfying example %q", e)
+		}
+	}
+
+	if gen := result.GetStrings("generalizations"); len(gen) == 0 || gen[0] != "TestSetCat" {
+		t.Errorf("generalizations: got %v, want [TestSetCat]", gen)
+	}
+	if creds := result.GetStrings("creditors"); len(creds) != 1 || creds[0] != "H27" {
+		t.Errorf("creditors: got %v", creds)
+	}
+	if defn := result.GetString("defn"); defn != "IsEmpty" {
+		t.Errorf("defn: got %q, want IsEmpty", defn)
+	}
+
+	// whyInt task should be enqueued since we have >=4 source examples
+	// (actually only 3 satisfy — gate is on satisfying count >=4). Adjust
+	// expectation: with 3 satisfying, NO whyInt task should appear.
+	for eng.Agenda.Len() > 0 {
+		task := eng.Agenda.Pop()
+		if task.UnitName == "SatisfyingSetFor-IsEmpty" && task.SlotName == "whyInt" {
+			t.Errorf("whyInt should NOT be scheduled with only 3 satisfying examples")
+			break
+		}
+	}
+}
+
+// Phase 5.11: H27 whyInt seeding fires when >=4 examples satisfy the pred.
+func TestH27SchedulesWhyIntWhenEnough(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	eng.Store.SetSlot("IsEmpty", "worth", 700)
+
+	src := unit.New("BigEmptyCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"A", "B", "C", "D", "E"})
+	eng.Store.Put(src)
+	for _, n := range []string{"A", "B", "C", "D", "E"} {
+		u := unit.New(n)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", []int{})
+		eng.Store.Put(u)
+	}
+
+	eng.Store.SetSlot("IsEmpty", "domain", []string{"BigEmptyCat"})
+	eng.fireUnitRule("H27", "IsEmpty")
+
+	found := false
+	for eng.Agenda.Len() > 0 {
+		task := eng.Agenda.Pop()
+		if task.UnitName == "SatisfyingSetFor-IsEmpty" && task.SlotName == "whyInt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected whyInt task on SatisfyingSetFor-IsEmpty (>=4 satisfying examples)")
+	}
+}
+
+// Phase 5.11: H27 gate rejects non-interesting predicates (low worth, no
+// IsAInt, no rare rarity).
+func TestH27GateRejectsBoringPred(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	// IsEmpty starts at worth=500 in the seed; ensure it has no IsAInt
+	// and no rarity. Default gate should reject it.
+	eng.Store.SetSlot("IsEmpty", "worth", 500)
+
+	src := unit.New("BoringCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"X"})
+	eng.Store.Put(src)
+	x := unit.New("X")
+	x.Set("isA", []string{"Set", "Anything"})
+	x.Set("data", []int{})
+	eng.Store.Put(x)
+
+	eng.Store.SetSlot("IsEmpty", "domain", []string{"BoringCat"})
+	eng.fireUnitRule("H27", "IsEmpty")
+
+	if eng.Store.Has("SatisfyingSetFor-IsEmpty") {
+		t.Error("H27 fired on boring predicate; gate should have rejected it")
+	}
+}
