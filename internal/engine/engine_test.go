@@ -2191,6 +2191,69 @@ func TestHExercisePredsPopulatesRarity(t *testing.T) {
 	}
 }
 
+// Phase 5.6 C.2: H8 walks an op's generalizations chain, filters each
+// applic's arg tuple by the op's domain type predicates, and propagates
+// matching tuples into the op's own applics.
+func TestH8PropagatesApplicsViaTypeCheck(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H8") {
+		t.Fatal("H8 not loaded")
+	}
+
+	// Parent op with applics: GCD on (N-12, N-8) -> result name recorded.
+	// Create a spec child "MyGCD" of GCD whose domain is [EvenNum, EvenNum].
+	// H8 should see GCD's (12,8) args, check they satisfy EvenNum (both even),
+	// apply MyGCD's defn, and record a new applic.
+	parent := unit.New("MyGCDParent")
+	parent.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	parent.Set("domain", []string{"Number", "Number"})
+	parent.Set("range", []string{"Number"})
+	parent.Set("defn", "gcd")
+	parent.Set("applics", []map[string]any{
+		{"target": "MyGCDParent", "args": []string{"N-12", "N-8"}, "output": "Out1", "result": true, "direct": true},
+		{"target": "MyGCDParent", "args": []string{"N-7", "N-3"}, "output": "Out2", "result": true, "direct": true},
+	})
+	eng.Store.Put(parent)
+
+	child := unit.New("MyGCDChild")
+	child.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	child.Set("domain", []string{"EvenNum", "EvenNum"})
+	child.Set("range", []string{"Number"})
+	child.Set("defn", "gcd")
+	child.Set("generalizations", []string{"MyGCDParent"})
+	eng.Store.Put(child)
+
+	// Ensure the numeric arg units exist with data slots. N-12, N-8 are
+	// seeded by the math domain; verify.
+	for _, n := range []string{"N-12", "N-8", "N-7", "N-3"} {
+		if eng.Store.Get(n) == nil {
+			t.Fatalf("seed missing %s", n)
+		}
+	}
+
+	eng.fireUnitRule("H8", "MyGCDChild")
+
+	applics, _ := eng.Store.Get("MyGCDChild").Get("applics").([]map[string]any)
+	if len(applics) != 1 {
+		t.Fatalf("expected 1 propagated applic (12,8 match EvenNum; 7,3 don't), got %d: %+v",
+			len(applics), applics)
+	}
+	a := applics[0]
+	args, _ := a["args"].([]string)
+	if len(args) != 2 || args[0] != "N-12" || args[1] != "N-8" {
+		t.Errorf("args: got %v, want [N-12 N-8]", args)
+	}
+
+	// Idempotent: second firing should not add another applic (h8Ran flag).
+	eng.fireUnitRule("H8", "MyGCDChild")
+	applics, _ = eng.Store.Get("MyGCDChild").Get("applics").([]map[string]any)
+	if len(applics) != 1 {
+		t.Errorf("second firing duplicated applic; h8Ran flag not honored: %d applics", len(applics))
+	}
+}
+
 func toIntTest(v any) int {
 	switch x := v.(type) {
 	case int:

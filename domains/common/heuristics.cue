@@ -44,6 +44,11 @@ units: [
 					"Specialized " "CurUnit" @ concat " restricted to " concat "to" @ concat
 					"specUnit" @ "english" set-slot
 
+					# Link spec to parent via Specializations (inverse auto-wires
+					# Generalizations on the spec). H8 walks the Generalizations
+					# chain to propagate applicable arg tuples.
+					"specUnit" @ "CurUnit" @ "specializations" add-to-slot
+
 					600 "specUnit" @ "examples" "Specialized op needs testing" add-task
 					"Created specialized: " "specName" @ concat print
 				then
@@ -950,6 +955,82 @@ units: [
 
 					"H26: created " "resName" @ concat print
 				then
+			then
+			"""#
+	},
+	{
+		name:    "H8"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "Propagate applicable arg tuples from generalizations to this op using type-pred domain checks"
+		overallRecord: {successes: 0, failures: 0}
+		h8Cap: 3
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"ArgU" @ "domain" get-slot nil !=
+			and
+			"ArgU" @ "generalizations" get-slot nil !=
+			and
+			"ArgU" @ "h8Ran" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "domain" get-slot "myDomain" !
+			"H8" "h8Cap" get-slot "cap" !
+			0 "created" !
+			"ArgU" @ "generalizations" get-slot
+			each
+				it "gen" !
+				"gen" @ applics-args
+				each
+					it "argTuple" !
+					"created" @ "cap" @ <
+					if
+						"argTuple" @ list-length "myDomain" @ list-length =
+						if
+							true "allMatch" !
+							0 "i" !
+							"argTuple" @
+							each
+								it "argName" !
+								"myDomain" @ "i" @ list-get "expectedType" !
+								"argName" @ unit-exists?
+								"expectedType" @ nil !=
+								and
+								if
+									"argName" @ "data" get-slot "expectedType" @ apply-pred not
+									if false "allMatch" ! then
+								else
+									false "allMatch" !
+								then
+								"i" @ 1 + "i" !
+							end
+							"allMatch" @
+							if
+								"argTuple" @ "ArgU" @ apply-op-args "result" !
+								"result" @ nil !=
+								if
+									"ArgU" @ "-on-" concat "argTuple" @ "-" list-join concat "resultName" !
+									"resultName" @ unit-exists? not
+									if
+										"resultName" @ "ArgU" @ "range" get-slot first create-unit drop
+										"result" @ "resultName" @ "data" set-slot
+										"H8" "resultName" @ "creditors" set-slot
+										"ArgU" @ "argTuple" @ "resultName" @ record-applic
+										"created" @ 1 + "created" !
+									then
+								then
+							then
+						then
+					then
+				end
+			end
+			true "ArgU" @ "h8Ran" set-slot
+			"created" @ 0 >
+			if
+				"H8: propagated " "created" @ concat " applics to " concat "ArgU" @ concat print
 			then
 			"""#
 	},
