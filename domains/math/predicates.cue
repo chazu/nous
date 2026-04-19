@@ -31,7 +31,7 @@ units: [
 	},
 	{
 		name:   "IsEmpty"
-		worth:  500
+		worth:  700
 		isA: ["UnaryPred", "Pred", "MathPred", "Anything"]
 		domain: ["Set"]
 		range: ["TruthValue"]
@@ -41,7 +41,7 @@ units: [
 	},
 	{
 		name:   "IsSingleton"
-		worth:  500
+		worth:  700
 		isA: ["UnaryPred", "Pred", "MathPred", "Anything"]
 		domain: ["Set"]
 		range: ["TruthValue"]

@@ -761,4 +761,49 @@ units: [
 			then
 			"""#
 	},
+	{
+		name:    "H-ExercisePreds"
+		worth:   400
+		isA: ["Heuristic", "Anything"]
+		english: "Run each domain-matching unary predicate on a category's examples to populate rarity (one-shot per category)"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "UnaryPred" isa? not
+			"ArgU" @ "examples" get-slot nil !=
+			and
+			"ArgU" @ "examples" get-slot list-length 0 >
+			and
+			"ArgU" @ "predsExercised" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"UnaryPred" examples
+			each
+				it "p" !
+				"p" @ "domain" get-slot nil !=
+				if
+					"p" @ "domain" get-slot first "pDom" !
+					"ArgU" @ "pDom" @ isa?
+					if
+						"ArgU" @ "examples" get-slot
+						each
+							it "ex" !
+							"ex" @ "data" get-slot nil !=
+							if
+								"ex" @ "data" get-slot "p" @ apply-pred drop
+							then
+						end
+						# One-shot: schedule a focus task on the pred so H27/H28
+						# get a chance to run with ArgU=pred.
+						"p" @ "predFocusScheduled" get-slot nil =
+						if
+							500 "p" @ "whyInt" "H-ExercisePreds: focus pred for H27/H28" add-task
+							true "p" @ "predFocusScheduled" set-slot
+						then
+					then
+				then
+			end
+			true "ArgU" @ "predsExercised" set-slot
+			"""#
+	},
 ]

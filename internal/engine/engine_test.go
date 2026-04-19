@@ -2123,3 +2123,78 @@ func TestH28CreatesFailingSet(t *testing.T) {
 		t.Error("expected whyInt task on FailingSetFor-IsEmpty")
 	}
 }
+
+// H-ExercisePreds populates rarity on unary predicates by running them on
+// the focused category's examples. One-shot per category via predsExercised
+// flag.
+func TestHExercisePredsPopulatesRarity(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-ExercisePreds") {
+		t.Fatal("H-ExercisePreds not loaded")
+	}
+
+	src := unit.New("MixedSetsCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"M1", "M2", "M3"})
+	eng.Store.Put(src)
+
+	mk := func(name string, data []int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", data)
+		eng.Store.Put(u)
+	}
+	mk("M1", []int{})
+	mk("M2", []int{1})
+	mk("M3", []int{1, 2})
+
+	// Clear any pre-existing rarity on IsEmpty.
+	eng.Store.SetSlot("IsEmpty", "rarity", nil)
+
+	eng.fireUnitRule("H-ExercisePreds", "MixedSetsCat")
+
+	rar := eng.Store.Get("IsEmpty").Get("rarity")
+	if rar == nil {
+		t.Fatalf("IsEmpty.rarity not populated")
+	}
+	tuple, ok := rar.([]any)
+	if !ok || len(tuple) != 3 {
+		t.Fatalf("rarity: expected 3-element tuple, got %v (type %T)", rar, rar)
+	}
+	// 1 empty (M1) -> numT=1; 2 non-empty -> numF=2; total 3, freq=1/3.
+	numT, numF := 0, 0
+	switch v := tuple[1].(type) {
+	case int:
+		numT = v
+	case float64:
+		numT = int(v)
+	}
+	switch v := tuple[2].(type) {
+	case int:
+		numF = v
+	case float64:
+		numF = int(v)
+	}
+	if numT != 1 || numF != 2 {
+		t.Errorf("rarity counts: got numT=%d numF=%d, want 1,2", numT, numF)
+	}
+
+	// Flag set; second firing should be a no-op.
+	eng.fireUnitRule("H-ExercisePreds", "MixedSetsCat")
+	rar2 := eng.Store.Get("IsEmpty").Get("rarity").([]any)
+	if toIntTest(rar2[1]) != 1 || toIntTest(rar2[2]) != 2 {
+		t.Errorf("second firing modified rarity: got %v, want unchanged [_,1,2]", rar2)
+	}
+}
+
+func toIntTest(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case float64:
+		return int(x)
+	}
+	return 0
+}
