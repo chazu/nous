@@ -176,3 +176,56 @@ func TestRarityTracking(t *testing.T) {
 		t.Errorf("rarity freq: got %v, want 0.5", freq)
 	}
 }
+
+// Phase 5.6 C.1: type predicates (is-int?, is-list?) work as DSL builtins
+// and can be used as the defn of type units so apply-pred on Set/Number
+// returns a type check result.
+func TestTypePredicates(t *testing.T) {
+	vm := testVM(t)
+
+	// Builtins directly.
+	cases := []struct {
+		prog string
+		want bool
+	}{
+		{"5 is-int?", true},
+		{"5 is-list?", false},
+		{"3 iota is-list?", true},
+		{"3 iota is-int?", false},
+		{`"hello" is-string?`, true},
+		{"5 is-string?", false},
+	}
+	for _, c := range cases {
+		v, err := vm.Execute(c.prog)
+		if err != nil {
+			t.Errorf("%q: %v", c.prog, err)
+			continue
+		}
+		if v.AsBool() != c.want {
+			t.Errorf("%q: got %v, want %v", c.prog, v.AsBool(), c.want)
+		}
+	}
+
+	// Simulated type unit with defn = "is-list?"; apply-pred on it should
+	// return true for lists, false for ints. This is the Phase 5.6 pattern:
+	// type units carry their defn as an executable predicate.
+	setType := unit.New("Set")
+	setType.Set("isA", []string{"Structure", "Anything"})
+	setType.Set("defn", "is-list?")
+	vm.Store.Put(setType)
+
+	v, err := vm.Execute(`3 iota "Set" apply-pred`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.AsBool() {
+		t.Error("apply-pred Set on a list: expected true")
+	}
+	v, err = vm.Execute(`42 "Set" apply-pred`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.AsBool() {
+		t.Error("apply-pred Set on an int: expected false")
+	}
+}

@@ -10,6 +10,9 @@ units: [
 		worth: 600
 		isA: ["MathObj", "Anything"]
 		specializations: ["EvenNum", "OddNum", "PrimeNum", "PerfectNum", "SquareNum"]
+		defn: #"""
+			is-int?
+			"""#
 	},
 	{
 		name:  "EvenNum"

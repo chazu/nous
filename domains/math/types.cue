@@ -11,6 +11,9 @@ units: [
 		isA: ["Structure", "MathObj", "Anything"]
 		english: "An unordered collection with no duplicate elements"
 		specializations: ["EmptySet", "SetOfNumbers", "SetOfPrimes", "SetOfEvens"]
+		defn: #"""
+			is-list?
+			"""#
 	},
 	{
 		name:    "List"
@@ -18,10 +21,16 @@ units: [
 		isA: ["Structure", "MathObj", "Anything"]
 		english: "An ordered collection that may contain duplicates"
 		specializations: ["SortedList"]
+		defn: #"""
+			is-list?
+			"""#
 	},
 	{
 		name:  "Bag"
 		worth: 500
 		isA: ["Structure", "MathObj", "Anything"]
+		defn: #"""
+			is-list?
+			"""#
 	},
 ]

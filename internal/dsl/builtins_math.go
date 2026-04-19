@@ -15,6 +15,11 @@ func init() {
 	builtins["zero?"] = func(vm *VM) error { vm.push(BoolVal(vm.pop().AsInt() == 0)); return nil }
 	builtins["positive?"] = func(vm *VM) error { vm.push(BoolVal(vm.pop().AsInt() > 0)); return nil }
 
+	// Type predicates (Phase 5.6 slice C.1)
+	builtins["is-int?"] = func(vm *VM) error { vm.push(BoolVal(vm.pop().Kind() == VInt)); return nil }
+	builtins["is-list?"] = func(vm *VM) error { vm.push(BoolVal(vm.pop().Kind() == VList)); return nil }
+	builtins["is-string?"] = func(vm *VM) error { vm.push(BoolVal(vm.pop().Kind() == VString)); return nil }
+
 	// Number operations
 	builtins["abs"] = func(vm *VM) error {
 		n := vm.pop().AsInt()
