@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/chazu/nous/internal/agenda"
@@ -117,6 +118,8 @@ var builtins = map[string]builtinFn{
 	"applics-outputs":     bApplicsOutputs,
 	"applics-args":        bApplicsArgs,
 	"applics-direct":      bApplicsDirect,
+	"applics-bad?":        bApplicsBad,
+	"make-protoconjec":    bMakeProtoConjec,
 	// "is-interesting?" is registered in init() to avoid an init cycle
 	// (it calls vm.Execute, which looks up builtins).
 
@@ -1245,6 +1248,93 @@ func bApplicsDirect(vm *VM) error {
 		}
 	}
 	vm.push(IntVal(n))
+	return nil
+}
+
+// applics-bad?: (unitName minTotal -- bool)
+// True iff the unit has at least minTotal applic entries AND at least 80% of
+// them are failures (result=false). Used by H1 to flag ops whose applications
+// are mostly bad, per EURISKO's ">4/5 bad" rule.
+func bApplicsBad(vm *VM) error {
+	minTotal := vm.pop().AsInt()
+	name := vm.pop().AsString()
+	u := vm.Store.Get(name)
+	if u == nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	applics, _ := u.Get("applics").([]map[string]any)
+	total := len(applics)
+	if total < minTotal {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	failures := 0
+	for _, a := range applics {
+		r, ok := a["result"].(bool)
+		if ok && !r {
+			failures++
+		}
+	}
+	// failures/total >= 0.8  <=>  failures*5 >= total*4
+	vm.push(BoolVal(failures*5 >= total*4))
+	return nil
+}
+
+// make-protoconjec: (kind aboutList statement creditor -- unitName)
+// Creates (or dedupes to) a ProtoConjec unit. Name scheme:
+// `Conjec-<kind>-<sorted-about-joined-by-dash>`. If a unit with that name
+// already exists, its SupportCount is incremented and its existing name is
+// returned — no other slots are overwritten.
+//
+// On creation: isA = [ProtoConjec, Anything]; status = "proposed";
+// conjecKind, evidence (same as about), statement, creditors = [creditor]
+// are populated. ConjectureAbout is set via Store.SetSlot so the inverse
+// Conjectures slot auto-wires on each target unit.
+func bMakeProtoConjec(vm *VM) error {
+	creditor := vm.pop().AsString()
+	statement := vm.pop().AsString()
+	aboutVal := vm.pop()
+	kind := vm.pop().AsString()
+
+	about := make([]string, 0, len(aboutVal.AsList()))
+	for _, v := range aboutVal.AsList() {
+		if s := v.AsString(); s != "" {
+			about = append(about, s)
+		}
+	}
+	sortedAbout := append([]string(nil), about...)
+	sort.Strings(sortedAbout)
+	name := "Conjec-" + kind
+	if len(sortedAbout) > 0 {
+		name = name + "-" + strings.Join(sortedAbout, "-")
+	}
+
+	if existing := vm.Store.Get(name); existing != nil {
+		n := existing.GetInt("supportCount")
+		existing.Set("supportCount", n+1)
+		vm.push(StringVal(name))
+		return nil
+	}
+
+	u := unit.New(name)
+	u.Set("isA", []string{"ProtoConjec", "Anything"})
+	u.SetWorth(400)
+	u.Set("conjecKind", kind)
+	u.Set("status", "proposed")
+	u.Set("statement", statement)
+	u.Set("supportCount", 1)
+	if creditor != "" {
+		u.Set("creditors", []string{creditor})
+	}
+	u.Set("evidence", append([]string(nil), about...))
+	vm.Store.Put(u)
+	// Use SetSlot so Conjectures inverse wires on each target.
+	if len(about) > 0 {
+		vm.Store.SetSlot(name, "conjectureAbout", append([]string(nil), about...))
+	}
+	vm.NewUnits = append(vm.NewUnits, name)
+	vm.push(StringVal(name))
 	return nil
 }
 

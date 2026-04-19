@@ -372,4 +372,34 @@ units: [{
 	isA:      ["Slot", "NonCriterialSlot", "Anything"]
 	dataType: "Boolean"
 	english:  "Whether to verify values before accepting"
+}, {
+	name:     "ConjecKind"
+	worth:    400
+	isA:      ["Slot", "CriterialSlot", "Anything"]
+	dataType: "Text"
+	english:  "Kind of conjecture (SetEqual, SubsetOf, HighFailureRate, …)"
+}, {
+	name:     "Status"
+	worth:    400
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Text"
+	english:  "Lifecycle status (proposed, supported, refuted, verified)"
+}, {
+	name:     "Evidence"
+	worth:    400
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Unit"
+	english:  "Supporting units (applics, examples) that produced this conjecture"
+}, {
+	name:     "Statement"
+	worth:    400
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Text"
+	english:  "Human-readable rendering of the conjecture"
+}, {
+	name:     "SupportCount"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Number"
+	english:  "Times this conjecture has been re-derived (evidence strength)"
 }]

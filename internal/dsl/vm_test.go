@@ -604,3 +604,75 @@ func TestRecordApplicAndAccessors(t *testing.T) {
 		t.Errorf("applics-direct: got %d, want 2", v.AsInt())
 	}
 }
+
+func TestMakeProtoConjec(t *testing.T) {
+	vm := testVM(t)
+	vm.Store.RegisterInverse("conjectureAbout", "conjectures")
+
+	// Two target units the conjecture is about.
+	a := unit.New("SetOfNumbers")
+	a.Set("isA", []string{"Set", "Anything"})
+	vm.Store.Put(a)
+	b := unit.New("SetOfPrimes")
+	b.Set("isA", []string{"Set", "Anything"})
+	vm.Store.Put(b)
+
+	// Fire: kind=SetEqual, about=[SetOfNumbers SetOfPrimes], statement=..., creditor=H-Conjecture
+	v, err := vm.Execute(`"SetEqual" "SetOfNumbers" "SetOfPrimes" 2 list-of "SetOfNumbers = SetOfPrimes" "H-Conjecture" make-protoconjec`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := v.AsString()
+	// Name: sorted-about is [SetOfNumbers, SetOfPrimes] alphabetically.
+	want := "Conjec-SetEqual-SetOfNumbers-SetOfPrimes"
+	if name != want {
+		t.Fatalf("name: got %q, want %q", name, want)
+	}
+
+	u := vm.Store.Get(name)
+	if u == nil {
+		t.Fatalf("unit %s not created", name)
+	}
+	if got := u.GetStrings("isA"); len(got) < 1 || got[0] != "ProtoConjec" {
+		t.Errorf("isA: got %v, want first=ProtoConjec", got)
+	}
+	if u.GetString("conjecKind") != "SetEqual" {
+		t.Errorf("conjecKind: got %q, want SetEqual", u.GetString("conjecKind"))
+	}
+	if u.GetString("status") != "proposed" {
+		t.Errorf("status: got %q, want proposed", u.GetString("status"))
+	}
+	if u.GetString("statement") != "SetOfNumbers = SetOfPrimes" {
+		t.Errorf("statement mismatch: %q", u.GetString("statement"))
+	}
+	if u.GetInt("supportCount") != 1 {
+		t.Errorf("supportCount: got %d, want 1", u.GetInt("supportCount"))
+	}
+	if got := u.GetStrings("creditors"); len(got) != 1 || got[0] != "H-Conjecture" {
+		t.Errorf("creditors: got %v", got)
+	}
+	if got := u.GetStrings("conjectureAbout"); len(got) != 2 {
+		t.Errorf("conjectureAbout: got %v, want 2 entries", got)
+	}
+
+	// Inverse wired on each target.
+	if got := vm.Store.Get("SetOfNumbers").GetStrings("conjectures"); len(got) != 1 || got[0] != name {
+		t.Errorf("inverse on SetOfNumbers: got %v, want [%s]", got, name)
+	}
+	if got := vm.Store.Get("SetOfPrimes").GetStrings("conjectures"); len(got) != 1 || got[0] != name {
+		t.Errorf("inverse on SetOfPrimes: got %v, want [%s]", got, name)
+	}
+
+	// Dedupe: re-deriving the same conjecture (even with args in reverse order)
+	// returns the same name and bumps supportCount.
+	v2, err := vm.Execute(`"SetEqual" "SetOfPrimes" "SetOfNumbers" 2 list-of "again" "H-Other" make-protoconjec`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.AsString() != name {
+		t.Errorf("dedupe: got new name %q, want %q", v2.AsString(), name)
+	}
+	if got := u.GetInt("supportCount"); got != 2 {
+		t.Errorf("supportCount after re-derive: got %d, want 2", got)
+	}
+}

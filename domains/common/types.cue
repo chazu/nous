@@ -64,4 +64,10 @@ units: [
 		worth: 500
 		isA: ["Pred", "MathPred", "Anything"]
 	},
+	{
+		name:  "ProtoConjec"
+		worth: 400
+		isA: ["Anything"]
+		english: "Structured conjecture created by a heuristic; carries kind, about, evidence, status"
+	},
 ]
