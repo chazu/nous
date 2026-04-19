@@ -256,6 +256,9 @@ units: [
 					"other" @ "data" get-slot
 					set-equal?
 					if
+						"SetEqual" "ArgU" @ "other" @ 2 list-of
+							"ArgU" @ " = " concat "other" @ concat
+							"H-Conjecture" make-protoconjec drop
 						"CONJECTURE: " "ArgU" @ concat " = " concat "other" @ concat print
 						# If ArgU is machine-created and other is not, ArgU is redundant
 						"ArgU" @ "creditors" get-slot nil !=
@@ -284,6 +287,9 @@ units: [
 					"ArgU" @ "data" get-slot "other" @ "data" get-slot set-equal? not
 					and
 					if
+						"SubsetOf" "ArgU" @ "other" @ 2 list-of
+							"ArgU" @ " ⊂ " concat "other" @ concat
+							"H-Conjecture" make-protoconjec drop
 						"CONJECTURE: " "ArgU" @ concat " ⊂ " concat "other" @ concat print
 					then
 				then

@@ -1755,3 +1755,58 @@ func TestH24FindsCategoricalPredicates(t *testing.T) {
 		t.Errorf("expected IsEmpty in whyInt; got %v\noutput:\n%s", whyInt, buf.String())
 	}
 }
+
+// Phase 7.5: H-Conjecture writes a ProtoConjec unit instead of just printing.
+func TestHConjectureCreatesProtoConjec(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-Conjecture") {
+		t.Fatal("H-Conjecture not loaded")
+	}
+
+	// Two Set instances with identical data — H-Conjecture's SetEqual branch
+	// should fire when run on either and create a ProtoConjec unit.
+	a := unit.New("SetAlpha")
+	a.Set("isA", []string{"Set", "Anything"})
+	a.Set("data", []int{1, 2, 3})
+	eng.Store.Put(a)
+	b := unit.New("SetBeta")
+	b.Set("isA", []string{"Set", "Anything"})
+	b.Set("data", []int{1, 2, 3})
+	eng.Store.Put(b)
+
+	eng.fireUnitRule("H-Conjecture", "SetAlpha")
+
+	// Expected name: Conjec-SetEqual-<sorted>
+	want := "Conjec-SetEqual-SetAlpha-SetBeta"
+	u := eng.Store.Get(want)
+	if u == nil {
+		t.Fatalf("expected ProtoConjec unit %q; got nil. Store: %v",
+			want, eng.Store.All())
+	}
+	if u.GetString("conjecKind") != "SetEqual" {
+		t.Errorf("conjecKind: got %q", u.GetString("conjecKind"))
+	}
+	if u.GetString("status") != "proposed" {
+		t.Errorf("status: got %q", u.GetString("status"))
+	}
+	if got := u.GetStrings("creditors"); len(got) != 1 || got[0] != "H-Conjecture" {
+		t.Errorf("creditors: got %v", got)
+	}
+	// Inverse wired (SetAlpha.conjectures contains our conjec; may also
+	// contain SubsetOf conjectures versus other Set instances seeded by
+	// the math domain — we just check ours is present).
+	foundConj := false
+	for _, c := range eng.Store.Get("SetAlpha").GetStrings("conjectures") {
+		if c == want {
+			foundConj = true
+			break
+		}
+	}
+	if !foundConj {
+		t.Errorf("SetAlpha.conjectures missing %q; got %v",
+			want, eng.Store.Get("SetAlpha").GetStrings("conjectures"))
+	}
+}
+
