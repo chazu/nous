@@ -80,6 +80,61 @@ func init() {
 	builtins["apply-op"] = bApplyOp // ( arg1 arg2 opUnitName -- result ) run defn slot
 	builtins["apply-op-args"] = bApplyOpArgs // ( argList opName -- result )
 	builtins["apply-pred"] = bApplyPred
+	builtins["run-generator"] = bRunGenerator
+}
+
+// run-generator: (unitName count -- list)
+// Returns up to `count` values produced by iterating the unit's `generator`
+// slot. Generator format: map{"initial": []any, "step": "<dsl program>"}.
+// Initial values appear first; if fewer than count, the step program is run
+// repeatedly with the previous value on the stack and its top-of-stack
+// result is appended. Returns empty list if the unit has no generator or
+// if initial is empty and step fails.
+func bRunGenerator(vm *VM) error {
+	count := vm.pop().AsInt()
+	name := vm.pop().AsString()
+	u := vm.Store.Get(name)
+	if u == nil {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	raw := u.Get("generator")
+	gen, ok := raw.(map[string]any)
+	if !ok {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	stepProg, _ := gen["step"].(string)
+	var out []Value
+	switch init := gen["initial"].(type) {
+	case []any:
+		for _, v := range init {
+			out = append(out, anyToValue(v))
+		}
+	case []int:
+		for _, v := range init {
+			out = append(out, IntVal(v))
+		}
+	}
+	for len(out) < count && stepProg != "" && len(out) > 0 {
+		last := out[len(out)-1]
+		sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+		sub.Out = vm.Out
+		for k, val := range vm.env {
+			sub.env[k] = val
+		}
+		sub.stack = append(sub.stack, last)
+		result, err := subExecute(sub, stepProg)
+		if err != nil {
+			break
+		}
+		out = append(out, result)
+	}
+	if len(out) > count {
+		out = out[:count]
+	}
+	vm.push(ListVal(out))
+	return nil
 }
 
 func bIsEven(vm *VM) error {

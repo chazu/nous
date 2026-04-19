@@ -229,3 +229,55 @@ func TestTypePredicates(t *testing.T) {
 		t.Error("apply-pred Set on an int: expected false")
 	}
 }
+
+// Phase 7.2: run-generator iterates a unit's generator to produce N values.
+func TestRunGenerator(t *testing.T) {
+	vm := testVM(t)
+
+	// Counting generator: start at 0, step = +1.
+	counter := unit.New("Counter")
+	counter.Set("isA", []string{"MathObj", "Anything"})
+	counter.Set("generator", map[string]any{
+		"initial": []any{0},
+		"step":    "1 +",
+	})
+	vm.Store.Put(counter)
+
+	v, err := vm.Execute(`"Counter" 5 run-generator`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := v.AsList()
+	if len(list) != 5 {
+		t.Fatalf("expected 5 values, got %d: %v", len(list), list)
+	}
+	for i, el := range list {
+		if el.AsInt() != i {
+			t.Errorf("list[%d]: got %d, want %d", i, el.AsInt(), i)
+		}
+	}
+
+	// Generator with 2 initial values.
+	fib := unit.New("FibLike")
+	fib.Set("isA", []string{"MathObj", "Anything"})
+	fib.Set("generator", map[string]any{
+		"initial": []any{1, 1},
+		"step":    "2 *", // not actual Fib; just doubles each step
+	})
+	vm.Store.Put(fib)
+	v, _ = vm.Execute(`"FibLike" 4 run-generator`)
+	list = v.AsList()
+	if len(list) != 4 || list[0].AsInt() != 1 || list[1].AsInt() != 1 ||
+		list[2].AsInt() != 2 || list[3].AsInt() != 4 {
+		t.Errorf("doubling generator: got %v, want [1 1 2 4]", list)
+	}
+
+	// Unit with no generator slot -> empty list.
+	bare := unit.New("Bare")
+	bare.Set("isA", []string{"Anything"})
+	vm.Store.Put(bare)
+	v, _ = vm.Execute(`"Bare" 3 run-generator`)
+	if len(v.AsList()) != 0 {
+		t.Errorf("no generator: expected empty list, got %v", v.AsList())
+	}
+}

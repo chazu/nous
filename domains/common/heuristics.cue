@@ -1034,4 +1034,40 @@ units: [
 			then
 			"""#
 	},
+	{
+		name:    "H-Generate"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "If a unit has a generator and few examples, produce new instance units by running the generator"
+		overallRecord: {successes: 0, failures: 0}
+		generateCount: 10
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "generator" get-slot nil !=
+			"ArgU" @ "generated" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"H-Generate" "generateCount" get-slot "cnt" !
+			"ArgU" @ "cnt" @ run-generator "vals" !
+			"vals" @ list-length 0 >
+			if
+				0 "i" !
+				"vals" @
+				each
+					it "v" !
+					"ArgU" @ "-gen-" concat "i" @ concat "instName" !
+					"instName" @ unit-exists? not
+					if
+						"instName" @ "ArgU" @ create-unit drop
+						"v" @ "instName" @ "data" set-slot
+						"H-Generate" "instName" @ "creditors" set-slot
+						"instName" @ "ArgU" @ "examples" add-to-slot
+					then
+					"i" @ 1 + "i" !
+				end
+				"H-Generate: produced " "vals" @ list-length concat " instances for " concat "ArgU" @ concat print
+			then
+			true "ArgU" @ "generated" set-slot
+			"""#
+	},
 ]

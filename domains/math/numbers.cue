@@ -13,6 +13,10 @@ units: [
 		defn: #"""
 			is-int?
 			"""#
+		generator: {
+			initial: [0]
+			step:    "1 +"
+		}
 	},
 	{
 		name:  "EvenNum"

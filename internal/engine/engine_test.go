@@ -2191,6 +2191,57 @@ func TestHExercisePredsPopulatesRarity(t *testing.T) {
 	}
 }
 
+// Phase 7.2: H-Generate runs a unit's generator slot to produce new instance
+// units when it has no instances yet.
+func TestHGenerateProducesInstances(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-Generate") {
+		t.Fatal("H-Generate not loaded")
+	}
+
+	cat := unit.New("CountCat")
+	cat.Set("isA", []string{"MathObj", "Anything"})
+	cat.Set("generator", map[string]any{
+		"initial": []any{0},
+		"step":    "1 +",
+	})
+	eng.Store.Put(cat)
+
+	// Lower the cap for this test so we don't create 10 units.
+	eng.Store.SetSlot("H-Generate", "generateCount", 4)
+
+	eng.fireUnitRule("H-Generate", "CountCat")
+
+	// 4 instances expected: CountCat-gen-0 .. CountCat-gen-3 with data 0..3.
+	got := eng.Store.Get("CountCat").GetStrings("examples")
+	if len(got) != 4 {
+		t.Fatalf("expected 4 examples, got %d: %v", len(got), got)
+	}
+	for i, name := range got {
+		want := fmt.Sprintf("CountCat-gen-%d", i)
+		if name != want {
+			t.Errorf("examples[%d]: got %q, want %q", i, name, want)
+		}
+		u := eng.Store.Get(name)
+		if u == nil {
+			t.Errorf("instance %q not created", name)
+			continue
+		}
+		if u.GetInt("data") != i {
+			t.Errorf("%s.data: got %d, want %d", name, u.GetInt("data"), i)
+		}
+	}
+
+	// Idempotent: second firing doesn't add more (generated flag).
+	eng.fireUnitRule("H-Generate", "CountCat")
+	got = eng.Store.Get("CountCat").GetStrings("examples")
+	if len(got) != 4 {
+		t.Errorf("second firing added examples: got %d", len(got))
+	}
+}
+
 // Phase 5.6 C.2: H8 walks an op's generalizations chain, filters each
 // applic's arg tuple by the op's domain type predicates, and propagates
 // matching tuples into the op's own applics.
