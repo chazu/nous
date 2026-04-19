@@ -1881,3 +1881,47 @@ func TestH1FlagsBadOp(t *testing.T) {
 		t.Error("H1 fired on op with <5 applics; should be gated")
 	}
 }
+
+// Phase 4.1 loop-closure: H1's bare specializations task is picked up by
+// H3-RandomSlot / H5-Criterial (the proposer heuristics) and turned into a
+// populated spec task that H6-Specialize can then consume.
+func TestH1SpecTaskReachesProposers(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	op := unit.New("BadBinaryOp")
+	op.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	op.SetWorth(500)
+	op.Set("domain", []string{"Set", "Set"})
+	op.Set("range", "Set")
+	op.Set("arity", 2)
+	op.Set("applics", []map[string]any{
+		{"target": "T0", "result": true},
+		{"target": "T1", "result": false},
+		{"target": "T2", "result": false},
+		{"target": "T3", "result": false},
+		{"target": "T4", "result": false},
+	})
+	eng.Store.Put(op)
+
+	eng.fireUnitRule("H1", "BadBinaryOp")
+
+	populatedSeen := false
+	for eng.Agenda.Len() > 0 {
+		task := eng.Agenda.Pop()
+		if task == nil {
+			break
+		}
+		if task.UnitName != "BadBinaryOp" || task.SlotName != "specializations" {
+			continue
+		}
+		if task.Extra != nil && task.Extra["SlotToChange"] != nil {
+			populatedSeen = true
+			break
+		}
+		eng.WorkOnTask(task)
+	}
+	if !populatedSeen {
+		t.Error("expected H3/H5 to emit a populated spec task after H1's bare task ran")
+	}
+}
