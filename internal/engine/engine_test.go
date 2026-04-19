@@ -2461,3 +2461,79 @@ func TestH25PairCap(t *testing.T) {
 		t.Errorf("pairCap=3: expected [OPair-C1-C1], got %v", exs)
 	}
 }
+
+// Phase 5.11: four numeric comparison predicates must exist as first-class
+// Pred units with correct isA, domain, range, and executable defns. The
+// Phase 5.10 Rarity hook in apply-op should populate rarity on invocation.
+func TestNumericComparisonPreds(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	names := []string{"IEQP", "IGEQ", "IGREATERP", "ILESSP"}
+	for _, n := range names {
+		u := eng.Store.Get(n)
+		if u == nil {
+			t.Fatalf("pred %q not loaded from domains/math/predicates.cue", n)
+		}
+		isA := u.GetStrings("isA")
+		hasBinary, hasPred := false, false
+		for _, t := range isA {
+			if t == "BinaryPred" {
+				hasBinary = true
+			}
+			if t == "Pred" {
+				hasPred = true
+			}
+		}
+		if !hasBinary || !hasPred {
+			t.Errorf("%s isA=%v; want BinaryPred and Pred", n, isA)
+		}
+		if got := u.GetStrings("domain"); len(got) != 2 || got[0] != "Number" || got[1] != "Number" {
+			t.Errorf("%s domain=%v; want [Number Number]", n, got)
+		}
+		if u.GetString("defn") == "" {
+			t.Errorf("%s has empty defn", n)
+		}
+	}
+
+	// Truth-table spot checks via apply-pred.
+	type tc struct {
+		prog string
+		want bool
+	}
+	cases := []tc{
+		{`5 3 "IGREATERP" apply-pred`, true},
+		{`3 5 "IGREATERP" apply-pred`, false},
+		{`3 5 "ILESSP" apply-pred`, true},
+		{`5 3 "ILESSP" apply-pred`, false},
+		{`3 3 "IEQP" apply-pred`, true},
+		{`3 4 "IEQP" apply-pred`, false},
+		{`5 5 "IGEQ" apply-pred`, true},
+		{`5 6 "IGEQ" apply-pred`, false},
+	}
+	for _, c := range cases {
+		v, err := eng.VM.Execute(c.prog)
+		if err != nil {
+			t.Fatalf("Execute(%q) error: %v", c.prog, err)
+		}
+		if v.Truthy() != c.want {
+			t.Errorf("Execute(%q) = %v; want %v", c.prog, v.Truthy(), c.want)
+		}
+	}
+
+	// Phase 5.10 Rarity hook: IGREATERP was called twice (one true, one false).
+	u := eng.Store.Get("IGREATERP")
+	r, ok := u.Get("rarity").([]any)
+	if !ok || len(r) != 3 {
+		t.Fatalf("IGREATERP.rarity = %v; want 3-element list", u.Get("rarity"))
+	}
+	// r[1]=numT, r[2]=numF — stored as int per updateRarity in builtins_math.go
+	numT, numTOk := r[1].(int)
+	numF, numFOk := r[2].(int)
+	if !numTOk || !numFOk {
+		t.Fatalf("IGREATERP.rarity counters have unexpected types: %T %T", r[1], r[2])
+	}
+	if numT < 1 || numF < 1 {
+		t.Errorf("IGREATERP.rarity counters numT=%d numF=%d; want both >=1", numT, numF)
+	}
+}

@@ -69,4 +69,44 @@ units: [
 			drop false
 			"""#
 	},
+	{
+		name:   "IEQP"
+		worth:  500
+		isA: ["BinaryPred", "Pred", "MathPred", "Anything"]
+		domain: ["Number", "Number"]
+		range: ["TruthValue"]
+		defn:   #"""
+			=
+			"""#
+	},
+	{
+		name:   "IGEQ"
+		worth:  500
+		isA: ["BinaryPred", "Pred", "MathPred", "Anything"]
+		domain: ["Number", "Number"]
+		range: ["TruthValue"]
+		defn:   #"""
+			>=
+			"""#
+	},
+	{
+		name:   "IGREATERP"
+		worth:  500
+		isA: ["BinaryPred", "Pred", "MathPred", "Anything"]
+		domain: ["Number", "Number"]
+		range: ["TruthValue"]
+		defn:   #"""
+			>
+			"""#
+	},
+	{
+		name:   "ILESSP"
+		worth:  500
+		isA: ["BinaryPred", "Pred", "MathPred", "Anything"]
+		domain: ["Number", "Number"]
+		range: ["TruthValue"]
+		defn:   #"""
+			<
+			"""#
+	},
 ]
