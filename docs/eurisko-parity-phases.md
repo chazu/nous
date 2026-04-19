@@ -268,8 +268,15 @@ Both slots defined with inverse pair wiring. Verified by test.
 **7.1: Multiple definition types**
 FastDefn, FastAlg, CompiledDefn, UnitizedDefn, IterativeDefn, RecursiveDefn. Allow heuristics to switch between representations and compile slow definitions into fast ones.
 
-**7.2: Generator slot**
-Enable concepts to specify how to generate new instances systematically. NNumber's Generator `((0) (ADD1) (old))` means: start at 0, apply ADD1 to get the next, reuse previous results.
+**7.2: Generator slot** -- COMPLETE
+
+Generator format: `{initial: [values], step: "<dsl program>"}`. The step program takes the previous value on the stack and leaves the next on top — iterating from the initial seeds to produce as many values as asked. `run-generator (unitName count -- list)` builtin in `internal/dsl/builtins_math.go` does the iteration.
+
+`H-Generate` heuristic in `domains/common/heuristics.cue` fires one-shot (`generated` flag) on any unit with a generator. It produces `generateCount` values (default 10, configurable per-heuristic slot), materializes each as a fresh `<Unit>-gen-<i>` instance unit with isA=[Unit], data=value, and appends them to the source unit's examples slot.
+
+Seeded on `Number` in `domains/math/numbers.cue` with counting generator `{initial: [0], step: "1 +"}`. EURISKO's `(old)` reuse hint is unimplemented — our step program sees only the last value. Revisit if a future generator needs the full history.
+
+300-cycle math run: 10 Number-gen-* instances created on Number's first focus.
 
 **7.3: Applics enrichment** -- COMPLETE
 Applic entries now carry `args []string`, `output string`, and `direct bool` alongside the pre-existing `taskNum/target/result`. Pre-7.3 entries keep working — extras are optional.
@@ -307,7 +314,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 4 | Remaining heuristics | 10 | COMPLETE |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
-| 7 | Definition representations | 5 | Not started |
+| 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
 
 **Dependencies:** Phases 4 and 5 can be parallelized. Phase 7 can start after Phase 1. Phase 6 requires Phases 4 and 5.
 
