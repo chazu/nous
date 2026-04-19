@@ -168,8 +168,19 @@ Companion heuristic **H24-Seeder** schedules whyInt tasks when an examples task 
 **5.1: OSet type and operations**
 Ordered set (no duplicates, ordered). OSetInsert, OSetDelete, OSetIntersect, OSetUnion, OSetEqual.
 
-**5.2: OPair and Pair types**
-Ordered and unordered pair types. ReverseOPair operation. Enables Relation (set of ordered pairs).
+**5.2: OPair and Pair types** -- PARTIAL (OPair + H25/H26 complete; Pair and ReverseOPair deferred)
+
+Added `OPair` category in `domains/math/pairs.cue`. Instances carry `data=[a, b]` and are materialized on-demand by H25/H26 with deterministic names `OPair-<a>-<b>` + `unit-exists?` dedupe.
+
+H25 and H26 heuristics in `domains/common/heuristics.cue` mirror H27/H28 for binary predicates. Same three-limb interest gate (`worth >= 600 OR isAInt OR rarity[0] < 0.3`). On fire, iterate `pred.domain[0].examples × pred.domain[1].examples` (Cartesian) capped by the configurable `pairCap` slot (default 50). Each satisfying pair (H25) or failing pair (H26) becomes an OPair instance; the resulting unit names populate the new `SatisfyingSetFor<pred>` / `FailingSetFor<pred>` category's examples. >=4 examples seeds a downstream whyInt task so H24 can discover further interesting predicates on the pair set.
+
+Bumped `SetEqual` and `SubsetOf` to worth 700 in `domains/math/predicates.cue` — H-Conjecture uses the `set-equal?` / `set-subset?` DSL builtins directly rather than `apply-pred`, so predicate units never accrue rarity from conjecture generation. Worth-bumping is the simplest path to passing the H25/H26 gate on startup.
+
+H-ExercisePreds extended to schedule a one-shot whyInt task on each BinaryPred (via a new `predFocusScheduled` flag) so that H25/H26 actually get a chance to see ArgU=pred in task-focus mode.
+
+300-cycle math-domain shakeout produced: H25/H26 each firing twice (on SetEqual + SubsetOf), H27/H28 firing once each, 115 OPair instances, 6 new pair/element categories, specialization pipeline still producing units.
+
+Deferred: unordered `Pair` type (separate abstraction — binary-pred analysis only needs OPair), `ReverseOPair` operation (future mutation target), `Relation` (emergent from H25 output — needs no new machinery).
 
 **5.3: Projection operations**
 Proj1, Proj2, FirstEle, SecondEle, ThirdEle, LastEle, AllButFirst, AllButSecond, AllButThird, AllButLast. Most map directly to existing DSL builtins (first, rest, last) but need to exist as unit concepts.
