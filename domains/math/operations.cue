@@ -90,4 +90,64 @@ units: [
 		range: ["Op"]
 		english: "Apply an operation only when a predicate is satisfied"
 	},
+	{
+		name:    "Add"
+		worth:   500
+		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		domain:  ["Number", "Number"]
+		range:   ["Number"]
+		english: "Sum of two numbers"
+		defn:    #"""
+			+
+			"""#
+		examples: [
+			{args: 2, args2: 3, result: 5},
+			{args: 0, args2: 7, result: 7},
+		]
+	},
+	{
+		name:    "Multiply"
+		worth:   500
+		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		domain:  ["Number", "Number"]
+		range:   ["Number"]
+		english: "Product of two numbers"
+		defn:    #"""
+			*
+			"""#
+		examples: [
+			{args: 3, args2: 4, result: 12},
+			{args: 1, args2: 9, result: 9},
+		]
+	},
+	{
+		name:    "Successor"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain:  ["Number"]
+		range:   ["Number"]
+		english: "Next integer after n"
+		defn:    #"""
+			1 +
+			"""#
+		examples: [
+			{args: 0, result: 1},
+			{args: 7, result: 8},
+		]
+	},
+	{
+		name:    "Square"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain:  ["Number"]
+		range:   ["Number"]
+		english: "n times n"
+		defn:    #"""
+			dup *
+			"""#
+		examples: [
+			{args: 3, result: 9},
+			{args: 5, result: 25},
+		]
+	},
 ]

@@ -2461,3 +2461,224 @@ func TestH25PairCap(t *testing.T) {
 		t.Errorf("pairCap=3: expected [OPair-C1-C1], got %v", exs)
 	}
 }
+
+// Phase 5.11: four numeric comparison predicates must exist as first-class
+// Pred units with correct isA, domain, range, and executable defns. The
+// Phase 5.10 Rarity hook in apply-op should populate rarity on invocation.
+func TestNumericComparisonPreds(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	names := []string{"IEQP", "IGEQ", "IGREATERP", "ILESSP"}
+	for _, n := range names {
+		u := eng.Store.Get(n)
+		if u == nil {
+			t.Fatalf("pred %q not loaded from domains/math/predicates.cue", n)
+		}
+		isA := u.GetStrings("isA")
+		hasBinary, hasPred := false, false
+		for _, t := range isA {
+			if t == "BinaryPred" {
+				hasBinary = true
+			}
+			if t == "Pred" {
+				hasPred = true
+			}
+		}
+		if !hasBinary || !hasPred {
+			t.Errorf("%s isA=%v; want BinaryPred and Pred", n, isA)
+		}
+		if got := u.GetStrings("domain"); len(got) != 2 || got[0] != "Number" || got[1] != "Number" {
+			t.Errorf("%s domain=%v; want [Number Number]", n, got)
+		}
+		if u.GetString("defn") == "" {
+			t.Errorf("%s has empty defn", n)
+		}
+	}
+
+	// Truth-table spot checks via apply-pred.
+	type tc struct {
+		prog string
+		want bool
+	}
+	cases := []tc{
+		{`5 3 "IGREATERP" apply-pred`, true},
+		{`3 5 "IGREATERP" apply-pred`, false},
+		{`3 5 "ILESSP" apply-pred`, true},
+		{`5 3 "ILESSP" apply-pred`, false},
+		{`3 3 "IEQP" apply-pred`, true},
+		{`3 4 "IEQP" apply-pred`, false},
+		{`5 5 "IGEQ" apply-pred`, true},
+		{`5 6 "IGEQ" apply-pred`, false},
+	}
+	for _, c := range cases {
+		v, err := eng.VM.Execute(c.prog)
+		if err != nil {
+			t.Fatalf("Execute(%q) error: %v", c.prog, err)
+		}
+		if v.Truthy() != c.want {
+			t.Errorf("Execute(%q) = %v; want %v", c.prog, v.Truthy(), c.want)
+		}
+	}
+
+	// Phase 5.10 Rarity hook: IGREATERP was called twice (one true, one false).
+	u := eng.Store.Get("IGREATERP")
+	r, ok := u.Get("rarity").([]any)
+	if !ok || len(r) != 3 {
+		t.Fatalf("IGREATERP.rarity = %v; want 3-element list", u.Get("rarity"))
+	}
+	// r[1]=numT, r[2]=numF — stored as int per updateRarity in builtins_math.go
+	numT, numTOk := r[1].(int)
+	numF, numFOk := r[2].(int)
+	if !numTOk || !numFOk {
+		t.Fatalf("IGREATERP.rarity counters have unexpected types: %T %T", r[1], r[2])
+	}
+	if numT < 1 || numF < 1 {
+		t.Errorf("IGREATERP.rarity counters numT=%d numF=%d; want both >=1", numT, numF)
+	}
+}
+
+// Phase 5.9: four numeric ops must exist as first-class Op units. The
+// existence/shape assertions catch CUE schema regressions; the
+// H-RunOnExamples firing assertion catches defn-body errors (the ops
+// must actually produce correct results through the full pipeline).
+func TestNumericOpsAsUnits(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	// Existence and shape.
+	want := map[string]struct {
+		isAEntries []string // required isA entries (subset match)
+		domain     []string
+		rng        []string
+	}{
+		"Add":       {[]string{"BinaryOp", "Op"}, []string{"Number", "Number"}, []string{"Number"}},
+		"Multiply":  {[]string{"BinaryOp", "Op"}, []string{"Number", "Number"}, []string{"Number"}},
+		"Successor": {[]string{"UnaryOp", "Op"}, []string{"Number"}, []string{"Number"}},
+		"Square":    {[]string{"UnaryOp", "Op"}, []string{"Number"}, []string{"Number"}},
+	}
+	for n, spec := range want {
+		u := eng.Store.Get(n)
+		if u == nil {
+			t.Fatalf("op %q not loaded from domains/math/operations.cue", n)
+		}
+		isA := u.GetStrings("isA")
+		for _, req := range spec.isAEntries {
+			found := false
+			for _, got := range isA {
+				if got == req {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s isA=%v; missing %q", n, isA, req)
+			}
+		}
+		if got := u.GetStrings("domain"); !stringSliceEq(got, spec.domain) {
+			t.Errorf("%s domain=%v; want %v", n, got, spec.domain)
+		}
+		if got := u.GetStrings("range"); !stringSliceEq(got, spec.rng) {
+			t.Errorf("%s range=%v; want %v", n, got, spec.rng)
+		}
+		if u.GetString("defn") == "" {
+			t.Errorf("%s has empty defn", n)
+		}
+	}
+
+	// Defn correctness via apply-op (no H-RunOnExamples needed for this check —
+	// avoids dependency on Number-instance seeding).
+	type tc struct {
+		prog string
+		want int
+	}
+	cases := []tc{
+		{`2 3 "Add" apply-op`, 5},
+		{`4 5 "Multiply" apply-op`, 20},
+		{`7 "Successor" apply-op`, 8},
+		{`6 "Square" apply-op`, 36},
+	}
+	for _, c := range cases {
+		v, err := eng.VM.Execute(c.prog)
+		if err != nil {
+			t.Fatalf("Execute(%q) error: %v", c.prog, err)
+		}
+		if got := v.AsInt(); got != c.want {
+			t.Errorf("Execute(%q) = %d; want %d", c.prog, v.AsInt(), c.want)
+		}
+	}
+
+	// End-to-end: H-RunOnExamples on Successor produces at least one applic
+	// whose output is a Number unit with data = src+1. Pre-seeded N-1..N-20
+	// instances (domains/math/numbers.cue) provide the source data.
+	eng.fireUnitRule("H-RunOnExamples", "Successor")
+
+	succ := eng.Store.Get("Successor")
+	applics, _ := succ.Get("applics").([]map[string]any)
+	if len(applics) == 0 {
+		t.Fatalf("Successor.applics empty after H-RunOnExamples; want >=1 entry")
+	}
+
+	// Verify at least one applic has a correct Successor output: the applic's
+	// named output unit's data should equal (source unit's data + 1). This
+	// catches defn-body errors ("dup *" instead of "1 +", etc.).
+	verified := false
+	for _, a := range applics {
+		// args may be []string or []any depending on storage path; handle both.
+		var args []string
+		switch v := a["args"].(type) {
+		case []string:
+			args = v
+		case []any:
+			for _, x := range v {
+				if s, ok := x.(string); ok {
+					args = append(args, s)
+				}
+			}
+		}
+		if len(args) != 1 {
+			continue
+		}
+		srcU := eng.Store.Get(args[0])
+		outName, _ := a["output"].(string)
+		outU := eng.Store.Get(outName)
+		if srcU == nil || outU == nil {
+			continue
+		}
+		srcData, srcOk := numToInt(srcU.Get("data"))
+		outData, outOk := numToInt(outU.Get("data"))
+		if srcOk && outOk && outData == srcData+1 {
+			verified = true
+			break
+		}
+	}
+	if !verified {
+		t.Errorf("no Successor applic had output.data == src.data+1; applics=%v", applics)
+	}
+}
+
+// numToInt coerces int/int64/float64 to int for robust numeric comparison.
+func numToInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
+}
+
+func stringSliceEq(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
