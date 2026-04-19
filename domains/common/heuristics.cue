@@ -605,6 +605,8 @@ units: [
 				if
 					"nu" @ "creditors" get-slot "H-Specialize" list-contains
 					"nu" @ "creditors" get-slot "H18-Generalize" list-contains
+					or
+					"nu" @ "ProtoConjec" isa?
 					or not
 					"nu" @ criterial-slots "csList" !
 					"csList" @ list-length 0 >
