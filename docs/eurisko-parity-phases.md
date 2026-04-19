@@ -104,8 +104,12 @@ Seeded domain heuristic (not HindSight-generated) in `domains/common/heuristics.
 
 ### Issues
 
-**4.1: H1 -- "Specialize operations with >4/5 bad results"**
-Full implementation with ProtoConjec creation and targeted specialization proposals. Extends beyond H-PenalizeTrivial. Should use applics data to identify which operations have high failure rates and propose specific specializations based on the failure patterns.
+**4.1: H1 -- "Specialize operations with >4/5 bad results"** -- COMPLETE
+CUE heuristic in `domains/common/heuristics.cue`. `ifPotentiallyRelevant` gate: ArgU isA Op AND `applics-bad?` (≥5 applics AND ≥80% failures, per EURISKO's >4/5 rule). On fire, creates a `Conjec-HighFailureRate-<op>` ProtoConjec via `make-protoconjec` (kind=HighFailureRate, creditor=H1) and enqueues a priority-600 task on `<op>.specializations` — the H6-Specialize pipeline picks it up downstream.
+
+New DSL builtin: `applics-bad? (unitName minTotal -- bool)` — threshold hardcoded at 80% (per EURISKO); `minTotal` is parameterized.
+
+Test: `TestH1FlagsBadOp` — op with 1/4 success/failure fires; op with <5 total does not.
 
 **~~4.2: H2 -- "Kill prolific-but-mediocre creators"~~** COMPLETE
 Implemented as H2-KillGarbageCreator during engine stabilization. Scans children of heuristics, punishes those with 5+ children and 80%+ mediocre worth.
@@ -128,8 +132,8 @@ Unit-focus heuristic: for each sibling op (same first-isA category) with recorde
 
 New DSL builtins: `apply-op-args`, `list-join`.
 
-**4.8: H21 extension -- structured conjecture creation**
-Enhance H-Conjecture to create ProtoConjec units with provenance metadata, not just print output.
+**4.8: H21 extension -- structured conjecture creation** -- COMPLETE (via Phase 7.5)
+H-Conjecture now calls `make-protoconjec` alongside the existing print in both SetEqual and SubsetOf branches. Prints retained for observability.
 
 **4.9: H22/H23 -- Interestingness evaluation** -- COMPLETE (dormant until seeded)
 Both heuristics live in `domains/common/heuristics.cue`.
@@ -253,8 +257,14 @@ Deferred: actual IntApplics/IndirectApplics population — nothing writes them y
 **~~7.4: IfAboutToWorkOnTask slot~~** COMPLETE
 Pulled forward during Phase 3.2. Wired as the first gate in `fireTaskRule` and included in IfPartSlots/programSlots.
 
-**7.5: Structured conjecture system**
-ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status tracking. H1 and H16 create ProtoConjec units instead of printing text.
+**7.5: Structured conjecture system** -- COMPLETE
+`ProtoConjec` category added to `domains/common/types.cue`. New slots `ConjecKind`, `Status`, `Evidence`, `Statement`, `SupportCount` in `domains/common/slots.cue`. `ConjectureAbout`/`Conjectures` inverse pair already existed pre-phase.
+
+New DSL builtin `make-protoconjec (kind aboutList statement creditor -- unitName)`: creates a ProtoConjec unit with readable name `Conjec-<kind>-<sorted-about>`. On re-derivation of the same (kind, sorted-about), returns the existing name and bumps `supportCount`. Sets `conjectureAbout` via `Store.SetSlot` so the inverse `Conjectures` auto-wires on each target.
+
+H-Conjecture retrofit: SetEqual and SubsetOf branches now call `make-protoconjec` alongside the existing prints. H1 (Phase 4.1) creates `HighFailureRate` ProtoConjecs. H16 retrofit deferred — H16 does not yet fire with unit-creating output in current runs.
+
+Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjectureCreatesProtoConjec` (engine end-to-end), `TestH1FlagsBadOp` (gate + conjec + spec task).
 
 ---
 
@@ -266,7 +276,7 @@ ProtoConjec as a proper unit type with ConjectureAbout, provenance, and status t
 | 1 | Slot ontology | 5 + 1 bug | COMPLETE (bug 1.6 open) |
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
-| 4 | Remaining heuristics | 10 (10 done, H8 blocked) | H1 pending (needs Phase 7.5); H8 blocked on type predicates |
+| 4 | Remaining heuristics | 10 | COMPLETE (H8 blocked on type predicates) |
 | 5 | Type hierarchy + operations | 12 | Not started |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | Not started |

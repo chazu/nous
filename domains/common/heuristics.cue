@@ -640,4 +640,23 @@ units: [
 			end
 			"""#
 	},
+	{
+		name:    "H1"
+		worth:   800
+		isA: ["Heuristic", "Anything"]
+		english: "If an op has >=5 applications and >=80% are failures, conjecture high failure rate and enqueue a specialization task"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ 5 applics-bad?
+			and
+			"""#
+		thenCompute: #"""
+			"HighFailureRate" "ArgU" @ 1 list-of
+				"ArgU" @ " fails on most inputs" concat
+				"H1" make-protoconjec drop
+			600 "ArgU" @ "specializations" "H1: high failure rate" add-task
+			"H1: flagged " "ArgU" @ concat " for specialization" concat print
+			"""#
+	},
 ]

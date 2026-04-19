@@ -1810,3 +1810,74 @@ func TestHConjectureCreatesProtoConjec(t *testing.T) {
 	}
 }
 
+// Phase 7.5: H1 flags an op with >=5 applications and >=80% failures,
+// creating a HighFailureRate ProtoConjec and enqueuing a spec task.
+func TestH1FlagsBadOp(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H1") {
+		t.Fatal("H1 not loaded from common/heuristics.cue")
+	}
+
+	// Seed an op with 1 success and 4 failures (5 total, 80% bad).
+	op := unit.New("BadOp")
+	op.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	op.SetWorth(500)
+	applics := []map[string]any{
+		{"target": "T0", "result": true},
+		{"target": "T1", "result": false},
+		{"target": "T2", "result": false},
+		{"target": "T3", "result": false},
+		{"target": "T4", "result": false},
+	}
+	op.Set("applics", applics)
+	eng.Store.Put(op)
+
+	eng.fireUnitRule("H1", "BadOp")
+
+	// Conjec unit created.
+	want := "Conjec-HighFailureRate-BadOp"
+	u := eng.Store.Get(want)
+	if u == nil {
+		t.Fatalf("expected %q; not in store", want)
+	}
+	if u.GetString("conjecKind") != "HighFailureRate" {
+		t.Errorf("conjecKind: got %q", u.GetString("conjecKind"))
+	}
+	if got := u.GetStrings("creditors"); len(got) != 1 || got[0] != "H1" {
+		t.Errorf("creditors: got %v", got)
+	}
+
+	// Spec task enqueued on BadOp.specializations.
+	specTaskFound := false
+	for eng.Agenda.Len() > 0 {
+		task := eng.Agenda.Pop()
+		if task == nil {
+			break
+		}
+		if task.UnitName == "BadOp" && task.SlotName == "specializations" {
+			specTaskFound = true
+			break
+		}
+	}
+	if !specTaskFound {
+		t.Error("expected spec task on BadOp.specializations to be enqueued")
+	}
+
+	// Negative case: op with 4/5 failures (<5 total) should NOT fire.
+	op2 := unit.New("TooFewBadOp")
+	op2.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	op2.SetWorth(500)
+	op2.Set("applics", []map[string]any{
+		{"target": "X0", "result": false},
+		{"target": "X1", "result": false},
+		{"target": "X2", "result": false},
+		{"target": "X3", "result": false},
+	})
+	eng.Store.Put(op2)
+	eng.fireUnitRule("H1", "TooFewBadOp")
+	if eng.Store.Has("Conjec-HighFailureRate-TooFewBadOp") {
+		t.Error("H1 fired on op with <5 applics; should be gated")
+	}
+}
