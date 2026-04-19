@@ -208,8 +208,8 @@ RandomChoose, RandomSubset, GoodChoose, GoodSubset, BestChoose, BestSubset as un
 **5.8: Logical operations as units**
 AND, OR, NOT, Implies, TheFirstOf, TheSecondOf as operation units with defn and domain/range.
 
-**5.9: Numeric operations as units**
-Add, Multiply, Successor, Square as operation units (currently exist only as DSL builtins, not as units in the store).
+**5.9: Numeric operations as units** -- COMPLETE
+Add, Multiply, Successor, Square landed as seed units in `domains/math/operations.cue` (Phase 5.9 + 5.11 plan, 2026-04-19). Each has worth 500, BinaryOp/UnaryOp isA as appropriate, [Number]→[Number] signatures, and seeded raw-literal examples matching the GCD/DivisorsOf precedent. H-RunOnExamples picks them up via the existing pipeline; no engine changes.
 
 **5.10: Additional predicates** -- COMPLETE (core set + Rarity hook)
 Predicates as first-class units were already usable (MemberOf/SubsetOf/SetEqual in `domains/math/predicates.cue`). This phase added:
@@ -230,6 +230,9 @@ Each new category inherits `isA` from the source category, sets `generalizations
 Uses the existing `apply-pred` builtin; no new Go primitive needed. One-shot dedupe via `unit-exists?`.
 
 H25 / H26 (n-ary satisfying/failing) deferred — they need tuple evaluation that waits on Pair/Tuple types (Phase 5.2).
+
+**Numeric comparison predicates** -- COMPLETE (2026-04-19)
+IEQP, IGEQ, IGREATERP, ILESSP landed in `domains/math/predicates.cue` as BinaryPred units with [Number, Number]→TruthValue. Phase 5.10 Rarity hook populates rarity on invocation. Transpose variants (EURISKO pairs IGEQ↔IGREATERP and ILESSP) deferred to Phase 5.6A.
 
 **5.12: H29 -- Multiplicity mutation**
 Once MultEleStruc exists, implement element multiplicity mutation for generating new examples.
@@ -312,7 +315,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 | COMPLETE |
-| 5 | Type hierarchy + operations | 12 | Not started |
+| 5 | Type hierarchy + operations | 12 | PARTIAL (5.2, 5.6 C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
 
