@@ -765,7 +765,7 @@ units: [
 		name:    "H-ExercisePreds"
 		worth:   400
 		isA: ["Heuristic", "Anything"]
-		english: "Run each domain-matching unary predicate on a category's examples to populate rarity (one-shot per category)"
+		english: "Run each domain-matching unary/binary predicate on a category's examples to populate rarity (one-shot per category)"
 		overallRecord: {successes: 0, failures: 0}
 		ifPotentiallyRelevant: #"""
 			"ArgU" @ "UnaryPred" isa? not
@@ -793,8 +793,6 @@ units: [
 								"ex" @ "data" get-slot "p" @ apply-pred drop
 							then
 						end
-						# One-shot: schedule a focus task on the pred so H27/H28
-						# get a chance to run with ArgU=pred.
 						"p" @ "predFocusScheduled" get-slot nil =
 						if
 							500 "p" @ "whyInt" "H-ExercisePreds: focus pred for H27/H28" add-task
@@ -803,7 +801,156 @@ units: [
 					then
 				then
 			end
+			"BinaryPred" examples
+			each
+				it "p" !
+				"p" @ "predFocusScheduled" get-slot nil =
+				if
+					500 "p" @ "whyInt" "H-ExercisePreds: focus binary pred for H25/H26" add-task
+					true "p" @ "predFocusScheduled" set-slot
+				then
+			end
 			true "ArgU" @ "predsExercised" set-slot
+			"""#
+	},
+	{
+		name:    "H25"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "For an interesting binary predicate, define the set of ordered pairs that satisfy it"
+		overallRecord: {successes: 0, failures: 0}
+		pairCap: 50
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "BinaryPred" isa?
+			"ArgU" @ "worth" get-slot 600 >=
+			"ArgU" @ "isAInt" get-slot nil !=
+			or
+			"ArgU" @ "rarity" get-slot nil !=
+			"ArgU" @ "rarity" get-slot first 0.3 <
+			and
+			or
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "domain" get-slot "doms" !
+			"doms" @ nil !=
+			"doms" @ list-length 2 >=
+			and
+			if
+				"doms" @ first "srcA" !
+				"doms" @ rest first "srcB" !
+				"SatisfyingSetFor-" "ArgU" @ concat "resName" !
+				"resName" @ unit-exists? not
+				if
+					"resName" @ "Set" create-unit drop
+					"srcA" @ "resName" @ "generalizations" add-to-slot
+					"ArgU" @ "resName" @ "defn" set-slot
+					"H25" "resName" @ "creditors" set-slot
+					"Satisfying pairs for " "ArgU" @ concat "resName" @ "english" set-slot
+
+					"H25" "pairCap" get-slot "cap" !
+					0 "count" !
+					"srcA" @ "examples" get-slot
+					each
+						it "a" !
+						"srcB" @ "examples" get-slot
+						each
+							it "b" !
+							"count" @ "cap" @ <
+							if
+								"a" @ "data" get-slot "b" @ "data" get-slot "ArgU" @ apply-pred
+								if
+									"OPair-" "a" @ concat "-" concat "b" @ concat "pairName" !
+									"pairName" @ unit-exists? not
+									if
+										"pairName" @ "OPair" create-unit drop
+										"a" @ "b" @ 2 list-of "pairName" @ "data" set-slot
+									then
+									"pairName" @ "resName" @ "examples" add-to-slot
+								then
+								"count" @ 1 + "count" !
+							then
+						end
+					end
+
+					"resName" @ "examples" get-slot list-length 4 >=
+					if
+						500 "resName" @ "whyInt" "H25: explore why these pairs satisfy" add-task
+					then
+
+					"H25: created " "resName" @ concat print
+				then
+			then
+			"""#
+	},
+	{
+		name:    "H26"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "For an interesting binary predicate, define the set of ordered pairs that fail it"
+		overallRecord: {successes: 0, failures: 0}
+		pairCap: 50
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "BinaryPred" isa?
+			"ArgU" @ "worth" get-slot 600 >=
+			"ArgU" @ "isAInt" get-slot nil !=
+			or
+			"ArgU" @ "rarity" get-slot nil !=
+			"ArgU" @ "rarity" get-slot first 0.3 <
+			and
+			or
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ "domain" get-slot "doms" !
+			"doms" @ nil !=
+			"doms" @ list-length 2 >=
+			and
+			if
+				"doms" @ first "srcA" !
+				"doms" @ rest first "srcB" !
+				"FailingSetFor-" "ArgU" @ concat "resName" !
+				"resName" @ unit-exists? not
+				if
+					"resName" @ "Set" create-unit drop
+					"srcA" @ "resName" @ "generalizations" add-to-slot
+					"ArgU" @ "resName" @ "defn" set-slot
+					"H26" "resName" @ "creditors" set-slot
+					"Failing pairs for " "ArgU" @ concat "resName" @ "english" set-slot
+
+					"H26" "pairCap" get-slot "cap" !
+					0 "count" !
+					"srcA" @ "examples" get-slot
+					each
+						it "a" !
+						"srcB" @ "examples" get-slot
+						each
+							it "b" !
+							"count" @ "cap" @ <
+							if
+								"a" @ "data" get-slot "b" @ "data" get-slot "ArgU" @ apply-pred not
+								if
+									"OPair-" "a" @ concat "-" concat "b" @ concat "pairName" !
+									"pairName" @ unit-exists? not
+									if
+										"pairName" @ "OPair" create-unit drop
+										"a" @ "b" @ 2 list-of "pairName" @ "data" set-slot
+									then
+									"pairName" @ "resName" @ "examples" add-to-slot
+								then
+								"count" @ 1 + "count" !
+							then
+						end
+					end
+
+					"resName" @ "examples" get-slot list-length 4 >=
+					if
+						500 "resName" @ "whyInt" "H26: explore why these pairs fail" add-task
+					then
+
+					"H26: created " "resName" @ concat print
+				then
+			then
 			"""#
 	},
 ]

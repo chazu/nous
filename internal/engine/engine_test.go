@@ -763,7 +763,8 @@ func TestSpecializationPipeline(t *testing.T) {
 	eng.Out = buf
 	eng.VM.Out = buf
 	eng.MutConfig.Enabled = false
-	eng.MaxCycles = 50
+	eng.MaxCycles = 100
+	eng.SeedInitialAgenda()
 
 	err := eng.Run(context.Background())
 	if err != nil {
@@ -1538,8 +1539,9 @@ func TestH4SchedulesExamplesTasks(t *testing.T) {
 func TestH19CriterialSparesSpecializations(t *testing.T) {
 	eng, _ := testEngine(t)
 	eng.Verbosity = 0
-	eng.MaxCycles = 60
+	eng.MaxCycles = 100
 	eng.MutConfig.Enabled = false
+	eng.SeedInitialAgenda()
 
 	if !eng.Store.Has("H19Criterial") {
 		t.Fatal("H19Criterial not loaded from domain CUE")
@@ -2197,4 +2199,151 @@ func toIntTest(v any) int {
 		return int(x)
 	}
 	return 0
+}
+
+// Phase 5.2: H25 creates SatisfyingSetFor<binary-pred> with OPair examples.
+func TestH25CreatesSatisfyingPairs(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H25") {
+		t.Fatal("H25 not loaded")
+	}
+	if !eng.Store.Has("OPair") {
+		t.Fatal("OPair type not loaded")
+	}
+
+	// Make SetEqual 'interesting' by bumping worth >= 600.
+	eng.Store.SetSlot("SetEqual", "worth", 700)
+
+	// Point SetEqual at a test category whose examples are a handful of
+	// small sets — some pairs are equal, most are not.
+	src := unit.New("TestPairCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"P1", "P2", "P3"})
+	eng.Store.Put(src)
+
+	mk := func(name string, data []int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", data)
+		eng.Store.Put(u)
+	}
+	mk("P1", []int{1, 2})
+	mk("P2", []int{1, 2}) // equal to P1
+	mk("P3", []int{3})
+
+	eng.Store.SetSlot("SetEqual", "domain", []string{"TestPairCat", "TestPairCat"})
+
+	eng.fireUnitRule("H25", "SetEqual")
+
+	result := eng.Store.Get("SatisfyingSetFor-SetEqual")
+	if result == nil {
+		t.Fatalf("SatisfyingSetFor-SetEqual not created")
+	}
+	exs := result.GetStrings("examples")
+	// Satisfying pairs: (P1,P1), (P1,P2), (P2,P1), (P2,P2), (P3,P3) = 5
+	if len(exs) != 5 {
+		t.Errorf("expected 5 satisfying OPairs, got %d: %v", len(exs), exs)
+	}
+	// Every satisfying example should be an OPair unit with 2-element data.
+	for _, n := range exs {
+		p := eng.Store.Get(n)
+		if p == nil {
+			t.Errorf("OPair %q not materialized", n)
+			continue
+		}
+		isA := p.GetStrings("isA")
+		if len(isA) == 0 || isA[0] != "OPair" {
+			t.Errorf("OPair %q isA: got %v, want [OPair ...]", n, isA)
+		}
+	}
+	// Dedupe: P1 and P2 have equal data, so OPair-P1-P2 and OPair-P2-P1 are
+	// distinct (order matters), but OPair-P1-P1 only appears once. Quick
+	// sanity: >=4 OPairs means whyInt fires.
+	foundWhyInt := false
+	for eng.Agenda.Len() > 0 {
+		task := eng.Agenda.Pop()
+		if task.UnitName == "SatisfyingSetFor-SetEqual" && task.SlotName == "whyInt" {
+			foundWhyInt = true
+			break
+		}
+	}
+	if !foundWhyInt {
+		t.Error("expected whyInt task on SatisfyingSetFor-SetEqual")
+	}
+}
+
+// Phase 5.2: H26 creates FailingSetFor<binary-pred> with OPair examples.
+func TestH26CreatesFailingPairs(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	eng.Store.SetSlot("SetEqual", "worth", 700)
+
+	src := unit.New("TestFailCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"Q1", "Q2", "Q3"})
+	eng.Store.Put(src)
+
+	mk := func(name string, data []int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", data)
+		eng.Store.Put(u)
+	}
+	mk("Q1", []int{1})
+	mk("Q2", []int{2})
+	mk("Q3", []int{3})
+
+	eng.Store.SetSlot("SetEqual", "domain", []string{"TestFailCat", "TestFailCat"})
+
+	eng.fireUnitRule("H26", "SetEqual")
+
+	result := eng.Store.Get("FailingSetFor-SetEqual")
+	if result == nil {
+		t.Fatalf("FailingSetFor-SetEqual not created")
+	}
+	exs := result.GetStrings("examples")
+	// All pairs are non-equal except the 3 diagonals. 9 total - 3 = 6 failing.
+	if len(exs) != 6 {
+		t.Errorf("expected 6 failing OPairs, got %d: %v", len(exs), exs)
+	}
+}
+
+// Phase 5.2: H25 honors the configurable pairCap slot to bound Cartesian blowup.
+func TestH25PairCap(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	// Lower the cap to a small number for the test.
+	eng.Store.SetSlot("H25", "pairCap", 3)
+
+	eng.Store.SetSlot("SetEqual", "worth", 700)
+
+	src := unit.New("CapCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"C1", "C2", "C3", "C4"})
+	eng.Store.Put(src)
+	for i, n := range []string{"C1", "C2", "C3", "C4"} {
+		u := unit.New(n)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", []int{i})
+		eng.Store.Put(u)
+	}
+
+	eng.Store.SetSlot("SetEqual", "domain", []string{"CapCat", "CapCat"})
+	eng.fireUnitRule("H25", "SetEqual")
+
+	// With cap=3, at most 3 pairs get tested. Of the first 3 pairs tested
+	// (C1-C1, C1-C2, C1-C3), only C1-C1 satisfies SetEqual. So examples
+	// should contain exactly 1 OPair (OPair-C1-C1).
+	result := eng.Store.Get("SatisfyingSetFor-SetEqual")
+	if result == nil {
+		t.Fatalf("SatisfyingSetFor-SetEqual not created")
+	}
+	exs := result.GetStrings("examples")
+	if len(exs) != 1 || exs[0] != "OPair-C1-C1" {
+		t.Errorf("pairCap=3: expected [OPair-C1-C1], got %v", exs)
+	}
 }

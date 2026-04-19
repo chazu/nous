@@ -11,7 +11,7 @@ units: [
 	},
 	{
 		name:   "SubsetOf"
-		worth:  500
+		worth:  700
 		isA: ["BinaryPred", "Pred", "MathPred", "Anything"]
 		domain: ["Set", "Set"]
 		range: ["TruthValue"]
@@ -21,7 +21,7 @@ units: [
 	},
 	{
 		name:   "SetEqual"
-		worth:  500
+		worth:  700
 		isA: ["BinaryPred", "Pred", "MathPred", "Anything"]
 		domain: ["Set", "Set"]
 		range: ["TruthValue"]
