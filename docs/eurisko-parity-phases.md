@@ -200,8 +200,17 @@ Predicates as first-class units were already usable (MemberOf/SubsetOf/SetEqual 
 
 Deferred: numeric comparison predicates (IEQP, IGEQ, IGREATERP, ILESSP) with Transpose — natural to add alongside 5.6 meta-ops, not needed yet.
 
-**5.11: H25-H28 -- Predicate set analysis**
-Once predicate units exist, implement the satisfying/failing set heuristics.
+**5.11: H25-H28 -- Predicate set analysis** -- PARTIAL (H27/H28 COMPLETE; H25/H26 deferred)
+
+Unary satisfying/failing set heuristics in `domains/common/heuristics.cue`. When a unit-focus lands on an interesting UnaryPred, H27 creates `SatisfyingSetFor<pred>` and H28 creates `FailingSetFor<pred>` — new categories whose examples are the source domain's elements that respectively satisfy or fail the predicate.
+
+Gate (nous extension of EURISKO's `HasHighWorth OR IsAInt`): `worth >= 600 OR isAInt != nil OR rarity[0] < 0.3`. The rarity limb lets H24's rare-predicate flags feed H27/H28 directly.
+
+Each new category inherits `isA` from the source category, sets `generalizations=[source]`, `defn=<pred>` (for recomputability), and `creditors=[H27]`/`[H28]`. When the filtered set has >=4 members, a `whyInt` task is seeded on the new category so H24 can discover further interesting predicates — closing the pred→category→pred loop.
+
+Uses the existing `apply-pred` builtin; no new Go primitive needed. One-shot dedupe via `unit-exists?`.
+
+H25 / H26 (n-ary satisfying/failing) deferred — they need tuple evaluation that waits on Pair/Tuple types (Phase 5.2).
 
 **5.12: H29 -- Multiplicity mutation**
 Once MultEleStruc exists, implement element multiplicity mutation for generating new examples.

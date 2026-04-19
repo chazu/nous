@@ -2063,3 +2063,63 @@ func TestH27GateRejectsBoringPred(t *testing.T) {
 		t.Error("H27 fired on boring predicate; gate should have rejected it")
 	}
 }
+
+// Phase 5.11: H28 defines the FailingSetFor<pred> category — dual of H27.
+func TestH28CreatesFailingSet(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H28") {
+		t.Fatal("H28 not loaded")
+	}
+
+	eng.Store.SetSlot("IsEmpty", "worth", 700)
+
+	src := unit.New("MixedCat")
+	src.Set("isA", []string{"Set", "Anything"})
+	src.Set("examples", []string{"E1", "NE1", "NE2", "NE3", "NE4"})
+	eng.Store.Put(src)
+
+	mk := func(name string, data []int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Set", "Anything"})
+		u.Set("data", data)
+		eng.Store.Put(u)
+	}
+	mk("E1", []int{})
+	mk("NE1", []int{1})
+	mk("NE2", []int{1, 2})
+	mk("NE3", []int{1, 2, 3})
+	mk("NE4", []int{1, 2, 3, 4})
+
+	eng.Store.SetSlot("IsEmpty", "domain", []string{"MixedCat"})
+	eng.fireUnitRule("H28", "IsEmpty")
+
+	result := eng.Store.Get("FailingSetFor-IsEmpty")
+	if result == nil {
+		t.Fatalf("FailingSetFor-IsEmpty not created")
+	}
+	exs := result.GetStrings("examples")
+	if len(exs) != 4 {
+		t.Errorf("expected 4 failing examples, got %d: %v", len(exs), exs)
+	}
+	wantSet := map[string]bool{"NE1": true, "NE2": true, "NE3": true, "NE4": true}
+	for _, e := range exs {
+		if !wantSet[e] {
+			t.Errorf("unexpected failing example %q", e)
+		}
+	}
+
+	// 4 failing examples -> whyInt task should fire.
+	found := false
+	for eng.Agenda.Len() > 0 {
+		task := eng.Agenda.Pop()
+		if task.UnitName == "FailingSetFor-IsEmpty" && task.SlotName == "whyInt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected whyInt task on FailingSetFor-IsEmpty")
+	}
+}
