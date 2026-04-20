@@ -225,4 +225,94 @@ units: [
 			{args: [1, 2], args2: [2, 1], result: false},
 		]
 	},
+	{
+		name:    "Proj1"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OPair"]
+		range: ["Anything"]
+		english: "First projection of an ordered pair"
+		defn:    #"""
+			first
+			"""#
+		examples: [
+			{args: [3, 7], result: 3},
+			{args: [19, 2], result: 19},
+		]
+	},
+	{
+		name:    "Proj2"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OPair"]
+		range: ["Anything"]
+		english: "Second projection of an ordered pair"
+		defn:    #"""
+			rest first
+			"""#
+		examples: [
+			{args: [3, 7], result: 7},
+			{args: [19, 2], result: 2},
+		]
+	},
+	{
+		name:    "FirstEle"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OrdStruc"]
+		range: ["Anything"]
+		english: "First element of an ordered structure"
+		defn:    #"""
+			first
+			"""#
+		examples: [
+			{args: [3, 1, 2], result: 3},
+			{args: [19, 17, 13], result: 19},
+		]
+	},
+	{
+		name:    "LastEle"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OrdStruc"]
+		range: ["Anything"]
+		english: "Last element of an ordered structure"
+		defn:    #"""
+			last
+			"""#
+		examples: [
+			{args: [3, 1, 2], result: 2},
+			{args: [19, 17, 13], result: 13},
+		]
+	},
+	{
+		name:    "AllButFirst"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OrdStruc"]
+		range: ["OrdStruc"]
+		english: "Ordered structure with its first element removed"
+		defn:    #"""
+			rest
+			"""#
+		examples: [
+			{args: [3, 1, 2], result: [1, 2]},
+			{args: [19, 17, 13], result: [17, 13]},
+		]
+	},
+	{
+		name:    "AllButLast"
+		worth:   500
+		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OrdStruc"]
+		range: ["OrdStruc"]
+		english: "Ordered structure with its last element removed"
+		defn:    #"""
+			but-last
+			"""#
+		examples: [
+			{args: [3, 1, 2], result: [3, 1]},
+			{args: [19, 17, 13], result: [19, 17]},
+		]
+	},
 ]

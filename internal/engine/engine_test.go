@@ -3460,3 +3460,46 @@ func TestStructureClassificationTagsPropagate(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectionUnitsLoad verifies the six projection op units are present
+// with correct domain/range and defn hooks.
+func TestProjectionUnitsLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+	wantOps := map[string]struct {
+		domain []string
+		rangeT []string
+		defn   string
+	}{
+		"Proj1":       {[]string{"OPair"}, []string{"Anything"}, "first"},
+		"Proj2":       {[]string{"OPair"}, []string{"Anything"}, "rest first"},
+		"FirstEle":    {[]string{"OrdStruc"}, []string{"Anything"}, "first"},
+		"LastEle":     {[]string{"OrdStruc"}, []string{"Anything"}, "last"},
+		"AllButFirst": {[]string{"OrdStruc"}, []string{"OrdStruc"}, "rest"},
+		"AllButLast":  {[]string{"OrdStruc"}, []string{"OrdStruc"}, "but-last"},
+	}
+	for name, want := range wantOps {
+		u := eng.Store.Get(name)
+		if u == nil {
+			t.Errorf("%s not loaded", name)
+			continue
+		}
+		dom := u.GetStrings("domain")
+		if len(dom) != len(want.domain) {
+			t.Errorf("%s.domain: want %v got %v", name, want.domain, dom)
+		} else {
+			for i, d := range want.domain {
+				if dom[i] != d {
+					t.Errorf("%s.domain[%d]: want %q got %q", name, i, d, dom[i])
+				}
+			}
+		}
+		rng := u.GetStrings("range")
+		if len(rng) != len(want.rangeT) || rng[0] != want.rangeT[0] {
+			t.Errorf("%s.range: want %v got %v", name, want.rangeT, rng)
+		}
+		defn, _ := u.Get("defn").(string)
+		if !strings.Contains(defn, want.defn) {
+			t.Errorf("%s.defn: want contains %q, got %q", name, want.defn, defn)
+		}
+	}
+}
