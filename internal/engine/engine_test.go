@@ -3358,3 +3358,50 @@ func TestOSetUnionPreservesOrderViaEngine(t *testing.T) {
 		t.Errorf("No OSetUnion applic with OSetOfPrimesDesc as left arg produced an output starting with 19; order preservation not verified. Applics: %v", applics)
 	}
 }
+
+// TestStructureClassificationCategoriesLoad verifies the six classification
+// marker categories are loaded from CUE with correct isA chains.
+func TestStructureClassificationCategoriesLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	wantCats := map[string]struct {
+		worth int
+		specs []string
+	}{
+		"OrdStruc":       {500, []string{"OSet", "List"}},
+		"UnOrdStruc":     {500, []string{"Set", "Bag"}},
+		"MultEleStruc":   {500, []string{"List", "Bag"}},
+		"NoMultEleStruc": {500, []string{"Set", "OSet"}},
+		"EmptyStruc":     {400, []string{"EmptySet"}},
+		"NonEmptyStruc":  {400, nil},
+	}
+	for name, want := range wantCats {
+		u := eng.Store.Get(name)
+		if u == nil {
+			t.Errorf("%s category not loaded", name)
+			continue
+		}
+		isA := u.GetStrings("isA")
+		isAMap := make(map[string]bool, len(isA))
+		for _, s := range isA {
+			isAMap[s] = true
+		}
+		for _, parent := range []string{"Structure", "MathObj", "Anything"} {
+			if !isAMap[parent] {
+				t.Errorf("%s.isA missing %q; got %v", name, parent, isA)
+			}
+		}
+		if want.specs != nil {
+			specs := u.GetStrings("specializations")
+			specMap := make(map[string]bool, len(specs))
+			for _, s := range specs {
+				specMap[s] = true
+			}
+			for _, s := range want.specs {
+				if !specMap[s] {
+					t.Errorf("%s.specializations missing %q; got %v", name, s, specs)
+				}
+			}
+		}
+	}
+}
