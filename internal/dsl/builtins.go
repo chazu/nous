@@ -1422,16 +1422,36 @@ func valueToAny(v Value) any {
 	case VString:
 		return v.sval
 	case VList:
-		// Convert to []string if all elements are strings
-		strs := make([]string, 0, len(v.lval))
+		// Convert to []string if all elements are strings,
+		// []int if all elements are ints, else []Value.
+		if len(v.lval) == 0 {
+			return []string{}
+		}
+		allStr := true
+		allInt := true
 		for _, el := range v.lval {
 			if el.kind != VString {
-				// Mixed list — return as []Value
-				return v.lval
+				allStr = false
 			}
-			strs = append(strs, el.sval)
+			if el.kind != VInt {
+				allInt = false
+			}
 		}
-		return strs
+		if allStr {
+			strs := make([]string, len(v.lval))
+			for i, el := range v.lval {
+				strs[i] = el.sval
+			}
+			return strs
+		}
+		if allInt {
+			ints := make([]int, len(v.lval))
+			for i, el := range v.lval {
+				ints[i] = el.ival
+			}
+			return ints
+		}
+		return v.lval
 	default:
 		return nil
 	}

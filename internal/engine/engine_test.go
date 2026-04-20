@@ -3623,3 +3623,151 @@ func TestBagOfTalliesSeedsLoad(t *testing.T) {
 		}
 	}
 }
+
+// TestH29UnitLoads verifies the H29 unit is loaded from CUE with the
+// expected slot shape before exercising the firing pipeline.
+func TestH29UnitLoads(t *testing.T) {
+	eng, _ := testEngine(t)
+	h := eng.Store.Get("H29")
+	if h == nil {
+		t.Fatal("H29 not loaded")
+	}
+	isA := h.GetStrings("isA")
+	foundHeuristic := false
+	for _, s := range isA {
+		if s == "Heuristic" {
+			foundHeuristic = true
+		}
+	}
+	if !foundHeuristic {
+		t.Errorf("H29.isA missing Heuristic; got %v", isA)
+	}
+	if cap, _ := h.Get("h29Cap").(int); cap != 5 {
+		t.Errorf("H29.h29Cap: want 5, got %v", h.Get("h29Cap"))
+	}
+	if prog := h.GetString("ifWorkingOnTask"); prog == "" {
+		t.Error("H29.ifWorkingOnTask empty")
+	}
+	if prog := h.GetString("thenCompute"); prog == "" {
+		t.Error("H29.thenCompute empty")
+	}
+}
+
+// TestH29FiresOnBagOfTallies directly invokes H29's task-firing path on
+// a BagOfTallies examples task and verifies new mutated example children
+// appear with non-empty data drawn from the input alphabet.
+func TestH29FiresOnBagOfTallies(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	bag := eng.Store.Get("BagOfTallies")
+	if bag == nil {
+		t.Fatal("BagOfTallies not loaded")
+	}
+	beforeExs := bag.GetStrings("examples")
+	beforeCount := len(beforeExs)
+	if beforeCount < 3 {
+		t.Fatalf("expected ≥3 seed examples, got %d", beforeCount)
+	}
+
+	task := &agenda.Task{
+		Priority: 500,
+		UnitName: "BagOfTallies",
+		SlotName: "examples",
+		Reasons:  []string{"test: H29 firing"},
+	}
+	eng.VM.SetEnv("CurUnit", dsl.StringVal(task.UnitName))
+	eng.VM.SetEnv("CurSlot", dsl.StringVal(task.SlotName))
+	fired, _, _ := eng.fireTaskRule("H29", task)
+	if !fired {
+		t.Fatal("H29 did not fire on BagOfTallies examples task")
+	}
+
+	afterExs := eng.Store.Get("BagOfTallies").GetStrings("examples")
+	if len(afterExs) <= beforeCount {
+		t.Fatalf("expected more than %d examples after H29 firing, got %d (%v)", beforeCount, len(afterExs), afterExs)
+	}
+
+	sourceAlphabet := map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true, 7: true}
+	newCount := 0
+	for _, name := range afterExs {
+		isNew := true
+		for _, old := range beforeExs {
+			if name == old {
+				isNew = false
+				break
+			}
+		}
+		if !isNew {
+			continue
+		}
+		newCount++
+		if !strings.HasPrefix(name, "Bag-ex-H29-") {
+			t.Errorf("new example %q does not have H29 prefix", name)
+		}
+		child := eng.Store.Get(name)
+		if child == nil {
+			t.Errorf("new example %q not in store", name)
+			continue
+		}
+		data := child.Get("data")
+		var intList []int
+		switch d := data.(type) {
+		case []int:
+			intList = d
+		case []any:
+			for _, v := range d {
+				if i, ok := v.(int); ok {
+					intList = append(intList, i)
+				}
+			}
+		}
+		if len(intList) == 0 {
+			t.Errorf("%s.data empty — H29 should skip empty mutations", name)
+		}
+		for _, v := range intList {
+			if !sourceAlphabet[v] {
+				t.Errorf("%s.data has foreign element %d; data=%v", name, v, intList)
+			}
+		}
+	}
+	if newCount == 0 {
+		t.Error("no new H29-created examples detected")
+	}
+	if newCount > 5 {
+		t.Errorf("H29 created %d new examples, exceeds h29Cap=5", newCount)
+	}
+}
+
+// TestH29OneShotGuard verifies the h29Ran flag prevents repeat firings
+// on the same source unit.
+func TestH29OneShotGuard(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	task := &agenda.Task{
+		Priority: 500,
+		UnitName: "BagOfTallies",
+		SlotName: "examples",
+		Reasons:  []string{"test: first pass"},
+	}
+	eng.VM.SetEnv("CurUnit", dsl.StringVal(task.UnitName))
+	eng.VM.SetEnv("CurSlot", dsl.StringVal(task.SlotName))
+	eng.fireTaskRule("H29", task)
+	firstPass := len(eng.Store.Get("BagOfTallies").GetStrings("examples"))
+
+	task2 := &agenda.Task{
+		Priority: 500,
+		UnitName: "BagOfTallies",
+		SlotName: "examples",
+		Reasons:  []string{"test: second pass"},
+	}
+	eng.VM.SetEnv("CurUnit", dsl.StringVal(task2.UnitName))
+	eng.VM.SetEnv("CurSlot", dsl.StringVal(task2.SlotName))
+	eng.fireTaskRule("H29", task2)
+	secondPass := len(eng.Store.Get("BagOfTallies").GetStrings("examples"))
+
+	if secondPass != firstPass {
+		t.Errorf("h29Ran guard failed: first pass left %d examples, second pass left %d", firstPass, secondPass)
+	}
+}

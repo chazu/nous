@@ -1168,4 +1168,47 @@ units: [
 			end
 			"""#
 	},
+	{
+		name:    "H29"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "New examples of a MultEleStruc can be found by randomly mutating element multiplicities in known examples"
+		overallRecord: {successes: 0, failures: 0}
+		h29Cap: 5
+		ifWorkingOnTask: #"""
+			"CurUnit" @ "MultEleStruc" isa?
+			"CurSlot" @ "examples" =
+			and
+			"CurUnit" @ "h29Ran" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			true "CurUnit" @ "h29Ran" set-slot
+
+			"CurUnit" @ "examples" get-slot "srcExs" !
+			"H29" "h29Cap" get-slot "cap" !
+			0 "made" !
+
+			"srcExs" @ each
+				"made" @ "cap" @ < if
+					it "srcName" !
+					"srcName" @ "data" get-slot mutate-multiplicities "newData" !
+					"newData" @ list-length 0 > if
+						"Bag-ex-H29-" "CurUnit" @ concat "-" concat "made" @ concat "newName" !
+						"newName" @ unit-exists? not if
+							"newName" @ "Bag" create-unit drop
+							"newData" @ "newName" @ "data" set-slot
+							"newName" @ "CurUnit" @ "examples" add-to-slot
+							"H29" "newName" @ "creditors" set-slot
+							"made" @ 1 + "made" !
+						then
+					then
+				then
+			end
+
+			"made" @ 0 > if
+				"H29: created " "made" @ concat " new multiplicity-mutated examples for " concat "CurUnit" @ concat print
+			then
+			"""#
+	},
 ]
