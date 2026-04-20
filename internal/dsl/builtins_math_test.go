@@ -281,3 +281,57 @@ func TestRunGenerator(t *testing.T) {
 		t.Errorf("no generator: expected empty list, got %v", v.AsList())
 	}
 }
+
+func TestOSetOps(t *testing.T) {
+	vm := testVM(t)
+
+	// Lists are constructed via `list-of` — push N elements, then N, then call.
+	cases := []struct {
+		name string
+		prog string
+		want []int
+	}{
+		// Order preservation: a then b's novelty in b's order
+		{"union-preserves-order", `3 1 2 3 list-of  4 2 5 3 list-of  oset-union`, []int{3, 1, 2, 4, 5}},
+		// Intersect preserves a's order
+		{"intersect-preserves-a-order", `3 1 2 4 4 list-of  4 2 2 list-of  oset-intersect`, []int{2, 4}},
+		// Insert: present → no-op
+		{"insert-present-noop", `3 1 2 3 list-of  1 oset-insert`, []int{3, 1, 2}},
+		// Insert: absent → append at end
+		{"insert-absent-appends", `3 1 2 3 list-of  7 oset-insert`, []int{3, 1, 2, 7}},
+		// Delete: preserves surrounding order
+		{"delete-preserves-order", `3 1 2 4 4 list-of  1 oset-delete`, []int{3, 2, 4}},
+	}
+	for _, tc := range cases {
+		v, err := vm.Execute(tc.prog)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		got := v.AsList()
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: want %v got %v", tc.name, tc.want, got)
+			continue
+		}
+		for i, w := range tc.want {
+			if got[i].AsInt() != w {
+				t.Errorf("%s: at %d want %d got %d (full: %v)", tc.name, i, w, got[i].AsInt(), got)
+				break
+			}
+		}
+	}
+
+	// Divergence: oset-equal? is order-sensitive, set-equal? is not
+	v, err := vm.Execute(`1 2 2 list-of  2 1 2 list-of  oset-equal?`)
+	if err != nil || v.AsBool() {
+		t.Errorf("oset-equal? [1 2] [2 1]: want false, got %v (err=%v)", v, err)
+	}
+	v, err = vm.Execute(`1 2 2 list-of  2 1 2 list-of  set-equal?`)
+	if err != nil || !v.AsBool() {
+		t.Errorf("set-equal? [1 2] [2 1]: want true, got %v (err=%v)", v, err)
+	}
+	v, err = vm.Execute(`1 2 3 3 list-of  1 2 3 3 list-of  oset-equal?`)
+	if err != nil || !v.AsBool() {
+		t.Errorf("oset-equal? identical: want true, got %v (err=%v)", v, err)
+	}
+}

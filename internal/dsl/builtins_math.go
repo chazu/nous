@@ -63,6 +63,13 @@ func init() {
 	builtins["make-set"] = bMakeSet // ( list -- set ) deduplicate + sort
 	builtins["set-empty?"] = func(vm *VM) error { vm.push(BoolVal(len(vm.pop().AsList()) == 0)); return nil }
 
+	// OSet operations — order-preserving, duplicate-rejecting
+	builtins["oset-union"] = bOSetUnion
+	builtins["oset-intersect"] = bOSetIntersect
+	builtins["oset-insert"] = bOSetInsert
+	builtins["oset-delete"] = bOSetDelete
+	builtins["oset-equal?"] = bOSetEqual
+
 	// List operations
 	builtins["first"] = bFirst
 	builtins["rest"] = bRest
@@ -341,6 +348,113 @@ func bSetEqual(vm *VM) error {
 
 func bMakeSet(vm *VM) error {
 	vm.push(intSetToValue(toIntSet(vm.pop())))
+	return nil
+}
+
+// OSet operations — ordered sets: unique elements, order-preserving.
+// Internal representation is the same []Value as sets/lists; the distinction
+// is behavioral (these builtins don't sort and reject duplicates by O(n)
+// linear scan rather than by map-based dedupe).
+
+// toIntListPreserve returns a's element ints in original order, with
+// duplicates removed (first occurrence wins).
+func toIntListPreserve(v Value) []int {
+	list := v.AsList()
+	seen := make(map[int]bool, len(list))
+	out := make([]int, 0, len(list))
+	for _, el := range list {
+		n := el.AsInt()
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func intListToValue(s []int) Value {
+	vals := make([]Value, len(s))
+	for i, n := range s {
+		vals[i] = IntVal(n)
+	}
+	return ListVal(vals)
+}
+
+func bOSetUnion(vm *VM) error {
+	b := toIntListPreserve(vm.pop())
+	a := toIntListPreserve(vm.pop())
+	inA := make(map[int]bool, len(a))
+	for _, n := range a {
+		inA[n] = true
+	}
+	result := append([]int(nil), a...)
+	for _, n := range b {
+		if !inA[n] {
+			result = append(result, n)
+			inA[n] = true
+		}
+	}
+	vm.push(intListToValue(result))
+	return nil
+}
+
+func bOSetIntersect(vm *VM) error {
+	b := toIntListPreserve(vm.pop())
+	a := toIntListPreserve(vm.pop())
+	inB := make(map[int]bool, len(b))
+	for _, n := range b {
+		inB[n] = true
+	}
+	var result []int
+	for _, n := range a {
+		if inB[n] {
+			result = append(result, n)
+		}
+	}
+	vm.push(intListToValue(result))
+	return nil
+}
+
+func bOSetInsert(vm *VM) error {
+	x := vm.pop().AsInt()
+	a := toIntListPreserve(vm.pop())
+	for _, n := range a {
+		if n == x {
+			vm.push(intListToValue(a))
+			return nil
+		}
+	}
+	vm.push(intListToValue(append(a, x)))
+	return nil
+}
+
+func bOSetDelete(vm *VM) error {
+	x := vm.pop().AsInt()
+	a := toIntListPreserve(vm.pop())
+	result := make([]int, 0, len(a))
+	for _, n := range a {
+		if n != x {
+			result = append(result, n)
+		}
+	}
+	vm.push(intListToValue(result))
+	return nil
+}
+
+func bOSetEqual(vm *VM) error {
+	b := toIntListPreserve(vm.pop())
+	a := toIntListPreserve(vm.pop())
+	if len(a) != len(b) {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+	vm.push(BoolVal(true))
 	return nil
 }
 
