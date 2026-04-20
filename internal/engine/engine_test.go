@@ -2792,3 +2792,32 @@ func TestTransposeOp(t *testing.T) {
 		t.Errorf("Transpose-SetDifference([0,1,2], [2,3,4]) = %v; expected contains 4", list)
 	}
 }
+
+// Phase 5.6A: H-Transpose fires on unit-focus of a BinaryOp, creates the
+// Transpose variant via the transpose-op builtin, and marks the op as
+// transposed to prevent re-firing.
+func TestHTransposeFires(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-Transpose") {
+		t.Fatal("H-Transpose heuristic not loaded from common/heuristics.cue")
+	}
+
+	eng.fireUnitRule("H-Transpose", "SetDifference")
+
+	if !eng.Store.Has("Transpose-SetDifference") {
+		t.Fatal("Transpose-SetDifference not created after H-Transpose fired")
+	}
+	sd := eng.Store.Get("SetDifference")
+	if tr, _ := sd.Get("transposed").(bool); !tr {
+		t.Errorf("SetDifference.transposed = %v; want true", sd.Get("transposed"))
+	}
+
+	// Re-firing should not create anything new (one-shot guard).
+	preCount := eng.Store.Count()
+	eng.fireUnitRule("H-Transpose", "SetDifference")
+	if eng.Store.Count() != preCount {
+		t.Errorf("re-firing H-Transpose created new units; pre=%d post=%d", preCount, eng.Store.Count())
+	}
+}

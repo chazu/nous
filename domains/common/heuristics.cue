@@ -1070,4 +1070,28 @@ units: [
 			true "ArgU" @ "generated" set-slot
 			"""#
 	},
+	{
+		name:    "H-Transpose"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "Create transposed version of binary ops"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "BinaryOp" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"ArgU" @ "transposed" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ transpose-op
+			"newOp" !
+			"newOp" @ nil !=
+			if
+				400 "newOp" @ "examples" "Examples for transposed op" add-task
+				"Transposed " "ArgU" @ concat print
+			then
+			true "ArgU" @ "transposed" set-slot
+			"""#
+	},
 ]
