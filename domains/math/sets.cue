@@ -47,4 +47,18 @@ units: [
 		worth: 400
 		isA: ["List", "Structure", "MathObj", "Anything"]
 	},
+	{
+		name:    "OSetOfNumbers"
+		worth:   500
+		isA: ["OSet", "Set", "Structure", "MathObj", "Anything"]
+		english: "The integers from 1 to 20 in ascending order"
+		data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+	},
+	{
+		name:    "OSetOfPrimesDesc"
+		worth:   500
+		isA: ["OSet", "Set", "Structure", "MathObj", "Anything"]
+		english: "Primes under 20 in descending order"
+		data: [19, 17, 13, 11, 7, 5, 3, 2]
+	},
 ]

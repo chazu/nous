@@ -166,8 +166,9 @@ Companion heuristic **H24-Seeder** schedules whyInt tasks when an examples task 
 
 ### Issues
 
-**5.1: OSet type and operations**
-Ordered set (no duplicates, ordered). OSetInsert, OSetDelete, OSetIntersect, OSetUnion, OSetEqual.
+**5.1: OSet type and operations** -- COMPLETE (2026-04-20)
+
+`OSet` added as `Set` specialization in `domains/math/types.cue`. Five op units (OSetUnion, OSetIntersect, OSetInsert, OSetDelete, OSetEqual) with corresponding order-preserving DSL builtins (`oset-union`, `oset-intersect`, `oset-insert`, `oset-delete`, `oset-equal?`) that linear-scan inputs without sorting. Seed instances `OSetOfNumbers` (ascending) and `OSetOfPrimesDesc` (descending); the descending seed makes order preservation observable to heuristics. Engine smoke test (`TestOSetUnionPreservesOrderViaEngine`) guards against silent regression to canonicalizing set-*. OSetDifference and ReverseOSet deferred.
 
 **5.2: OPair and Pair types** -- PARTIAL (OPair + H25/H26 complete; Pair and ReverseOPair deferred)
 
@@ -317,7 +318,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 | COMPLETE |
-| 5 | Type hierarchy + operations | 12 | PARTIAL (5.2, 5.6 A/B/C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
+| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.6 A/B/C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
 

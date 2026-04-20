@@ -3186,3 +3186,175 @@ func TestHSemanticDupKillsRedundant(t *testing.T) {
 		t.Error("Add (parent) should survive — H-SemanticDup must not touch it")
 	}
 }
+
+// TestOSetTypeUnitLoads verifies the OSet type unit is loaded from CUE
+// with the correct isA hierarchy (subtype of Set).
+func TestOSetTypeUnitLoads(t *testing.T) {
+	eng, _ := testEngine(t)
+	oset := eng.Store.Get("OSet")
+	if oset == nil {
+		t.Fatal("OSet unit not loaded from domain")
+	}
+	isA := oset.GetStrings("isA")
+	got := make(map[string]bool, len(isA))
+	for _, v := range isA {
+		got[v] = true
+	}
+	for _, want := range []string{"Set", "Structure", "MathObj", "Anything"} {
+		if !got[want] {
+			t.Errorf("OSet.isA missing %q; got %v", want, isA)
+		}
+	}
+
+	set := eng.Store.Get("Set")
+	specs := set.GetStrings("specializations")
+	foundOSet := false
+	for _, s := range specs {
+		if s == "OSet" {
+			foundOSet = true
+			break
+		}
+	}
+	if !foundOSet {
+		t.Errorf("Set.specializations missing OSet; got %v", specs)
+	}
+}
+
+// TestOSetInstanceUnitsLoad verifies OSetOfNumbers and OSetOfPrimesDesc
+// are present with correct data. OSetOfPrimesDesc's descending order is
+// load-bearing — it makes order preservation observable in seed data.
+func TestOSetInstanceUnitsLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	nums := eng.Store.Get("OSetOfNumbers")
+	if nums == nil {
+		t.Fatal("OSetOfNumbers not loaded")
+	}
+	data, _ := nums.Get("data").([]int)
+	if len(data) != 20 {
+		t.Errorf("OSetOfNumbers.data: want 20 elements, got %d", len(data))
+	}
+
+	primes := eng.Store.Get("OSetOfPrimesDesc")
+	if primes == nil {
+		t.Fatal("OSetOfPrimesDesc not loaded")
+	}
+	pdata, _ := primes.Get("data").([]int)
+	if len(pdata) < 2 {
+		t.Fatalf("OSetOfPrimesDesc.data too short: %v", pdata)
+	}
+	first := pdata[0]
+	last := pdata[len(pdata)-1]
+	if first <= last {
+		t.Errorf("OSetOfPrimesDesc not descending: first=%d last=%d", first, last)
+	}
+}
+
+// TestOSetOperationUnitsLoad verifies the five OSet op units are loaded
+// with correct domain/range and defn hooks to the new DSL builtins.
+func TestOSetOperationUnitsLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+	wantOps := map[string]struct {
+		domain []string
+		rangeT []string
+		defn   string
+	}{
+		"OSetUnion":     {[]string{"OSet", "OSet"}, []string{"OSet"}, "oset-union"},
+		"OSetIntersect": {[]string{"OSet", "OSet"}, []string{"OSet"}, "oset-intersect"},
+		"OSetInsert":    {[]string{"OSet", "Anything"}, []string{"OSet"}, "oset-insert"},
+		"OSetDelete":    {[]string{"OSet", "Anything"}, []string{"OSet"}, "oset-delete"},
+		"OSetEqual":     {[]string{"OSet", "OSet"}, []string{"TruthValue"}, "oset-equal?"},
+	}
+	for name, want := range wantOps {
+		u := eng.Store.Get(name)
+		if u == nil {
+			t.Errorf("%s not loaded", name)
+			continue
+		}
+		dom := u.GetStrings("domain")
+		if len(dom) != len(want.domain) {
+			t.Errorf("%s.domain: want %v got %v", name, want.domain, dom)
+		} else {
+			for i, d := range want.domain {
+				if dom[i] != d {
+					t.Errorf("%s.domain[%d]: want %q got %q", name, i, d, dom[i])
+				}
+			}
+		}
+		rng := u.GetStrings("range")
+		if len(rng) != len(want.rangeT) || rng[0] != want.rangeT[0] {
+			t.Errorf("%s.range: want %v got %v", name, want.rangeT, rng)
+		}
+		defn, _ := u.Get("defn").(string)
+		if !strings.Contains(defn, want.defn) {
+			t.Errorf("%s.defn: want contains %q, got %q", name, want.defn, defn)
+		}
+	}
+}
+
+// TestOSetUnionPreservesOrderViaEngine runs the engine long enough for
+// H-RunOnExamples to apply OSetUnion to its seed data and asserts the
+// recorded output preserves left-argument order. Regression guard: if a
+// refactor accidentally routes OSet ops through set-union canonicalization,
+// this test fails.
+func TestOSetUnionPreservesOrderViaEngine(t *testing.T) {
+	eng, _ := testEngine(t)
+	// SeedInitialAgenda pushes a priority-700 examples task for every Op
+	// (including OSetUnion), ensuring H-RunOnExamples fires via task-focus
+	// in the first pass rather than waiting for unit-focus (which OSetUnion
+	// at worth=500 would reach only after all higher-worth units are exhausted).
+	eng.SeedInitialAgenda()
+	eng.MaxCycles = 80
+	eng.Verbosity = 0
+
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	op := eng.Store.Get("OSetUnion")
+	if op == nil {
+		t.Fatal("OSetUnion missing after run")
+	}
+	applics, _ := op.Get("applics").([]map[string]any)
+	if len(applics) == 0 {
+		t.Fatalf("OSetUnion recorded no applics in %d cycles — H-RunOnExamples never fired on it", eng.MaxCycles)
+	}
+
+	foundOrderEvidence := false
+	for _, ap := range applics {
+		// args is []string as stored by record-applic.
+		args, _ := ap["args"].([]string)
+		if len(args) != 2 {
+			continue
+		}
+		if args[0] != "OSetOfPrimesDesc" {
+			continue
+		}
+		outName, _ := ap["output"].(string)
+		if outName == "" {
+			continue
+		}
+		outU := eng.Store.Get(outName)
+		if outU == nil {
+			continue
+		}
+		// H-RunOnExamples stores the result via intListToValue → []dsl.Value.
+		// Check []dsl.Value first (primary path), then []int (seed data path).
+		switch d := outU.Get("data").(type) {
+		case []dsl.Value:
+			if len(d) >= 1 && d[0].AsInt() == 19 {
+				foundOrderEvidence = true
+			}
+		case []int:
+			if len(d) >= 1 && d[0] == 19 {
+				foundOrderEvidence = true
+			}
+		}
+		if foundOrderEvidence {
+			break
+		}
+	}
+	if !foundOrderEvidence {
+		t.Errorf("No OSetUnion applic with OSetOfPrimesDesc as left arg produced an output starting with 19; order preservation not verified. Applics: %v", applics)
+	}
+}
