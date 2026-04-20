@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -82,6 +83,7 @@ func init() {
 	builtins["apply-pred"] = bApplyPred
 	builtins["run-generator"] = bRunGenerator
 	builtins["transpose-op"] = bTransposeOp
+	builtins["compose-ops"] = bComposeOps
 }
 
 // run-generator: (unitName count -- list)
@@ -625,4 +627,71 @@ func bTransposeOp(vm *VM) error {
 	vm.Store.SetSlot(newName, "generalizations", []string{opName})
 	vm.push(StringVal(newName))
 	return nil
+}
+
+// compose-ops: ( fName gName -- newOpName | nil )
+// Creates Compose-<f>-<g> when range(f) matches domain(g) as ordered
+// string slices. Composed defn chains apply-op on f then g. Arity of
+// the result matches f's arity; range matches g's. Idempotent.
+func bComposeOps(vm *VM) error {
+	gName := vm.pop().AsString()
+	fName := vm.pop().AsString()
+	f := vm.Store.Get(fName)
+	g := vm.Store.Get(gName)
+	if f == nil || g == nil {
+		vm.push(Nil())
+		return nil
+	}
+	fDefn := f.GetString("defn")
+	gDefn := g.GetString("defn")
+	if fDefn == "" || gDefn == "" {
+		vm.push(Nil())
+		return nil
+	}
+	fRange := f.GetStrings("range")
+	gDomain := g.GetStrings("domain")
+	if !stringSlicesEqual(fRange, gDomain) {
+		vm.push(Nil())
+		return nil
+	}
+
+	newName := "Compose-" + fName + "-" + gName
+	if vm.Store.Has(newName) {
+		vm.push(StringVal(newName))
+		return nil
+	}
+
+	fDomain := f.GetStrings("domain")
+	arityBucket := "UnaryOp"
+	if len(fDomain) == 2 {
+		arityBucket = "BinaryOp"
+	} else if len(fDomain) != 1 {
+		vm.push(Nil())
+		return nil
+	}
+
+	newU := unit.New(newName)
+	newU.Set("isA", []string{arityBucket, "Op", "MathOp", "Anything"})
+	newU.SetWorth(500)
+	newU.Set("domain", append([]string{}, fDomain...))
+	newU.Set("range", append([]string{}, g.GetStrings("range")...))
+	newU.Set("defn", fmt.Sprintf(`"%s" apply-op "%s" apply-op`, fName, gName))
+	newU.Set("creditors", []string{"H-Compose"})
+	vm.Store.Put(newU)
+	vm.Store.SetSlot(newName, "generalizations", []string{fName, gName})
+	vm.push(StringVal(newName))
+	return nil
+}
+
+// stringSlicesEqual compares two []string for elementwise equality.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

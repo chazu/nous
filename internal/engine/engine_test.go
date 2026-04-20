@@ -2821,3 +2821,101 @@ func TestHTransposeFires(t *testing.T) {
 		t.Errorf("re-firing H-Transpose created new units; pre=%d post=%d", preCount, eng.Store.Count())
 	}
 }
+
+// Phase 5.6B: compose-ops creates Compose-<f>-<g> when range(f) == domain(g)
+// as ordered string slices. Composed defn chains apply-op on f then g.
+// Idempotent. Returns nil on mismatch or missing defns.
+func TestComposeOps(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	// Mismatch: range(DivisorsOf)=[Set], domain(SetUnion)=[Set,Set] → nil.
+	v, err := eng.VM.Execute(`"DivisorsOf" "SetUnion" compose-ops`)
+	if err != nil {
+		t.Fatalf("compose-ops DivisorsOf SetUnion: %v", err)
+	}
+	if !v.IsNil() {
+		t.Errorf("mismatch case returned %v; want nil", v)
+	}
+	if eng.Store.Has("Compose-DivisorsOf-SetUnion") {
+		t.Error("Compose-DivisorsOf-SetUnion should not exist on mismatch")
+	}
+
+	// Match: range(Successor)=[Number], domain(Successor)=[Number] → self-compose.
+	v2, err := eng.VM.Execute(`"Successor" "Successor" compose-ops`)
+	if err != nil {
+		t.Fatalf("compose-ops Successor Successor: %v", err)
+	}
+	if v2.AsString() != "Compose-Successor-Successor" {
+		t.Fatalf("returned %q; want Compose-Successor-Successor", v2.AsString())
+	}
+	cu := eng.Store.Get("Compose-Successor-Successor")
+	if cu == nil {
+		t.Fatal("Compose-Successor-Successor not in store")
+	}
+	isA := cu.GetStrings("isA")
+	hasUnary, hasOp := false, false
+	for _, tag := range isA {
+		if tag == "UnaryOp" {
+			hasUnary = true
+		}
+		if tag == "Op" {
+			hasOp = true
+		}
+	}
+	if !hasUnary || !hasOp {
+		t.Errorf("isA=%v; want UnaryOp and Op", isA)
+	}
+	if got := cu.GetStrings("domain"); len(got) != 1 || got[0] != "Number" {
+		t.Errorf("domain=%v; want [Number]", got)
+	}
+	if got := cu.GetStrings("range"); len(got) != 1 || got[0] != "Number" {
+		t.Errorf("range=%v; want [Number]", got)
+	}
+	gens := cu.GetStrings("generalizations")
+	if len(gens) != 2 || gens[0] != "Successor" || gens[1] != "Successor" {
+		t.Errorf("generalizations=%v; want [Successor Successor]", gens)
+	}
+
+	// Semantic check: Compose-Successor-Successor(5) should be 7.
+	v3, err := eng.VM.Execute(`5 "Compose-Successor-Successor" apply-op`)
+	if err != nil {
+		t.Fatalf("apply Compose-Successor-Successor: %v", err)
+	}
+	if v3.AsInt() != 7 {
+		t.Errorf("Compose(Successor,Successor)(5) = %d; want 7", v3.AsInt())
+	}
+
+	// Binary match: range(Add)=[Number], domain(Square)=[Number] → binary compose.
+	v4, err := eng.VM.Execute(`"Add" "Square" compose-ops`)
+	if err != nil {
+		t.Fatalf("compose-ops Add Square: %v", err)
+	}
+	if v4.AsString() != "Compose-Add-Square" {
+		t.Fatalf("returned %q; want Compose-Add-Square", v4.AsString())
+	}
+	cu2 := eng.Store.Get("Compose-Add-Square")
+	if cu2 == nil {
+		t.Fatal("Compose-Add-Square not in store")
+	}
+	if got := cu2.GetStrings("domain"); len(got) != 2 || got[0] != "Number" || got[1] != "Number" {
+		t.Errorf("Compose-Add-Square domain=%v; want [Number Number]", got)
+	}
+	// Compose-Add-Square(3, 4) = Square(Add(3,4)) = Square(7) = 49.
+	v5, err := eng.VM.Execute(`3 4 "Compose-Add-Square" apply-op`)
+	if err != nil {
+		t.Fatalf("apply Compose-Add-Square: %v", err)
+	}
+	if v5.AsInt() != 49 {
+		t.Errorf("Compose(Add,Square)(3,4) = %d; want 49", v5.AsInt())
+	}
+
+	// Idempotency: second call returns same unit.
+	v6, err := eng.VM.Execute(`"Add" "Square" compose-ops`)
+	if err != nil {
+		t.Fatalf("second compose-ops: %v", err)
+	}
+	if v6.AsString() != "Compose-Add-Square" {
+		t.Errorf("second call returned %q; want Compose-Add-Square", v6.AsString())
+	}
+}
