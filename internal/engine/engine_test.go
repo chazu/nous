@@ -3062,3 +3062,76 @@ func TestApplicsRedundantBuiltin(t *testing.T) {
 		t.Errorf("FakeAdd vs Nonexistent: expected false (missing parent)")
 	}
 }
+
+// Part B: transpose-op skips creation when sampling proves commutativity.
+func TestTransposeOpSkipsCommutative(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	for i, v := range []int{2, 3, 5} {
+		name := fmt.Sprintf("Ncomm%d", i)
+		u := unit.New(name)
+		u.Set("isA", []string{"Number", "Anything"})
+		u.SetWorth(500)
+		u.Set("data", v)
+		eng.Store.Put(u)
+		num := eng.Store.Get("Number")
+		ex := num.Get("examples")
+		var exs []any
+		if l, ok := ex.([]any); ok {
+			exs = l
+		}
+		exs = append(exs, name)
+		eng.Store.SetSlot("Number", "examples", exs)
+	}
+
+	v, err := eng.VM.Execute(`"Add" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op Add: %v", err)
+	}
+	if !v.IsNil() {
+		t.Errorf("transpose-op Add: expected nil (commutative), got %v", v)
+	}
+	if eng.Store.Has("Transpose-Add") {
+		t.Error("Transpose-Add should not exist after commutativity detected")
+	}
+
+	v2, err := eng.VM.Execute(`"SetDifference" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op SetDifference: %v", err)
+	}
+	if v2.AsString() != "Transpose-SetDifference" {
+		t.Errorf("transpose-op SetDifference: expected Transpose-SetDifference, got %v", v2)
+	}
+}
+
+// Part B fallback: domain type with no data-bearing examples → create normally.
+func TestTransposeOpFallbackNoSamples(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	tt := unit.New("TestType")
+	tt.Set("isA", []string{"Anything"})
+	tt.SetWorth(500)
+	eng.Store.Put(tt)
+
+	synth := unit.New("SynthOp")
+	synth.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	synth.SetWorth(500)
+	synth.Set("domain", []string{"TestType", "TestType"})
+	synth.Set("range", []string{"TestType"})
+	synth.Set("defn", "+")
+	synth.Set("creditors", []string{"TestSeed"})
+	eng.Store.Put(synth)
+
+	v, err := eng.VM.Execute(`"SynthOp" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op SynthOp: %v", err)
+	}
+	if v.AsString() != "Transpose-SynthOp" {
+		t.Errorf("expected Transpose-SynthOp (fallback path), got %v", v)
+	}
+	if !eng.Store.Has("Transpose-SynthOp") {
+		t.Error("Transpose-SynthOp not created in fallback path")
+	}
+}

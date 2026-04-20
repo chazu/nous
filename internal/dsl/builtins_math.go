@@ -617,6 +617,20 @@ func bTransposeOp(vm *VM) error {
 		return nil
 	}
 
+	// Part B: commutativity sampling. When domain[0] == domain[1], sample
+	// up to 3 (a,b) pairs of data-bearing examples from the domain type's
+	// examples slot, run defn on (a,b) and (b,a). If all pairs agree, the
+	// op is commutative on observed inputs — skip creating the Transpose.
+	if domain[0] == domain[1] {
+		samples := drawDataBearingExamples(vm.Store, domain[0], 3)
+		if len(samples) >= 2 {
+			if commutativeOnSamples(vm, defn, samples) {
+				vm.push(Nil())
+				return nil
+			}
+		}
+	}
+
 	newU := unit.New(newName)
 	newU.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
 	newU.SetWorth(500)
@@ -811,4 +825,90 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// drawDataBearingExamples walks typeName.examples, resolves each entry
+// to a unit, and collects up to n distinct `data` values as Values.
+// Raw non-unit entries are ignored.
+func drawDataBearingExamples(store *unit.Store, typeName string, n int) []Value {
+	u := store.Get(typeName)
+	if u == nil {
+		return nil
+	}
+	ex := u.Get("examples")
+	var list []any
+	switch v := ex.(type) {
+	case []any:
+		list = v
+	case []string:
+		for _, s := range v {
+			list = append(list, s)
+		}
+	default:
+		return nil
+	}
+
+	var out []Value
+	for _, item := range list {
+		if len(out) >= n {
+			break
+		}
+		name, ok := item.(string)
+		if !ok {
+			continue
+		}
+		iu := store.Get(name)
+		if iu == nil {
+			continue
+		}
+		data := iu.Get("data")
+		if data == nil {
+			continue
+		}
+		out = append(out, anyToValue(data))
+	}
+	return out
+}
+
+// commutativeOnSamples tests whether `defn` produces the same result on
+// (a, b) and (b, a) for every pair in C(samples, 2), capped at 3 pairs.
+// Uses semanticValuesEqual (set-equal for lists, == for primitives).
+func commutativeOnSamples(vm *VM, defn string, samples []Value) bool {
+	pairs := 0
+	for i := 0; i < len(samples); i++ {
+		for j := i + 1; j < len(samples); j++ {
+			if pairs >= 3 {
+				return true
+			}
+			a, b := samples[i], samples[j]
+
+			sub1 := NewVM(vm.Store, vm.Ag, vm.Rng)
+			sub1.Out = vm.Out
+			for k, val := range vm.env {
+				sub1.env[k] = val
+			}
+			sub1.stack = append(sub1.stack, a, b)
+			r1, err := subExecute(sub1, defn)
+			if err != nil {
+				return false
+			}
+
+			sub2 := NewVM(vm.Store, vm.Ag, vm.Rng)
+			sub2.Out = vm.Out
+			for k, val := range vm.env {
+				sub2.env[k] = val
+			}
+			sub2.stack = append(sub2.stack, b, a)
+			r2, err := subExecute(sub2, defn)
+			if err != nil {
+				return false
+			}
+
+			if !semanticValuesEqual(r1, r2) {
+				return false
+			}
+			pairs++
+		}
+	}
+	return pairs > 0
 }
