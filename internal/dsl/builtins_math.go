@@ -84,6 +84,7 @@ func init() {
 	builtins["run-generator"] = bRunGenerator
 	builtins["transpose-op"] = bTransposeOp
 	builtins["compose-ops"] = bComposeOps
+	builtins["applics-redundant?"] = bApplicsRedundant
 }
 
 // run-generator: (unitName count -- list)
@@ -681,6 +682,122 @@ func bComposeOps(vm *VM) error {
 	vm.Store.SetSlot(newName, "generalizations", []string{fName, gName})
 	vm.push(StringVal(newName))
 	return nil
+}
+
+// applics-redundant?: ( unitName parentName -- bool )
+// Returns true iff every applic on unitName has an output that matches
+// what parentName's defn produces on the same args. Requires >=3 applics
+// for meaningful evidence; returns false on sparse evidence, missing
+// targets, or any mismatch.
+func bApplicsRedundant(vm *VM) error {
+	parentName := vm.pop().AsString()
+	unitName := vm.pop().AsString()
+
+	u := vm.Store.Get(unitName)
+	parent := vm.Store.Get(parentName)
+	if u == nil || parent == nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	parentDefn := parent.GetString("defn")
+	if parentDefn == "" {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	applicsRaw, ok := u.Get("applics").([]map[string]any)
+	if !ok || len(applicsRaw) < 3 {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	for _, a := range applicsRaw {
+		var args []string
+		switch v := a["args"].(type) {
+		case []string:
+			args = v
+		case []any:
+			for _, x := range v {
+				if s, ok := x.(string); ok {
+					args = append(args, s)
+				}
+			}
+		}
+		outName, _ := a["output"].(string)
+		if len(args) == 0 || outName == "" {
+			vm.push(BoolVal(false))
+			return nil
+		}
+
+		sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+		sub.Out = vm.Out
+		for k, val := range vm.env {
+			sub.env[k] = val
+		}
+		argsOK := true
+		for _, argName := range args {
+			argU := vm.Store.Get(argName)
+			if argU == nil {
+				argsOK = false
+				break
+			}
+			data := argU.Get("data")
+			if data == nil {
+				argsOK = false
+				break
+			}
+			sub.stack = append(sub.stack, anyToValue(data))
+		}
+		if !argsOK {
+			vm.push(BoolVal(false))
+			return nil
+		}
+
+		parentResult, err := subExecute(sub, parentDefn)
+		if err != nil {
+			vm.push(BoolVal(false))
+			return nil
+		}
+
+		outU := vm.Store.Get(outName)
+		if outU == nil {
+			vm.push(BoolVal(false))
+			return nil
+		}
+		outData := outU.Get("data")
+		if outData == nil {
+			vm.push(BoolVal(false))
+			return nil
+		}
+		observed := anyToValue(outData)
+
+		if !semanticValuesEqual(parentResult, observed) {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+
+	vm.push(BoolVal(true))
+	return nil
+}
+
+// semanticValuesEqual compares two Values with set-semantics for lists
+// (order-insensitive, dedupe-insensitive for int lists) and strict
+// equality otherwise.
+func semanticValuesEqual(a, b Value) bool {
+	if a.Kind() == VList && b.Kind() == VList {
+		as, bs := toIntSet(a), toIntSet(b)
+		if len(as) != len(bs) {
+			return false
+		}
+		for i := range as {
+			if as[i] != bs[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return a.Equal(b)
 }
 
 // stringSlicesEqual compares two []string for elementwise equality.
