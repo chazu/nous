@@ -3219,3 +3219,33 @@ func TestOSetTypeUnitLoads(t *testing.T) {
 		t.Errorf("Set.specializations missing OSet; got %v", specs)
 	}
 }
+
+// TestOSetInstanceUnitsLoad verifies OSetOfNumbers and OSetOfPrimesDesc
+// are present with correct data. OSetOfPrimesDesc's descending order is
+// load-bearing — it makes order preservation observable in seed data.
+func TestOSetInstanceUnitsLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	nums := eng.Store.Get("OSetOfNumbers")
+	if nums == nil {
+		t.Fatal("OSetOfNumbers not loaded")
+	}
+	data, _ := nums.Get("data").([]int)
+	if len(data) != 20 {
+		t.Errorf("OSetOfNumbers.data: want 20 elements, got %d", len(data))
+	}
+
+	primes := eng.Store.Get("OSetOfPrimesDesc")
+	if primes == nil {
+		t.Fatal("OSetOfPrimesDesc not loaded")
+	}
+	pdata, _ := primes.Get("data").([]int)
+	if len(pdata) < 2 {
+		t.Fatalf("OSetOfPrimesDesc.data too short: %v", pdata)
+	}
+	first := pdata[0]
+	last := pdata[len(pdata)-1]
+	if first <= last {
+		t.Errorf("OSetOfPrimesDesc not descending: first=%d last=%d", first, last)
+	}
+}
