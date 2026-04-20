@@ -202,6 +202,8 @@ Phase 5.6 was sliced into four independent pieces. Slices C.1 and C.2 shipped to
 - **B Compose** -- COMPLETE (2026-04-19). `compose-ops` builtin creates `Compose-<f>-<g>` when range(f) == domain(g) as ordered string slices. Composed defn chains apply-op on f then g. H-Compose iterates Op.examples capped at 3/firing. H-CheckDomain deleted (its SelfCompose branch produced shell units without defns; falls out naturally from H-Compose with f=g).
 - **D Restrict + InvertOp** -- deferred. Restrict partially exists via `restrictedTo` (H6-Specialize); InvertOp is genuinely complex and low priority.
 
+**Followup TODO — H-SemanticDup creditor gate.** Current gate is `creditors contains H-Transpose or H-Compose` (narrowed from the original plan's `creditors != nil` to avoid killing H-Specialize outputs, which by design reproduce parent applics on a restricted domain). This list must be extended whenever a new meta-op heuristic lands that produces units whose correctness criterion is "behaviorally distinct from parent". Candidates that would need adding: `H-Invert` (Phase 5.6 D), `H-Curry`, `H-Distribute`, any future meta-op heuristic. Better shape for the future: mark meta-op output units with an explicit `isMetaOp: true` slot or a shared creditor category (e.g. `MetaOpHeuristic` in isA), and gate H-SemanticDup on that category — removes the "edit this CUE file every time" burden. See `internal/engine/engine_test.go:TestH19CriterialSparesSpecializations` for the failure mode this gate protects against.
+
 **5.7: Choice operations**
 RandomChoose, RandomSubset, GoodChoose, GoodSubset, BestChoose, BestSubset as unit concepts (they exist as behaviors in H3/H5 but need to be first-class units that other heuristics can discover and reason about).
 
