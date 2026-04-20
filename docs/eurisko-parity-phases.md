@@ -192,14 +192,14 @@ OrdStruc/UnOrdStruc, MultEleStruc/NoMultEleStruc, EmptyStruc/NonEmptyStruc, SetO
 **5.5: Per-type operations**
 ListInsert/Delete/Intersect/Union/Difference, BagInsert/Delete/Intersect/Union/Difference. Each as a unit with defn and domain/range.
 
-**5.6: Meta-operations with algorithms** -- PARTIAL (C.1 + C.2 complete; A/B/D deferred)
+**5.6: Meta-operations with algorithms** -- PARTIAL (A, B, C.1, C.2 complete; D deferred)
 
 Phase 5.6 was sliced into four independent pieces. Slices C.1 and C.2 shipped together and unblock H8 (Phase 4.4).
 
 - **C.1 Type predicates** -- COMPLETE. New `is-int?`/`is-list?`/`is-string?` DSL builtins introspecting Value kind. `defn` slots added to `Number` (`is-int?`) and `Set`/`List`/`Bag` (`is-list?` — finer discrimination is semantic work, not type-kind work). `apply-pred` on a type unit now acts as a type test.
 - **C.2 H8** -- COMPLETE (see 4.4 above).
-- **A Transpose** -- deferred. `transpose-op` builtin + H-Transpose heuristic that creates `Transpose-<op>` variants for non-commutative binary ops.
-- **B Compose** -- deferred. `compose-ops` builtin synthesizing a new op whose defn chains `apply-op(f)` then `apply-op(g)`, with range/domain compatibility checks. Supersedes the ad-hoc H-CheckDomain SelfCompose code path.
+- **A Transpose** -- COMPLETE (2026-04-19). `transpose-op` builtin + H-Transpose heuristic create `Transpose-<op>` for any BinaryOp; domain reversed, defn prefixed with `swap`. Commutativity handled reactively by H19-EliminateDuplicates. Plan: `docs/superpowers/plans/2026-04-19-transpose-and-compose.md`.
+- **B Compose** -- COMPLETE (2026-04-19). `compose-ops` builtin creates `Compose-<f>-<g>` when range(f) == domain(g) as ordered string slices. Composed defn chains apply-op on f then g. H-Compose iterates Op.examples capped at 3/firing. H-CheckDomain deleted (its SelfCompose branch produced shell units without defns; falls out naturally from H-Compose with f=g).
 - **D Restrict + InvertOp** -- deferred. Restrict partially exists via `restrictedTo` (H6-Specialize); InvertOp is genuinely complex and low priority.
 
 **5.7: Choice operations**
@@ -315,7 +315,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 | COMPLETE |
-| 5 | Type hierarchy + operations | 12 | PARTIAL (5.2, 5.6 C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
+| 5 | Type hierarchy + operations | 12 | PARTIAL (5.2, 5.6 A/B/C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
 
