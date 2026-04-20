@@ -2682,3 +2682,292 @@ func stringSliceEq(a, b []string) bool {
 	return true
 }
 
+// Phase 5.6A: transpose-op creates Transpose-<op> for any BinaryOp,
+// reversing the domain and prefixing the defn with `swap`. Idempotent —
+// calling twice returns the same unit name.
+func TestTransposeOp(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	// Non-commutative BinaryOp → creates Transpose variant.
+	v, err := eng.VM.Execute(`"SetDifference" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op SetDifference: %v", err)
+	}
+	if v.AsString() != "Transpose-SetDifference" {
+		t.Fatalf("returned name = %q; want Transpose-SetDifference", v.AsString())
+	}
+
+	tu := eng.Store.Get("Transpose-SetDifference")
+	if tu == nil {
+		t.Fatal("Transpose-SetDifference unit not in store")
+	}
+
+	isA := tu.GetStrings("isA")
+	hasBinary, hasOp := false, false
+	for _, tag := range isA {
+		if tag == "BinaryOp" {
+			hasBinary = true
+		}
+		if tag == "Op" {
+			hasOp = true
+		}
+	}
+	if !hasBinary || !hasOp {
+		t.Errorf("isA=%v; want BinaryOp and Op", isA)
+	}
+
+	// SetDifference.domain = [Set, Set] — reversed still [Set, Set], but the
+	// defn should have `swap ` prefix distinguishing the operation.
+	if got := tu.GetStrings("domain"); len(got) != 2 || got[0] != "Set" || got[1] != "Set" {
+		t.Errorf("domain=%v; want [Set Set]", got)
+	}
+	if got := tu.GetStrings("range"); len(got) != 1 || got[0] != "Set" {
+		t.Errorf("range=%v; want [Set]", got)
+	}
+	defn := tu.GetString("defn")
+	if !strings.HasPrefix(defn, "swap ") {
+		t.Errorf("defn=%q; want prefix 'swap '", defn)
+	}
+	if gens := tu.GetStrings("generalizations"); len(gens) != 1 || gens[0] != "SetDifference" {
+		t.Errorf("generalizations=%v; want [SetDifference]", gens)
+	}
+
+	// Idempotency: second call returns same name, does not duplicate.
+	v2, err := eng.VM.Execute(`"SetDifference" transpose-op`)
+	if err != nil {
+		t.Fatalf("second transpose-op: %v", err)
+	}
+	if v2.AsString() != "Transpose-SetDifference" {
+		t.Errorf("second call returned %q; want Transpose-SetDifference", v2.AsString())
+	}
+
+	// Asymmetric domain reversal: Restrict has domain [Op, Pred]. Transposed
+	// must have [Pred, Op]. (Restrict has no defn today — check for that first
+	// and skip gracefully if so; the test's purpose is to verify reversal
+	// logic, not Restrict's semantics.)
+	rst := eng.Store.Get("Restrict")
+	if rst != nil && rst.GetString("defn") != "" {
+		v5, err := eng.VM.Execute(`"Restrict" transpose-op`)
+		if err != nil {
+			t.Fatalf("transpose-op Restrict: %v", err)
+		}
+		if v5.AsString() != "Transpose-Restrict" {
+			t.Fatalf("returned %q; want Transpose-Restrict", v5.AsString())
+		}
+		tr := eng.Store.Get("Transpose-Restrict")
+		if got := tr.GetStrings("domain"); len(got) != 2 || got[0] != "Pred" || got[1] != "Op" {
+			t.Errorf("Transpose-Restrict domain=%v; want [Pred Op]", got)
+		}
+	}
+
+	// UnaryOp → nil (domain length != 2).
+	v3, err := eng.VM.Execute(`"DivisorsOf" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op DivisorsOf: %v", err)
+	}
+	if !v3.IsNil() {
+		t.Errorf("transpose-op on UnaryOp: expected nil, got %v", v3)
+	}
+	if eng.Store.Has("Transpose-DivisorsOf") {
+		t.Error("Transpose-DivisorsOf should not exist (precondition failure)")
+	}
+
+	// Semantic check: invoking the transposed defn swaps args.
+	// SetDifference: set-diff takes (a, b) → a\b. Transposed: b\a.
+	// Feed [1,2,3] and [2,3,4]: SetDifference gives [1]; Transpose gives [4].
+	v4, err := eng.VM.Execute(`3 iota 2 3 4 3 list-of "Transpose-SetDifference" apply-op`)
+	if err != nil {
+		t.Fatalf("apply transposed: %v", err)
+	}
+	// Result should be a list containing 4 (the element in second arg not in first).
+	list := v4.AsList()
+	has4 := false
+	for _, x := range list {
+		if x.AsInt() == 4 {
+			has4 = true
+		}
+	}
+	if !has4 {
+		t.Errorf("Transpose-SetDifference([0,1,2], [2,3,4]) = %v; expected contains 4", list)
+	}
+}
+
+// Phase 5.6A: H-Transpose fires on unit-focus of a BinaryOp, creates the
+// Transpose variant via the transpose-op builtin, and marks the op as
+// transposed to prevent re-firing.
+func TestHTransposeFires(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-Transpose") {
+		t.Fatal("H-Transpose heuristic not loaded from common/heuristics.cue")
+	}
+
+	eng.fireUnitRule("H-Transpose", "SetDifference")
+
+	if !eng.Store.Has("Transpose-SetDifference") {
+		t.Fatal("Transpose-SetDifference not created after H-Transpose fired")
+	}
+	sd := eng.Store.Get("SetDifference")
+	if tr, _ := sd.Get("transposed").(bool); !tr {
+		t.Errorf("SetDifference.transposed = %v; want true", sd.Get("transposed"))
+	}
+
+	// Re-firing should not create anything new (one-shot guard).
+	preCount := eng.Store.Count()
+	eng.fireUnitRule("H-Transpose", "SetDifference")
+	if eng.Store.Count() != preCount {
+		t.Errorf("re-firing H-Transpose created new units; pre=%d post=%d", preCount, eng.Store.Count())
+	}
+}
+
+// Phase 5.6B: compose-ops creates Compose-<f>-<g> when range(f) == domain(g)
+// as ordered string slices. Composed defn chains apply-op on f then g.
+// Idempotent. Returns nil on mismatch or missing defns.
+func TestComposeOps(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	// Mismatch: range(DivisorsOf)=[Set], domain(SetUnion)=[Set,Set] → nil.
+	v, err := eng.VM.Execute(`"DivisorsOf" "SetUnion" compose-ops`)
+	if err != nil {
+		t.Fatalf("compose-ops DivisorsOf SetUnion: %v", err)
+	}
+	if !v.IsNil() {
+		t.Errorf("mismatch case returned %v; want nil", v)
+	}
+	if eng.Store.Has("Compose-DivisorsOf-SetUnion") {
+		t.Error("Compose-DivisorsOf-SetUnion should not exist on mismatch")
+	}
+
+	// Match: range(Successor)=[Number], domain(Successor)=[Number] → self-compose.
+	v2, err := eng.VM.Execute(`"Successor" "Successor" compose-ops`)
+	if err != nil {
+		t.Fatalf("compose-ops Successor Successor: %v", err)
+	}
+	if v2.AsString() != "Compose-Successor-Successor" {
+		t.Fatalf("returned %q; want Compose-Successor-Successor", v2.AsString())
+	}
+	cu := eng.Store.Get("Compose-Successor-Successor")
+	if cu == nil {
+		t.Fatal("Compose-Successor-Successor not in store")
+	}
+	isA := cu.GetStrings("isA")
+	hasUnary, hasOp := false, false
+	for _, tag := range isA {
+		if tag == "UnaryOp" {
+			hasUnary = true
+		}
+		if tag == "Op" {
+			hasOp = true
+		}
+	}
+	if !hasUnary || !hasOp {
+		t.Errorf("isA=%v; want UnaryOp and Op", isA)
+	}
+	if got := cu.GetStrings("domain"); len(got) != 1 || got[0] != "Number" {
+		t.Errorf("domain=%v; want [Number]", got)
+	}
+	if got := cu.GetStrings("range"); len(got) != 1 || got[0] != "Number" {
+		t.Errorf("range=%v; want [Number]", got)
+	}
+	gens := cu.GetStrings("generalizations")
+	if len(gens) != 2 || gens[0] != "Successor" || gens[1] != "Successor" {
+		t.Errorf("generalizations=%v; want [Successor Successor]", gens)
+	}
+
+	// Semantic check: Compose-Successor-Successor(5) should be 7.
+	v3, err := eng.VM.Execute(`5 "Compose-Successor-Successor" apply-op`)
+	if err != nil {
+		t.Fatalf("apply Compose-Successor-Successor: %v", err)
+	}
+	if v3.AsInt() != 7 {
+		t.Errorf("Compose(Successor,Successor)(5) = %d; want 7", v3.AsInt())
+	}
+
+	// Binary match: range(Add)=[Number], domain(Square)=[Number] → binary compose.
+	v4, err := eng.VM.Execute(`"Add" "Square" compose-ops`)
+	if err != nil {
+		t.Fatalf("compose-ops Add Square: %v", err)
+	}
+	if v4.AsString() != "Compose-Add-Square" {
+		t.Fatalf("returned %q; want Compose-Add-Square", v4.AsString())
+	}
+	cu2 := eng.Store.Get("Compose-Add-Square")
+	if cu2 == nil {
+		t.Fatal("Compose-Add-Square not in store")
+	}
+	if got := cu2.GetStrings("domain"); len(got) != 2 || got[0] != "Number" || got[1] != "Number" {
+		t.Errorf("Compose-Add-Square domain=%v; want [Number Number]", got)
+	}
+	// Compose-Add-Square(3, 4) = Square(Add(3,4)) = Square(7) = 49.
+	v5, err := eng.VM.Execute(`3 4 "Compose-Add-Square" apply-op`)
+	if err != nil {
+		t.Fatalf("apply Compose-Add-Square: %v", err)
+	}
+	if v5.AsInt() != 49 {
+		t.Errorf("Compose(Add,Square)(3,4) = %d; want 49", v5.AsInt())
+	}
+
+	// Idempotency: second call returns same unit.
+	v6, err := eng.VM.Execute(`"Add" "Square" compose-ops`)
+	if err != nil {
+		t.Fatalf("second compose-ops: %v", err)
+	}
+	if v6.AsString() != "Compose-Add-Square" {
+		t.Errorf("second call returned %q; want Compose-Add-Square", v6.AsString())
+	}
+}
+
+// Phase 5.6B: H-Compose fires on unit-focus of any Op, iterates candidate
+// g's with matching range/domain, creates Compose-<ArgU>-<g> via compose-ops.
+// Caps at 3 new composes per firing. One-shot per source op.
+func TestHComposeFires(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-Compose") {
+		t.Fatal("H-Compose heuristic not loaded from common/heuristics.cue")
+	}
+
+	preCount := 0
+	for _, name := range eng.Store.All() {
+		if len(name) >= 8 && name[:8] == "Compose-" {
+			preCount++
+		}
+	}
+
+	eng.fireUnitRule("H-Compose", "Successor")
+
+	// Successor's range [Number] matches any UnaryOp or first-domain [Number]
+	// prefix — so at minimum Compose-Successor-Successor must exist.
+	if !eng.Store.Has("Compose-Successor-Successor") {
+		t.Fatal("Compose-Successor-Successor not created after H-Compose fired on Successor")
+	}
+
+	// Count new Compose-* units; should be between 1 and 3 (cap).
+	postCount := 0
+	for _, name := range eng.Store.All() {
+		if len(name) >= 8 && name[:8] == "Compose-" {
+			postCount++
+		}
+	}
+	created := postCount - preCount
+	if created < 1 || created > 3 {
+		t.Errorf("created %d Compose-* units; want 1..3 (cap-3)", created)
+	}
+
+	// One-shot flag set.
+	sc := eng.Store.Get("Successor")
+	if c, _ := sc.Get("composed").(bool); !c {
+		t.Errorf("Successor.composed = %v; want true", sc.Get("composed"))
+	}
+
+	// Re-firing is a no-op for new unit creation.
+	mid := eng.Store.Count()
+	eng.fireUnitRule("H-Compose", "Successor")
+	if eng.Store.Count() != mid {
+		t.Errorf("re-firing H-Compose created new units; mid=%d post=%d", mid, eng.Store.Count())
+	}
+}

@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -81,6 +82,8 @@ func init() {
 	builtins["apply-op-args"] = bApplyOpArgs // ( argList opName -- result )
 	builtins["apply-pred"] = bApplyPred
 	builtins["run-generator"] = bRunGenerator
+	builtins["transpose-op"] = bTransposeOp
+	builtins["compose-ops"] = bComposeOps
 }
 
 // run-generator: (unitName count -- list)
@@ -578,4 +581,117 @@ func subExecute(sub *VM, program string) (Value, error) {
 		return Nil(), nil
 	}
 	return sub.stack[len(sub.stack)-1], nil
+}
+
+// transpose-op: ( opName -- newOpName | nil )
+// Creates Transpose-<opName> for any BinaryOp: domain reversed, defn
+// prefixed with `swap`. Idempotent — if Transpose-<op> already exists,
+// returns its name without modifying. Returns nil on precondition failure
+// (not a BinaryOp, missing defn, wrong-arity domain).
+func bTransposeOp(vm *VM) error {
+	opName := vm.pop().AsString()
+	u := vm.Store.Get(opName)
+	if u == nil {
+		vm.push(Nil())
+		return nil
+	}
+	if !vm.Store.IsA(opName, "BinaryOp") {
+		vm.push(Nil())
+		return nil
+	}
+	defn := u.GetString("defn")
+	if defn == "" {
+		vm.push(Nil())
+		return nil
+	}
+	domain := u.GetStrings("domain")
+	if len(domain) != 2 {
+		vm.push(Nil())
+		return nil
+	}
+
+	newName := "Transpose-" + opName
+	if vm.Store.Has(newName) {
+		vm.push(StringVal(newName))
+		return nil
+	}
+
+	newU := unit.New(newName)
+	newU.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
+	newU.SetWorth(500)
+	newU.Set("domain", []string{domain[1], domain[0]})
+	newU.Set("range", u.GetStrings("range"))
+	newU.Set("defn", "swap "+defn)
+	newU.Set("creditors", []string{"H-Transpose"})
+	vm.Store.Put(newU)
+	vm.Store.SetSlot(newName, "generalizations", []string{opName})
+	vm.push(StringVal(newName))
+	return nil
+}
+
+// compose-ops: ( fName gName -- newOpName | nil )
+// Creates Compose-<f>-<g> when range(f) matches domain(g) as ordered
+// string slices. Composed defn chains apply-op on f then g. Arity of
+// the result matches f's arity; range matches g's. Idempotent.
+func bComposeOps(vm *VM) error {
+	gName := vm.pop().AsString()
+	fName := vm.pop().AsString()
+	f := vm.Store.Get(fName)
+	g := vm.Store.Get(gName)
+	if f == nil || g == nil {
+		vm.push(Nil())
+		return nil
+	}
+	fDefn := f.GetString("defn")
+	gDefn := g.GetString("defn")
+	if fDefn == "" || gDefn == "" {
+		vm.push(Nil())
+		return nil
+	}
+	fRange := f.GetStrings("range")
+	gDomain := g.GetStrings("domain")
+	if !stringSlicesEqual(fRange, gDomain) {
+		vm.push(Nil())
+		return nil
+	}
+
+	newName := "Compose-" + fName + "-" + gName
+	if vm.Store.Has(newName) {
+		vm.push(StringVal(newName))
+		return nil
+	}
+
+	fDomain := f.GetStrings("domain")
+	arityBucket := "UnaryOp"
+	if len(fDomain) == 2 {
+		arityBucket = "BinaryOp"
+	} else if len(fDomain) != 1 {
+		vm.push(Nil())
+		return nil
+	}
+
+	newU := unit.New(newName)
+	newU.Set("isA", []string{arityBucket, "Op", "MathOp", "Anything"})
+	newU.SetWorth(500)
+	newU.Set("domain", append([]string{}, fDomain...))
+	newU.Set("range", append([]string{}, g.GetStrings("range")...))
+	newU.Set("defn", fmt.Sprintf(`"%s" apply-op "%s" apply-op`, fName, gName))
+	newU.Set("creditors", []string{"H-Compose"})
+	vm.Store.Put(newU)
+	vm.Store.SetSlot(newName, "generalizations", []string{fName, gName})
+	vm.push(StringVal(newName))
+	return nil
+}
+
+// stringSlicesEqual compares two []string for elementwise equality.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

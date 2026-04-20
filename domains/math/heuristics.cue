@@ -193,47 +193,6 @@ units: [
 			"""#
 	},
 	{
-		name:    "H-CheckDomain"
-		worth:   550
-		isA: ["Heuristic", "Anything"]
-		english: "If domain/range overlap, create self-composition"
-		overallRecord: {successes: 0, failures: 0}
-		ifPotentiallyRelevant: #"""
-			"ArgU" @ "Op" isa?
-			"ArgU" @ "domain" get-slot nil !=
-			and
-			"ArgU" @ "range" get-slot nil !=
-			and
-			"ArgU" @ "creditors" get-slot nil =
-			and
-			"""#
-		thenCompute: #"""
-			"ArgU" @ "range" get-slot
-			each
-				it "rangeType" !
-				"ArgU" @ "domain" get-slot
-				each
-					it "domType" !
-					"domType" @ "rangeType" @ =
-					if
-						"SelfCompose-" "ArgU" @ pack-name
-						"composeName" !
-						"composeName" @ unit-exists? not
-						if
-							"composeName" @ "BinaryOp" create-unit
-							"compUnit" !
-							"H-CheckDomain" "compUnit" @ "creditors" set-slot
-							"ArgU" @ "domain" get-slot "compUnit" @ "domain" set-slot
-							"ArgU" @ "range" get-slot "compUnit" @ "range" set-slot
-							600 "compUnit" @ "examples" "Self-composition needs examples" add-task
-							"Created self-composition: " "composeName" @ concat print
-						then
-					then
-				end
-			end
-			"""#
-	},
-	{
 		name:    "H-Conjecture"
 		worth:   700
 		isA: ["Heuristic", "Anything"]

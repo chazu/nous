@@ -1070,4 +1070,61 @@ units: [
 			true "ArgU" @ "generated" set-slot
 			"""#
 	},
+	{
+		name:    "H-Transpose"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "Create transposed version of binary ops"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "BinaryOp" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"ArgU" @ "transposed" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ transpose-op
+			"newOp" !
+			"newOp" @ nil !=
+			if
+				400 "newOp" @ "examples" "Examples for transposed op" add-task
+				"Transposed " "ArgU" @ concat print
+			then
+			true "ArgU" @ "transposed" set-slot
+			"""#
+	},
+	{
+		name:    "H-Compose"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "Compose pairs of ops with matching range/domain"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"ArgU" @ "composed" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			0 "composeCount" !
+			"Op" examples
+			each
+				it "g" !
+				"composeCount" @ 3 <
+				if
+					"ArgU" @ "g" @ compose-ops
+					"newOp" !
+					"newOp" @ nil !=
+					if
+						400 "newOp" @ "examples" "Examples for composed op" add-task
+						"Composed " "ArgU" @ concat " . " concat "g" @ concat print
+						"composeCount" @ 1 + "composeCount" !
+					then
+				then
+			end
+			true "ArgU" @ "composed" set-slot
+			"""#
+	},
 ]
