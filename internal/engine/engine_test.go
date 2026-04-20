@@ -2919,3 +2919,55 @@ func TestComposeOps(t *testing.T) {
 		t.Errorf("second call returned %q; want Compose-Add-Square", v6.AsString())
 	}
 }
+
+// Phase 5.6B: H-Compose fires on unit-focus of any Op, iterates candidate
+// g's with matching range/domain, creates Compose-<ArgU>-<g> via compose-ops.
+// Caps at 3 new composes per firing. One-shot per source op.
+func TestHComposeFires(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-Compose") {
+		t.Fatal("H-Compose heuristic not loaded from common/heuristics.cue")
+	}
+
+	preCount := 0
+	for _, name := range eng.Store.All() {
+		if len(name) >= 8 && name[:8] == "Compose-" {
+			preCount++
+		}
+	}
+
+	eng.fireUnitRule("H-Compose", "Successor")
+
+	// Successor's range [Number] matches any UnaryOp or first-domain [Number]
+	// prefix — so at minimum Compose-Successor-Successor must exist.
+	if !eng.Store.Has("Compose-Successor-Successor") {
+		t.Fatal("Compose-Successor-Successor not created after H-Compose fired on Successor")
+	}
+
+	// Count new Compose-* units; should be between 1 and 3 (cap).
+	postCount := 0
+	for _, name := range eng.Store.All() {
+		if len(name) >= 8 && name[:8] == "Compose-" {
+			postCount++
+		}
+	}
+	created := postCount - preCount
+	if created < 1 || created > 3 {
+		t.Errorf("created %d Compose-* units; want 1..3 (cap-3)", created)
+	}
+
+	// One-shot flag set.
+	sc := eng.Store.Get("Successor")
+	if c, _ := sc.Get("composed").(bool); !c {
+		t.Errorf("Successor.composed = %v; want true", sc.Get("composed"))
+	}
+
+	// Re-firing is a no-op for new unit creation.
+	mid := eng.Store.Count()
+	eng.fireUnitRule("H-Compose", "Successor")
+	if eng.Store.Count() != mid {
+		t.Errorf("re-firing H-Compose created new units; mid=%d post=%d", mid, eng.Store.Count())
+	}
+}
