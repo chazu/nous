@@ -2682,3 +2682,113 @@ func stringSliceEq(a, b []string) bool {
 	return true
 }
 
+// Phase 5.6A: transpose-op creates Transpose-<op> for any BinaryOp,
+// reversing the domain and prefixing the defn with `swap`. Idempotent —
+// calling twice returns the same unit name.
+func TestTransposeOp(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	// Non-commutative BinaryOp → creates Transpose variant.
+	v, err := eng.VM.Execute(`"SetDifference" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op SetDifference: %v", err)
+	}
+	if v.AsString() != "Transpose-SetDifference" {
+		t.Fatalf("returned name = %q; want Transpose-SetDifference", v.AsString())
+	}
+
+	tu := eng.Store.Get("Transpose-SetDifference")
+	if tu == nil {
+		t.Fatal("Transpose-SetDifference unit not in store")
+	}
+
+	isA := tu.GetStrings("isA")
+	hasBinary, hasOp := false, false
+	for _, tag := range isA {
+		if tag == "BinaryOp" {
+			hasBinary = true
+		}
+		if tag == "Op" {
+			hasOp = true
+		}
+	}
+	if !hasBinary || !hasOp {
+		t.Errorf("isA=%v; want BinaryOp and Op", isA)
+	}
+
+	// SetDifference.domain = [Set, Set] — reversed still [Set, Set], but the
+	// defn should have `swap ` prefix distinguishing the operation.
+	if got := tu.GetStrings("domain"); len(got) != 2 || got[0] != "Set" || got[1] != "Set" {
+		t.Errorf("domain=%v; want [Set Set]", got)
+	}
+	if got := tu.GetStrings("range"); len(got) != 1 || got[0] != "Set" {
+		t.Errorf("range=%v; want [Set]", got)
+	}
+	defn := tu.GetString("defn")
+	if !strings.HasPrefix(defn, "swap ") {
+		t.Errorf("defn=%q; want prefix 'swap '", defn)
+	}
+	if gens := tu.GetStrings("generalizations"); len(gens) != 1 || gens[0] != "SetDifference" {
+		t.Errorf("generalizations=%v; want [SetDifference]", gens)
+	}
+
+	// Idempotency: second call returns same name, does not duplicate.
+	v2, err := eng.VM.Execute(`"SetDifference" transpose-op`)
+	if err != nil {
+		t.Fatalf("second transpose-op: %v", err)
+	}
+	if v2.AsString() != "Transpose-SetDifference" {
+		t.Errorf("second call returned %q; want Transpose-SetDifference", v2.AsString())
+	}
+
+	// Asymmetric domain reversal: Restrict has domain [Op, Pred]. Transposed
+	// must have [Pred, Op]. (Restrict has no defn today — check for that first
+	// and skip gracefully if so; the test's purpose is to verify reversal
+	// logic, not Restrict's semantics.)
+	rst := eng.Store.Get("Restrict")
+	if rst != nil && rst.GetString("defn") != "" {
+		v5, err := eng.VM.Execute(`"Restrict" transpose-op`)
+		if err != nil {
+			t.Fatalf("transpose-op Restrict: %v", err)
+		}
+		if v5.AsString() != "Transpose-Restrict" {
+			t.Fatalf("returned %q; want Transpose-Restrict", v5.AsString())
+		}
+		tr := eng.Store.Get("Transpose-Restrict")
+		if got := tr.GetStrings("domain"); len(got) != 2 || got[0] != "Pred" || got[1] != "Op" {
+			t.Errorf("Transpose-Restrict domain=%v; want [Pred Op]", got)
+		}
+	}
+
+	// UnaryOp → nil (domain length != 2).
+	v3, err := eng.VM.Execute(`"DivisorsOf" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op DivisorsOf: %v", err)
+	}
+	if !v3.IsNil() {
+		t.Errorf("transpose-op on UnaryOp: expected nil, got %v", v3)
+	}
+	if eng.Store.Has("Transpose-DivisorsOf") {
+		t.Error("Transpose-DivisorsOf should not exist (precondition failure)")
+	}
+
+	// Semantic check: invoking the transposed defn swaps args.
+	// SetDifference: set-diff takes (a, b) → a\b. Transposed: b\a.
+	// Feed [1,2,3] and [2,3,4]: SetDifference gives [1]; Transpose gives [4].
+	v4, err := eng.VM.Execute(`3 iota 2 3 4 3 list-of "Transpose-SetDifference" apply-op`)
+	if err != nil {
+		t.Fatalf("apply transposed: %v", err)
+	}
+	// Result should be a list containing 4 (the element in second arg not in first).
+	list := v4.AsList()
+	has4 := false
+	for _, x := range list {
+		if x.AsInt() == 4 {
+			has4 = true
+		}
+	}
+	if !has4 {
+		t.Errorf("Transpose-SetDifference([0,1,2], [2,3,4]) = %v; expected contains 4", list)
+	}
+}
