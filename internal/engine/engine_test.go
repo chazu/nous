@@ -3503,3 +3503,68 @@ func TestProjectionUnitsLoad(t *testing.T) {
 		}
 	}
 }
+
+// TestFirstEleAppliedToOSetOfPrimesDesc is an end-to-end smoke test: the
+// engine should apply FirstEle (domain=OrdStruc) to OSetOfPrimesDesc
+// (which isA OrdStruc at instance level) and record an applic with output
+// 19. Regression guard against breaking OrdStruc domain dispatch or losing
+// the instance-level OrdStruc tag.
+func TestFirstEleAppliedToOSetOfPrimesDesc(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.SeedInitialAgenda()
+	eng.MaxCycles = 100
+	eng.Verbosity = 0
+
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	op := eng.Store.Get("FirstEle")
+	if op == nil {
+		t.Fatal("FirstEle missing after run")
+	}
+	applics, _ := op.Get("applics").([]map[string]any)
+	if len(applics) == 0 {
+		t.Fatalf("FirstEle recorded no applics in %d cycles", eng.MaxCycles)
+	}
+
+	found := false
+	for _, ap := range applics {
+		args, _ := ap["args"].([]string)
+		if len(args) != 1 || args[0] != "OSetOfPrimesDesc" {
+			continue
+		}
+		// Output is either a scalar int (IntVal) or a unit name string whose
+		// data slot carries the int. Check both shapes.
+		switch out := ap["output"].(type) {
+		case int:
+			if out == 19 {
+				found = true
+			}
+		case string:
+			if out == "" {
+				continue
+			}
+			u := eng.Store.Get(out)
+			if u == nil {
+				continue
+			}
+			switch d := u.Get("data").(type) {
+			case int:
+				if d == 19 {
+					found = true
+				}
+			case []dsl.Value:
+				if len(d) == 1 && d[0].AsInt() == 19 {
+					found = true
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Errorf("No FirstEle applic on OSetOfPrimesDesc with output 19; applics=%v", applics)
+	}
+}
