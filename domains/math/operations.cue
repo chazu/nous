@@ -150,4 +150,79 @@ units: [
 			{args: 5, result: 25},
 		]
 	},
+	{
+		name:    "OSetUnion"
+		worth:   500
+		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OSet", "OSet"]
+		range: ["OSet"]
+		english: "Combine two ordered sets, preserving first's order then appending second's novel elements"
+		defn:    #"""
+			oset-union
+			"""#
+		examples: [
+			{args: [3, 1, 2], args2: [4, 2, 5], result: [3, 1, 2, 4, 5]},
+			{args: [19, 17], args2: [2, 17], result: [19, 17, 2]},
+		]
+	},
+	{
+		name:    "OSetIntersect"
+		worth:   500
+		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OSet", "OSet"]
+		range: ["OSet"]
+		english: "Elements common to both ordered sets, in first's order"
+		defn:    #"""
+			oset-intersect
+			"""#
+		examples: [
+			{args: [3, 1, 2, 4], args2: [4, 2], result: [2, 4]},
+			{args: [19, 17, 13], args2: [13, 19], result: [19, 13]},
+		]
+	},
+	{
+		name:    "OSetInsert"
+		worth:   500
+		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OSet", "Anything"]
+		range: ["OSet"]
+		english: "Append element to ordered set if not already present"
+		defn:    #"""
+			oset-insert
+			"""#
+		examples: [
+			{args: [3, 1, 2], args2: 7, result: [3, 1, 2, 7]},
+			{args: [3, 1, 2], args2: 1, result: [3, 1, 2]},
+		]
+	},
+	{
+		name:    "OSetDelete"
+		worth:   500
+		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		domain: ["OSet", "Anything"]
+		range: ["OSet"]
+		english: "Remove element from ordered set, preserving remaining order"
+		defn:    #"""
+			oset-delete
+			"""#
+		examples: [
+			{args: [3, 1, 2, 4], args2: 1, result: [3, 2, 4]},
+			{args: [19, 17, 13], args2: 99, result: [19, 17, 13]},
+		]
+	},
+	{
+		name:    "OSetEqual"
+		worth:   500
+		isA: ["BinaryPred", "Pred", "Op", "MathOp", "Anything"]
+		domain: ["OSet", "OSet"]
+		range: ["TruthValue"]
+		english: "True iff two ordered sets contain the same elements in the same order"
+		defn:    #"""
+			oset-equal?
+			"""#
+		examples: [
+			{args: [1, 2, 3], args2: [1, 2, 3], result: true},
+			{args: [1, 2], args2: [2, 1], result: false},
+		]
+	},
 ]

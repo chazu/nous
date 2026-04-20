@@ -3249,3 +3249,45 @@ func TestOSetInstanceUnitsLoad(t *testing.T) {
 		t.Errorf("OSetOfPrimesDesc not descending: first=%d last=%d", first, last)
 	}
 }
+
+// TestOSetOperationUnitsLoad verifies the five OSet op units are loaded
+// with correct domain/range and defn hooks to the new DSL builtins.
+func TestOSetOperationUnitsLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+	wantOps := map[string]struct {
+		domain []string
+		rangeT []string
+		defn   string
+	}{
+		"OSetUnion":     {[]string{"OSet", "OSet"}, []string{"OSet"}, "oset-union"},
+		"OSetIntersect": {[]string{"OSet", "OSet"}, []string{"OSet"}, "oset-intersect"},
+		"OSetInsert":    {[]string{"OSet", "Anything"}, []string{"OSet"}, "oset-insert"},
+		"OSetDelete":    {[]string{"OSet", "Anything"}, []string{"OSet"}, "oset-delete"},
+		"OSetEqual":     {[]string{"OSet", "OSet"}, []string{"TruthValue"}, "oset-equal?"},
+	}
+	for name, want := range wantOps {
+		u := eng.Store.Get(name)
+		if u == nil {
+			t.Errorf("%s not loaded", name)
+			continue
+		}
+		dom := u.GetStrings("domain")
+		if len(dom) != len(want.domain) {
+			t.Errorf("%s.domain: want %v got %v", name, want.domain, dom)
+		} else {
+			for i, d := range want.domain {
+				if dom[i] != d {
+					t.Errorf("%s.domain[%d]: want %q got %q", name, i, d, dom[i])
+				}
+			}
+		}
+		rng := u.GetStrings("range")
+		if len(rng) != len(want.rangeT) || rng[0] != want.rangeT[0] {
+			t.Errorf("%s.range: want %v got %v", name, want.rangeT, rng)
+		}
+		defn, _ := u.Get("defn").(string)
+		if !strings.Contains(defn, want.defn) {
+			t.Errorf("%s.defn: want contains %q, got %q", name, want.defn, defn)
+		}
+	}
+}
