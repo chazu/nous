@@ -9,7 +9,7 @@ units: [
 	{
 		name:    "SetOfNumbers"
 		worth:   600
-		isA: ["NonEmptyStruc", "Set", "Structure", "MathObj", "Anything"]
+		isA: ["UnOrdStruc", "NoMultEleStruc", "NonEmptyStruc", "Set", "Structure", "MathObj", "Anything"]
 		english: "The integers from 1 to 20"
 		data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 		specializations: ["SetOfPrimes", "SetOfEvens", "SetOfOdds"]
@@ -17,7 +17,7 @@ units: [
 	{
 		name:    "SetOfPrimes"
 		worth:   600
-		isA: ["NonEmptyStruc", "Set", "SetOfNumbers", "Structure", "MathObj", "Anything"]
+		isA: ["UnOrdStruc", "NoMultEleStruc", "NonEmptyStruc", "Set", "SetOfNumbers", "Structure", "MathObj", "Anything"]
 		english: "Prime numbers up to 20"
 		data: [2, 3, 5, 7, 11, 13, 17, 19]
 		defn: #"""
@@ -29,7 +29,7 @@ units: [
 	{
 		name:  "SetOfEvens"
 		worth: 600
-		isA: ["NonEmptyStruc", "Set", "SetOfNumbers", "Structure", "MathObj", "Anything"]
+		isA: ["UnOrdStruc", "NoMultEleStruc", "NonEmptyStruc", "Set", "SetOfNumbers", "Structure", "MathObj", "Anything"]
 		english: "Even numbers up to 20"
 		data: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
 		generalizations: ["SetOfNumbers"]
@@ -37,7 +37,7 @@ units: [
 	{
 		name:    "SetOfOdds"
 		worth:   500
-		isA: ["NonEmptyStruc", "Set", "SetOfNumbers", "Structure", "MathObj", "Anything"]
+		isA: ["UnOrdStruc", "NoMultEleStruc", "NonEmptyStruc", "Set", "SetOfNumbers", "Structure", "MathObj", "Anything"]
 		english: "Odd numbers up to 20"
 		data: [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
 		generalizations: ["SetOfNumbers"]
@@ -45,19 +45,19 @@ units: [
 	{
 		name:  "SortedList"
 		worth: 400
-		isA: ["List", "Structure", "MathObj", "Anything"]
+		isA: ["OrdStruc", "MultEleStruc", "List", "Structure", "MathObj", "Anything"]
 	},
 	{
 		name:    "OSetOfNumbers"
 		worth:   500
-		isA: ["NonEmptyStruc", "OSet", "Set", "Structure", "MathObj", "Anything"]
+		isA: ["OrdStruc", "NoMultEleStruc", "NonEmptyStruc", "OSet", "Set", "Structure", "MathObj", "Anything"]
 		english: "The integers from 1 to 20 in ascending order"
 		data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 	},
 	{
 		name:    "OSetOfPrimesDesc"
 		worth:   500
-		isA: ["NonEmptyStruc", "OSet", "Set", "Structure", "MathObj", "Anything"]
+		isA: ["OrdStruc", "NoMultEleStruc", "NonEmptyStruc", "OSet", "Set", "Structure", "MathObj", "Anything"]
 		english: "Primes under 20 in descending order"
 		data: [19, 17, 13, 11, 7, 5, 3, 2]
 	},

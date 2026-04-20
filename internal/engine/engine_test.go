@@ -3368,10 +3368,12 @@ func TestStructureClassificationCategoriesLoad(t *testing.T) {
 		worth int
 		specs []string
 	}{
-		"OrdStruc":       {500, []string{"OSet", "List"}},
-		"UnOrdStruc":     {500, []string{"Set", "Bag"}},
-		"MultEleStruc":   {500, []string{"List", "Bag"}},
-		"NoMultEleStruc": {500, []string{"Set", "OSet"}},
+		// Ord/Mult/NoMult classifications are instance-level; no explicit
+		// specializations on the category units (nil = skip check).
+		"OrdStruc":       {500, nil},
+		"UnOrdStruc":     {500, nil},
+		"MultEleStruc":   {500, nil},
+		"NoMultEleStruc": {500, nil},
 		"EmptyStruc":     {400, []string{"EmptySet"}},
 		"NonEmptyStruc":  {400, nil},
 	}
@@ -3407,20 +3409,27 @@ func TestStructureClassificationCategoriesLoad(t *testing.T) {
 }
 
 // TestStructureClassificationTagsPropagate verifies that classification
-// parent categories flow via store.IsA chain walks. Each type and instance
-// should participate in the correct classification dimensions.
+// parent categories flow via store.IsA chain walks. Classifications are
+// instance-level, not type-level, to avoid transitive contradictions.
 func TestStructureClassificationTagsPropagate(t *testing.T) {
 	eng, _ := testEngine(t)
 
+	// Classifications are instance-level, not type-level. Abstract types
+	// (Set, List, Bag, OSet) stay untagged to avoid transitive contradictions
+	// (e.g. OSet isA Set, so tagging Set with UnOrdStruc would make OSet
+	// transitively UnOrdStruc, contradicting its OrdStruc tag).
 	wantTrue := []struct{ unit, cat string }{
-		{"Set", "UnOrdStruc"},
-		{"Set", "NoMultEleStruc"},
-		{"OSet", "OrdStruc"},
-		{"OSet", "NoMultEleStruc"},
-		{"List", "OrdStruc"},
-		{"List", "MultEleStruc"},
-		{"Bag", "UnOrdStruc"},
-		{"Bag", "MultEleStruc"},
+		// Ord / UnOrd
+		{"SetOfNumbers", "UnOrdStruc"},
+		{"SetOfPrimes", "UnOrdStruc"},
+		{"OSetOfNumbers", "OrdStruc"},
+		{"OSetOfPrimesDesc", "OrdStruc"},
+		{"SortedList", "OrdStruc"},
+		// Mult / NoMult
+		{"SetOfNumbers", "NoMultEleStruc"},
+		{"OSetOfPrimesDesc", "NoMultEleStruc"},
+		{"SortedList", "MultEleStruc"},
+		// Empty / NonEmpty
 		{"EmptySet", "EmptyStruc"},
 		{"SetOfNumbers", "NonEmptyStruc"},
 		{"OSetOfPrimesDesc", "NonEmptyStruc"},
@@ -3432,10 +3441,18 @@ func TestStructureClassificationTagsPropagate(t *testing.T) {
 	}
 
 	wantFalse := []struct{ unit, cat string }{
-		{"Set", "OrdStruc"},
-		{"Set", "MultEleStruc"},
-		{"OSet", "MultEleStruc"},
+		// No transitive contradictions from abstract-type tags
+		{"SetOfNumbers", "OrdStruc"},
+		{"OSetOfPrimesDesc", "UnOrdStruc"},
+		{"SetOfNumbers", "MultEleStruc"},
 		{"EmptySet", "NonEmptyStruc"},
+		// Abstract types carry no classification tags
+		{"Set", "UnOrdStruc"},
+		{"Set", "OrdStruc"},
+		{"OSet", "OrdStruc"},
+		{"OSet", "UnOrdStruc"},
+		{"List", "OrdStruc"},
+		{"Bag", "UnOrdStruc"},
 	}
 	for _, tc := range wantFalse {
 		if eng.Store.IsA(tc.unit, tc.cat) {
