@@ -3291,3 +3291,70 @@ func TestOSetOperationUnitsLoad(t *testing.T) {
 		}
 	}
 }
+
+// TestOSetUnionPreservesOrderViaEngine runs the engine long enough for
+// H-RunOnExamples to apply OSetUnion to its seed data and asserts the
+// recorded output preserves left-argument order. Regression guard: if a
+// refactor accidentally routes OSet ops through set-union canonicalization,
+// this test fails.
+func TestOSetUnionPreservesOrderViaEngine(t *testing.T) {
+	eng, _ := testEngine(t)
+	// SeedInitialAgenda pushes a priority-700 examples task for every Op
+	// (including OSetUnion), ensuring H-RunOnExamples fires via task-focus
+	// in the first pass rather than waiting for unit-focus (which OSetUnion
+	// at worth=500 would reach only after all higher-worth units are exhausted).
+	eng.SeedInitialAgenda()
+	eng.MaxCycles = 80
+	eng.Verbosity = 0
+
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	op := eng.Store.Get("OSetUnion")
+	if op == nil {
+		t.Fatal("OSetUnion missing after run")
+	}
+	applics, _ := op.Get("applics").([]map[string]any)
+	if len(applics) == 0 {
+		t.Fatalf("OSetUnion recorded no applics in %d cycles — H-RunOnExamples never fired on it", eng.MaxCycles)
+	}
+
+	foundOrderEvidence := false
+	for _, ap := range applics {
+		// args is []string as stored by record-applic.
+		args, _ := ap["args"].([]string)
+		if len(args) != 2 {
+			continue
+		}
+		if args[0] != "OSetOfPrimesDesc" {
+			continue
+		}
+		outName, _ := ap["output"].(string)
+		if outName == "" {
+			continue
+		}
+		outU := eng.Store.Get(outName)
+		if outU == nil {
+			continue
+		}
+		// H-RunOnExamples stores the result via intListToValue → []dsl.Value.
+		// Check []dsl.Value first (primary path), then []int (seed data path).
+		switch d := outU.Get("data").(type) {
+		case []dsl.Value:
+			if len(d) >= 1 && d[0].AsInt() == 19 {
+				foundOrderEvidence = true
+			}
+		case []int:
+			if len(d) >= 1 && d[0] == 19 {
+				foundOrderEvidence = true
+			}
+		}
+		if foundOrderEvidence {
+			break
+		}
+	}
+	if !foundOrderEvidence {
+		t.Errorf("No OSetUnion applic with OSetOfPrimesDesc as left arg produced an output starting with 19; order preservation not verified. Applics: %v", applics)
+	}
+}
