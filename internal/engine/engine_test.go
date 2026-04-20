@@ -3771,3 +3771,25 @@ func TestH29OneShotGuard(t *testing.T) {
 		t.Errorf("h29Ran guard failed: first pass left %d examples, second pass left %d", firstPass, secondPass)
 	}
 }
+
+// TestH29FiresViaEngineLoop is an end-to-end smoke test: H29-Seeder should
+// schedule an examples task on BagOfTallies, the engine loop picks it up,
+// and H29 fires and grows the examples list. Regression guard against
+// breaking the seeder → agenda → task focus → H29 gate chain.
+func TestH29FiresViaEngineLoop(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.SeedInitialAgenda()
+	eng.MaxCycles = 150
+	eng.Verbosity = 0
+
+	beforeCount := len(eng.Store.Get("BagOfTallies").GetStrings("examples"))
+
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	afterCount := len(eng.Store.Get("BagOfTallies").GetStrings("examples"))
+	if afterCount <= beforeCount {
+		t.Errorf("engine loop did not grow BagOfTallies.examples: before=%d after=%d", beforeCount, afterCount)
+	}
+}
