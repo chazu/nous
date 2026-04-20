@@ -184,11 +184,13 @@ H-ExercisePreds extended to schedule a one-shot whyInt task on each BinaryPred (
 
 Deferred: unordered `Pair` type (separate abstraction — binary-pred analysis only needs OPair), `ReverseOPair` operation (future mutation target), `Relation` (emergent from H25 output — needs no new machinery).
 
-**5.3: Projection operations**
-Proj1, Proj2, FirstEle, SecondEle, ThirdEle, LastEle, AllButFirst, AllButSecond, AllButThird, AllButLast. Most map directly to existing DSL builtins (first, rest, last) but need to exist as unit concepts.
+**5.3: Projection operations** -- PARTIAL (2026-04-20)
 
-**5.4: Structure type classification**
-OrdStruc/UnOrdStruc, MultEleStruc/NoMultEleStruc, EmptyStruc/NonEmptyStruc, SetOfSets, StructureOfStructures. These are type-level classifications that drive H29 and per-type operation applicability.
+Six of ten projection ops landed in `domains/math/operations.cue`: Proj1, Proj2 (OPair domain), FirstEle, LastEle, AllButFirst, AllButLast (OrdStruc domain via 5.4 classification). New DSL builtin `but-last` added. SecondEle, ThirdEle, AllButSecond, AllButThird deferred — redundant with `rest`-chain composition; add when a heuristic demands them. Engine smoke test `TestFirstEleAppliedToOSetOfPrimesDesc` guards OrdStruc dispatch.
+
+**5.4: Structure type classification** -- PARTIAL (2026-04-20)
+
+Six classification marker categories added in `domains/math/types.cue`: OrdStruc, UnOrdStruc, MultEleStruc, NoMultEleStruc, EmptyStruc, NonEmptyStruc. Each has no `defn` — pure marker categories queryable via `store.IsA` chain walks. **Instance-level tagging** (not type-level): the Ord/UnOrd/Mult/NoMult tags live on concrete instance units (SetOfNumbers, OSetOfPrimesDesc, SortedList, etc.), not on the abstract Set/List/Bag/OSet types. This avoids transitive `IsA` contradictions — since `OSet isA Set`, tagging Set with UnOrdStruc would make OSet transitively UnOrdStruc, contradicting its OrdStruc tag. The Ord/Mult classification category units therefore carry no `specializations` slot (the inverse wiring would re-create the contradiction via `generalizations`); EmptyStruc/NonEmptyStruc keep their instance-level specializations since there's no such conflict. SetOfSets and StructureOfStructures higher-order categories deferred — no concrete instances yet. Unblocks Phase 5.12 H29 and Phase 5.6 D Restrict.
 
 **5.5: Per-type operations**
 ListInsert/Delete/Intersect/Union/Difference, BagInsert/Delete/Intersect/Union/Difference. Each as a unit with defn and domain/range.
@@ -318,7 +320,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 | COMPLETE |
-| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.6 A/B/C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
+| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.3 partial, 5.4 partial, 5.6 A/B/C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
 

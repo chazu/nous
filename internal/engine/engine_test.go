@@ -3358,3 +3358,213 @@ func TestOSetUnionPreservesOrderViaEngine(t *testing.T) {
 		t.Errorf("No OSetUnion applic with OSetOfPrimesDesc as left arg produced an output starting with 19; order preservation not verified. Applics: %v", applics)
 	}
 }
+
+// TestStructureClassificationCategoriesLoad verifies the six classification
+// marker categories are loaded from CUE with correct isA chains.
+func TestStructureClassificationCategoriesLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	wantCats := map[string]struct {
+		worth int
+		specs []string
+	}{
+		// Ord/Mult/NoMult classifications are instance-level; no explicit
+		// specializations on the category units (nil = skip check).
+		"OrdStruc":       {500, nil},
+		"UnOrdStruc":     {500, nil},
+		"MultEleStruc":   {500, nil},
+		"NoMultEleStruc": {500, nil},
+		"EmptyStruc":     {400, []string{"EmptySet"}},
+		"NonEmptyStruc":  {400, nil},
+	}
+	for name, want := range wantCats {
+		u := eng.Store.Get(name)
+		if u == nil {
+			t.Errorf("%s category not loaded", name)
+			continue
+		}
+		isA := u.GetStrings("isA")
+		isAMap := make(map[string]bool, len(isA))
+		for _, s := range isA {
+			isAMap[s] = true
+		}
+		for _, parent := range []string{"Structure", "MathObj", "Anything"} {
+			if !isAMap[parent] {
+				t.Errorf("%s.isA missing %q; got %v", name, parent, isA)
+			}
+		}
+		if want.specs != nil {
+			specs := u.GetStrings("specializations")
+			specMap := make(map[string]bool, len(specs))
+			for _, s := range specs {
+				specMap[s] = true
+			}
+			for _, s := range want.specs {
+				if !specMap[s] {
+					t.Errorf("%s.specializations missing %q; got %v", name, s, specs)
+				}
+			}
+		}
+	}
+}
+
+// TestStructureClassificationTagsPropagate verifies that classification
+// parent categories flow via store.IsA chain walks. Classifications are
+// instance-level, not type-level, to avoid transitive contradictions.
+func TestStructureClassificationTagsPropagate(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	// Classifications are instance-level, not type-level. Abstract types
+	// (Set, List, Bag, OSet) stay untagged to avoid transitive contradictions
+	// (e.g. OSet isA Set, so tagging Set with UnOrdStruc would make OSet
+	// transitively UnOrdStruc, contradicting its OrdStruc tag).
+	wantTrue := []struct{ unit, cat string }{
+		// Ord / UnOrd
+		{"SetOfNumbers", "UnOrdStruc"},
+		{"SetOfPrimes", "UnOrdStruc"},
+		{"OSetOfNumbers", "OrdStruc"},
+		{"OSetOfPrimesDesc", "OrdStruc"},
+		{"SortedList", "OrdStruc"},
+		// Mult / NoMult
+		{"SetOfNumbers", "NoMultEleStruc"},
+		{"OSetOfPrimesDesc", "NoMultEleStruc"},
+		{"SortedList", "MultEleStruc"},
+		// Empty / NonEmpty
+		{"EmptySet", "EmptyStruc"},
+		{"SetOfNumbers", "NonEmptyStruc"},
+		{"OSetOfPrimesDesc", "NonEmptyStruc"},
+	}
+	for _, tc := range wantTrue {
+		if !eng.Store.IsA(tc.unit, tc.cat) {
+			t.Errorf("IsA(%q, %q): want true, got false", tc.unit, tc.cat)
+		}
+	}
+
+	wantFalse := []struct{ unit, cat string }{
+		// No transitive contradictions from abstract-type tags
+		{"SetOfNumbers", "OrdStruc"},
+		{"OSetOfPrimesDesc", "UnOrdStruc"},
+		{"SetOfNumbers", "MultEleStruc"},
+		{"EmptySet", "NonEmptyStruc"},
+		// Abstract types carry no classification tags
+		{"Set", "UnOrdStruc"},
+		{"Set", "OrdStruc"},
+		{"OSet", "OrdStruc"},
+		{"OSet", "UnOrdStruc"},
+		{"List", "OrdStruc"},
+		{"Bag", "UnOrdStruc"},
+	}
+	for _, tc := range wantFalse {
+		if eng.Store.IsA(tc.unit, tc.cat) {
+			t.Errorf("IsA(%q, %q): want false, got true", tc.unit, tc.cat)
+		}
+	}
+}
+
+// TestProjectionUnitsLoad verifies the six projection op units are present
+// with correct domain/range and defn hooks.
+func TestProjectionUnitsLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+	wantOps := map[string]struct {
+		domain []string
+		rangeT []string
+		defn   string
+	}{
+		"Proj1":       {[]string{"OPair"}, []string{"Anything"}, "first"},
+		"Proj2":       {[]string{"OPair"}, []string{"Anything"}, "rest first"},
+		"FirstEle":    {[]string{"OrdStruc"}, []string{"Anything"}, "first"},
+		"LastEle":     {[]string{"OrdStruc"}, []string{"Anything"}, "last"},
+		"AllButFirst": {[]string{"OrdStruc"}, []string{"OrdStruc"}, "rest"},
+		"AllButLast":  {[]string{"OrdStruc"}, []string{"OrdStruc"}, "but-last"},
+	}
+	for name, want := range wantOps {
+		u := eng.Store.Get(name)
+		if u == nil {
+			t.Errorf("%s not loaded", name)
+			continue
+		}
+		dom := u.GetStrings("domain")
+		if len(dom) != len(want.domain) {
+			t.Errorf("%s.domain: want %v got %v", name, want.domain, dom)
+		} else {
+			for i, d := range want.domain {
+				if dom[i] != d {
+					t.Errorf("%s.domain[%d]: want %q got %q", name, i, d, dom[i])
+				}
+			}
+		}
+		rng := u.GetStrings("range")
+		if len(rng) != len(want.rangeT) || rng[0] != want.rangeT[0] {
+			t.Errorf("%s.range: want %v got %v", name, want.rangeT, rng)
+		}
+		defn, _ := u.Get("defn").(string)
+		if !strings.Contains(defn, want.defn) {
+			t.Errorf("%s.defn: want contains %q, got %q", name, want.defn, defn)
+		}
+	}
+}
+
+// TestFirstEleAppliedToOSetOfPrimesDesc is an end-to-end smoke test: the
+// engine should apply FirstEle (domain=OrdStruc) to OSetOfPrimesDesc
+// (which isA OrdStruc at instance level) and record an applic with output
+// 19. Regression guard against breaking OrdStruc domain dispatch or losing
+// the instance-level OrdStruc tag.
+func TestFirstEleAppliedToOSetOfPrimesDesc(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.SeedInitialAgenda()
+	eng.MaxCycles = 100
+	eng.Verbosity = 0
+
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	op := eng.Store.Get("FirstEle")
+	if op == nil {
+		t.Fatal("FirstEle missing after run")
+	}
+	applics, _ := op.Get("applics").([]map[string]any)
+	if len(applics) == 0 {
+		t.Fatalf("FirstEle recorded no applics in %d cycles", eng.MaxCycles)
+	}
+
+	found := false
+	for _, ap := range applics {
+		args, _ := ap["args"].([]string)
+		if len(args) != 1 || args[0] != "OSetOfPrimesDesc" {
+			continue
+		}
+		// Output is either a scalar int (IntVal) or a unit name string whose
+		// data slot carries the int. Check both shapes.
+		switch out := ap["output"].(type) {
+		case int:
+			if out == 19 {
+				found = true
+			}
+		case string:
+			if out == "" {
+				continue
+			}
+			u := eng.Store.Get(out)
+			if u == nil {
+				continue
+			}
+			switch d := u.Get("data").(type) {
+			case int:
+				if d == 19 {
+					found = true
+				}
+			case []dsl.Value:
+				if len(d) == 1 && d[0].AsInt() == 19 {
+					found = true
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Errorf("No FirstEle applic on OSetOfPrimesDesc with output 19; applics=%v", applics)
+	}
+}

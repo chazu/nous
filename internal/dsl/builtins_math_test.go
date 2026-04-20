@@ -335,3 +335,43 @@ func TestOSetOps(t *testing.T) {
 		t.Errorf("oset-equal? identical: want true, got %v (err=%v)", v, err)
 	}
 }
+
+func TestButLast(t *testing.T) {
+	vm := testVM(t)
+
+	cases := []struct {
+		name string
+		prog string
+		want []int
+	}{
+		{"basic", `3 1 2 3 list-of but-last`, []int{3, 1}},
+		{"two-element", `1 2 2 list-of but-last`, []int{1}},
+		{"single-element", `1 1 list-of but-last`, []int{}},
+	}
+	for _, tc := range cases {
+		v, err := vm.Execute(tc.prog)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		got := v.AsList()
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: len want %d got %d (%v)", tc.name, len(tc.want), len(got), got)
+			continue
+		}
+		for i, w := range tc.want {
+			if got[i].AsInt() != w {
+				t.Errorf("%s: at %d want %d got %d", tc.name, i, w, got[i].AsInt())
+			}
+		}
+	}
+
+	// Empty input → empty output, no error.
+	v, err := vm.Execute(`0 list-of but-last`)
+	if err != nil {
+		t.Errorf("empty: %v", err)
+	}
+	if len(v.AsList()) != 0 {
+		t.Errorf("empty: want [] got %v", v.AsList())
+	}
+}
