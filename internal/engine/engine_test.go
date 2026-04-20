@@ -3135,3 +3135,54 @@ func TestTransposeOpFallbackNoSamples(t *testing.T) {
 		t.Error("Transpose-SynthOp not created in fallback path")
 	}
 }
+
+// Part A: H-SemanticDup kills ops whose observed applics are fully
+// reproduced by a generalization.
+func TestHSemanticDupKillsRedundant(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-SemanticDup") {
+		t.Fatal("H-SemanticDup heuristic not loaded from common/heuristics.cue")
+	}
+
+	mkNum := func(name string, v int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Number", "Anything"})
+		u.SetWorth(500)
+		u.Set("data", v)
+		eng.Store.Put(u)
+	}
+	mkNum("Nd2", 2)
+	mkNum("Nd3", 3)
+	mkNum("Nd5", 5)
+	mkNum("Nd7", 7)
+	mkNum("Nd8", 8)
+	mkNum("Nd10", 10)
+
+	// Manually construct a Transpose-Add-like unit. Part B (Task 2) would
+	// prevent real creation; this test exercises Part A on a manual seed.
+	ta := unit.New("FakeTranspose-Add")
+	ta.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
+	ta.SetWorth(500)
+	ta.Set("domain", []string{"Number", "Number"})
+	ta.Set("range", []string{"Number"})
+	ta.Set("defn", "swap +")
+	ta.Set("creditors", []string{"H-Transpose"})
+	ta.Set("applics", []map[string]any{
+		{"args": []string{"Nd2", "Nd3"}, "output": "Nd5", "direct": true},
+		{"args": []string{"Nd3", "Nd5"}, "output": "Nd8", "direct": true},
+		{"args": []string{"Nd3", "Nd7"}, "output": "Nd10", "direct": true},
+	})
+	eng.Store.Put(ta)
+	eng.Store.SetSlot("FakeTranspose-Add", "generalizations", []string{"Add"})
+
+	eng.fireUnitRule("H-SemanticDup", "FakeTranspose-Add")
+
+	if eng.Store.Has("FakeTranspose-Add") {
+		t.Error("FakeTranspose-Add should have been killed by H-SemanticDup")
+	}
+	if !eng.Store.Has("Add") {
+		t.Error("Add (parent) should survive — H-SemanticDup must not touch it")
+	}
+}
