@@ -3186,3 +3186,36 @@ func TestHSemanticDupKillsRedundant(t *testing.T) {
 		t.Error("Add (parent) should survive — H-SemanticDup must not touch it")
 	}
 }
+
+// TestOSetTypeUnitLoads verifies the OSet type unit is loaded from CUE
+// with the correct isA hierarchy (subtype of Set).
+func TestOSetTypeUnitLoads(t *testing.T) {
+	eng, _ := testEngine(t)
+	oset := eng.Store.Get("OSet")
+	if oset == nil {
+		t.Fatal("OSet unit not loaded from domain")
+	}
+	isA := oset.GetStrings("isA")
+	got := make(map[string]bool, len(isA))
+	for _, v := range isA {
+		got[v] = true
+	}
+	for _, want := range []string{"Set", "Structure", "MathObj", "Anything"} {
+		if !got[want] {
+			t.Errorf("OSet.isA missing %q; got %v", want, isA)
+		}
+	}
+
+	set := eng.Store.Get("Set")
+	specs := set.GetStrings("specializations")
+	foundOSet := false
+	for _, s := range specs {
+		if s == "OSet" {
+			foundOSet = true
+			break
+		}
+	}
+	if !foundOSet {
+		t.Errorf("Set.specializations missing OSet; got %v", specs)
+	}
+}
