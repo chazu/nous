@@ -1127,4 +1127,45 @@ units: [
 			true "ArgU" @ "composed" set-slot
 			"""#
 	},
+	{
+		name:    "H-SemanticDup"
+		worth:   600
+		isA: ["Heuristic", "Anything"]
+		english: "Kill ops whose observed applics are fully reproduced by a generalization"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "creditors" get-slot nil !=
+			and
+			"ArgU" @ "creditors" get-slot "H-Transpose" list-contains
+			"ArgU" @ "creditors" get-slot "H-Compose" list-contains
+			or
+			and
+			"ArgU" @ "generalizations" get-slot nil !=
+			and
+			"ArgU" @ "applics" get-slot nil !=
+			and
+			"ArgU" @ "applics" get-slot 3 >=
+			and
+			"ArgU" @ "semDupChecked" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			true "ArgU" @ "semDupChecked" set-slot
+			true "active" !
+			"ArgU" @ "generalizations" get-slot
+			each
+				it "parent" !
+				"active" @
+				if
+					"ArgU" @ "parent" @ applics-redundant?
+					if
+						"H-SemanticDup: " "ArgU" @ concat " redundant vs " concat "parent" @ concat " — killing" concat print
+						"ArgU" @ kill-unit
+						false "active" !
+					then
+				then
+			end
+			"""#
+	},
 ]

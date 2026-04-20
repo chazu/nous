@@ -2971,3 +2971,218 @@ func TestHComposeFires(t *testing.T) {
 		t.Errorf("re-firing H-Compose created new units; mid=%d post=%d", mid, eng.Store.Count())
 	}
 }
+
+// Semantic duplicate detection: applics-redundant? returns true iff
+// every applic on the unit has an output that matches what parent's
+// defn produces on the same args. Gates on >=3 applics to avoid
+// premature kills on sparse evidence.
+func TestApplicsRedundantBuiltin(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	mkNum := func(name string, v int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Number", "Anything"})
+		u.SetWorth(500)
+		u.Set("data", v)
+		eng.Store.Put(u)
+	}
+	mkNum("N2", 2)
+	mkNum("N3", 3)
+	mkNum("N5", 5)
+	mkNum("N7", 7)
+	mkNum("N8", 8)
+	mkNum("N10", 10)
+
+	// FakeAdd: 3 applics matching Add(a,b)=a+b exactly.
+	fa := unit.New("FakeAdd")
+	fa.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	fa.Set("creditors", []string{"TestSeed"})
+	fa.Set("generalizations", []string{"Add"})
+	fa.Set("applics", []map[string]any{
+		{"args": []string{"N2", "N3"}, "output": "N5", "direct": true},
+		{"args": []string{"N3", "N5"}, "output": "N8", "direct": true},
+		{"args": []string{"N3", "N7"}, "output": "N10", "direct": true},
+	})
+	eng.Store.Put(fa)
+
+	v, err := eng.VM.Execute(`"FakeAdd" "Add" applics-redundant?`)
+	if err != nil {
+		t.Fatalf("applics-redundant? FakeAdd Add: %v", err)
+	}
+	if !v.Truthy() {
+		t.Errorf("FakeAdd vs Add: expected redundant=true")
+	}
+
+	// DivergentAdd: one output is wrong.
+	da := unit.New("DivergentAdd")
+	da.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	da.Set("creditors", []string{"TestSeed"})
+	da.Set("generalizations", []string{"Add"})
+	da.Set("applics", []map[string]any{
+		{"args": []string{"N2", "N3"}, "output": "N5", "direct": true},
+		{"args": []string{"N3", "N5"}, "output": "N8", "direct": true},
+		{"args": []string{"N3", "N7"}, "output": "N2", "direct": true},
+	})
+	eng.Store.Put(da)
+
+	v2, err := eng.VM.Execute(`"DivergentAdd" "Add" applics-redundant?`)
+	if err != nil {
+		t.Fatalf("applics-redundant? DivergentAdd Add: %v", err)
+	}
+	if v2.Truthy() {
+		t.Errorf("DivergentAdd vs Add: expected redundant=false")
+	}
+
+	// Sparse: fewer than 3 applics → false.
+	sparse := unit.New("SparseAdd")
+	sparse.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	sparse.Set("creditors", []string{"TestSeed"})
+	sparse.Set("generalizations", []string{"Add"})
+	sparse.Set("applics", []map[string]any{
+		{"args": []string{"N2", "N3"}, "output": "N5", "direct": true},
+		{"args": []string{"N3", "N5"}, "output": "N8", "direct": true},
+	})
+	eng.Store.Put(sparse)
+
+	v3, err := eng.VM.Execute(`"SparseAdd" "Add" applics-redundant?`)
+	if err != nil {
+		t.Fatalf("applics-redundant? SparseAdd Add: %v", err)
+	}
+	if v3.Truthy() {
+		t.Errorf("SparseAdd vs Add: expected false (only 2 applics)")
+	}
+
+	// Missing parent → false.
+	v4, err := eng.VM.Execute(`"FakeAdd" "Nonexistent" applics-redundant?`)
+	if err != nil {
+		t.Fatalf("applics-redundant? FakeAdd Nonexistent: %v", err)
+	}
+	if v4.Truthy() {
+		t.Errorf("FakeAdd vs Nonexistent: expected false (missing parent)")
+	}
+}
+
+// Part B: transpose-op skips creation when sampling proves commutativity.
+func TestTransposeOpSkipsCommutative(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	for i, v := range []int{2, 3, 5} {
+		name := fmt.Sprintf("Ncomm%d", i)
+		u := unit.New(name)
+		u.Set("isA", []string{"Number", "Anything"})
+		u.SetWorth(500)
+		u.Set("data", v)
+		eng.Store.Put(u)
+		num := eng.Store.Get("Number")
+		ex := num.Get("examples")
+		var exs []any
+		if l, ok := ex.([]any); ok {
+			exs = l
+		}
+		exs = append(exs, name)
+		eng.Store.SetSlot("Number", "examples", exs)
+	}
+
+	v, err := eng.VM.Execute(`"Add" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op Add: %v", err)
+	}
+	if !v.IsNil() {
+		t.Errorf("transpose-op Add: expected nil (commutative), got %v", v)
+	}
+	if eng.Store.Has("Transpose-Add") {
+		t.Error("Transpose-Add should not exist after commutativity detected")
+	}
+
+	v2, err := eng.VM.Execute(`"SetDifference" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op SetDifference: %v", err)
+	}
+	if v2.AsString() != "Transpose-SetDifference" {
+		t.Errorf("transpose-op SetDifference: expected Transpose-SetDifference, got %v", v2)
+	}
+}
+
+// Part B fallback: domain type with no data-bearing examples → create normally.
+func TestTransposeOpFallbackNoSamples(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	tt := unit.New("TestType")
+	tt.Set("isA", []string{"Anything"})
+	tt.SetWorth(500)
+	eng.Store.Put(tt)
+
+	synth := unit.New("SynthOp")
+	synth.Set("isA", []string{"BinaryOp", "Op", "Anything"})
+	synth.SetWorth(500)
+	synth.Set("domain", []string{"TestType", "TestType"})
+	synth.Set("range", []string{"TestType"})
+	synth.Set("defn", "+")
+	synth.Set("creditors", []string{"TestSeed"})
+	eng.Store.Put(synth)
+
+	v, err := eng.VM.Execute(`"SynthOp" transpose-op`)
+	if err != nil {
+		t.Fatalf("transpose-op SynthOp: %v", err)
+	}
+	if v.AsString() != "Transpose-SynthOp" {
+		t.Errorf("expected Transpose-SynthOp (fallback path), got %v", v)
+	}
+	if !eng.Store.Has("Transpose-SynthOp") {
+		t.Error("Transpose-SynthOp not created in fallback path")
+	}
+}
+
+// Part A: H-SemanticDup kills ops whose observed applics are fully
+// reproduced by a generalization.
+func TestHSemanticDupKillsRedundant(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-SemanticDup") {
+		t.Fatal("H-SemanticDup heuristic not loaded from common/heuristics.cue")
+	}
+
+	mkNum := func(name string, v int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"Number", "Anything"})
+		u.SetWorth(500)
+		u.Set("data", v)
+		eng.Store.Put(u)
+	}
+	mkNum("Nd2", 2)
+	mkNum("Nd3", 3)
+	mkNum("Nd5", 5)
+	mkNum("Nd7", 7)
+	mkNum("Nd8", 8)
+	mkNum("Nd10", 10)
+
+	// Manually construct a Transpose-Add-like unit. Part B (Task 2) would
+	// prevent real creation; this test exercises Part A on a manual seed.
+	ta := unit.New("FakeTranspose-Add")
+	ta.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
+	ta.SetWorth(500)
+	ta.Set("domain", []string{"Number", "Number"})
+	ta.Set("range", []string{"Number"})
+	ta.Set("defn", "swap +")
+	ta.Set("creditors", []string{"H-Transpose"})
+	ta.Set("applics", []map[string]any{
+		{"args": []string{"Nd2", "Nd3"}, "output": "Nd5", "direct": true},
+		{"args": []string{"Nd3", "Nd5"}, "output": "Nd8", "direct": true},
+		{"args": []string{"Nd3", "Nd7"}, "output": "Nd10", "direct": true},
+	})
+	eng.Store.Put(ta)
+	eng.Store.SetSlot("FakeTranspose-Add", "generalizations", []string{"Add"})
+
+	eng.fireUnitRule("H-SemanticDup", "FakeTranspose-Add")
+
+	if eng.Store.Has("FakeTranspose-Add") {
+		t.Error("FakeTranspose-Add should have been killed by H-SemanticDup")
+	}
+	if !eng.Store.Has("Add") {
+		t.Error("Add (parent) should survive — H-SemanticDup must not touch it")
+	}
+}

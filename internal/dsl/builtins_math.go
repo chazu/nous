@@ -84,6 +84,7 @@ func init() {
 	builtins["run-generator"] = bRunGenerator
 	builtins["transpose-op"] = bTransposeOp
 	builtins["compose-ops"] = bComposeOps
+	builtins["applics-redundant?"] = bApplicsRedundant
 }
 
 // run-generator: (unitName count -- list)
@@ -616,6 +617,20 @@ func bTransposeOp(vm *VM) error {
 		return nil
 	}
 
+	// Part B: commutativity sampling. When domain[0] == domain[1], sample
+	// up to 3 (a,b) pairs of data-bearing examples from the domain type's
+	// examples slot, run defn on (a,b) and (b,a). If all pairs agree, the
+	// op is commutative on observed inputs — skip creating the Transpose.
+	if domain[0] == domain[1] {
+		samples := drawDataBearingExamples(vm.Store, domain[0], 3)
+		if len(samples) >= 2 {
+			if commutativeOnSamples(vm, defn, samples) {
+				vm.push(Nil())
+				return nil
+			}
+		}
+	}
+
 	newU := unit.New(newName)
 	newU.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
 	newU.SetWorth(500)
@@ -683,6 +698,122 @@ func bComposeOps(vm *VM) error {
 	return nil
 }
 
+// applics-redundant?: ( unitName parentName -- bool )
+// Returns true iff every applic on unitName has an output that matches
+// what parentName's defn produces on the same args. Requires >=3 applics
+// for meaningful evidence; returns false on sparse evidence, missing
+// targets, or any mismatch.
+func bApplicsRedundant(vm *VM) error {
+	parentName := vm.pop().AsString()
+	unitName := vm.pop().AsString()
+
+	u := vm.Store.Get(unitName)
+	parent := vm.Store.Get(parentName)
+	if u == nil || parent == nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	parentDefn := parent.GetString("defn")
+	if parentDefn == "" {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	applicsRaw, ok := u.Get("applics").([]map[string]any)
+	if !ok || len(applicsRaw) < 3 {
+		vm.push(BoolVal(false))
+		return nil
+	}
+
+	for _, a := range applicsRaw {
+		var args []string
+		switch v := a["args"].(type) {
+		case []string:
+			args = v
+		case []any:
+			for _, x := range v {
+				if s, ok := x.(string); ok {
+					args = append(args, s)
+				}
+			}
+		}
+		outName, _ := a["output"].(string)
+		if len(args) == 0 || outName == "" {
+			vm.push(BoolVal(false))
+			return nil
+		}
+
+		sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+		sub.Out = vm.Out
+		for k, val := range vm.env {
+			sub.env[k] = val
+		}
+		argsOK := true
+		for _, argName := range args {
+			argU := vm.Store.Get(argName)
+			if argU == nil {
+				argsOK = false
+				break
+			}
+			data := argU.Get("data")
+			if data == nil {
+				argsOK = false
+				break
+			}
+			sub.stack = append(sub.stack, anyToValue(data))
+		}
+		if !argsOK {
+			vm.push(BoolVal(false))
+			return nil
+		}
+
+		parentResult, err := subExecute(sub, parentDefn)
+		if err != nil {
+			vm.push(BoolVal(false))
+			return nil
+		}
+
+		outU := vm.Store.Get(outName)
+		if outU == nil {
+			vm.push(BoolVal(false))
+			return nil
+		}
+		outData := outU.Get("data")
+		if outData == nil {
+			vm.push(BoolVal(false))
+			return nil
+		}
+		observed := anyToValue(outData)
+
+		if !semanticValuesEqual(parentResult, observed) {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+
+	vm.push(BoolVal(true))
+	return nil
+}
+
+// semanticValuesEqual compares two Values with set-semantics for lists
+// (order-insensitive, dedupe-insensitive for int lists) and strict
+// equality otherwise.
+func semanticValuesEqual(a, b Value) bool {
+	if a.Kind() == VList && b.Kind() == VList {
+		as, bs := toIntSet(a), toIntSet(b)
+		if len(as) != len(bs) {
+			return false
+		}
+		for i := range as {
+			if as[i] != bs[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return a.Equal(b)
+}
+
 // stringSlicesEqual compares two []string for elementwise equality.
 func stringSlicesEqual(a, b []string) bool {
 	if len(a) != len(b) {
@@ -694,4 +825,90 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// drawDataBearingExamples walks typeName.examples, resolves each entry
+// to a unit, and collects up to n distinct `data` values as Values.
+// Raw non-unit entries are ignored.
+func drawDataBearingExamples(store *unit.Store, typeName string, n int) []Value {
+	u := store.Get(typeName)
+	if u == nil {
+		return nil
+	}
+	ex := u.Get("examples")
+	var list []any
+	switch v := ex.(type) {
+	case []any:
+		list = v
+	case []string:
+		for _, s := range v {
+			list = append(list, s)
+		}
+	default:
+		return nil
+	}
+
+	var out []Value
+	for _, item := range list {
+		if len(out) >= n {
+			break
+		}
+		name, ok := item.(string)
+		if !ok {
+			continue
+		}
+		iu := store.Get(name)
+		if iu == nil {
+			continue
+		}
+		data := iu.Get("data")
+		if data == nil {
+			continue
+		}
+		out = append(out, anyToValue(data))
+	}
+	return out
+}
+
+// commutativeOnSamples tests whether `defn` produces the same result on
+// (a, b) and (b, a) for every pair in C(samples, 2), capped at 3 pairs.
+// Uses semanticValuesEqual (set-equal for lists, == for primitives).
+func commutativeOnSamples(vm *VM, defn string, samples []Value) bool {
+	pairs := 0
+	for i := 0; i < len(samples); i++ {
+		for j := i + 1; j < len(samples); j++ {
+			if pairs >= 3 {
+				return true
+			}
+			a, b := samples[i], samples[j]
+
+			sub1 := NewVM(vm.Store, vm.Ag, vm.Rng)
+			sub1.Out = vm.Out
+			for k, val := range vm.env {
+				sub1.env[k] = val
+			}
+			sub1.stack = append(sub1.stack, a, b)
+			r1, err := subExecute(sub1, defn)
+			if err != nil {
+				return false
+			}
+
+			sub2 := NewVM(vm.Store, vm.Ag, vm.Rng)
+			sub2.Out = vm.Out
+			for k, val := range vm.env {
+				sub2.env[k] = val
+			}
+			sub2.stack = append(sub2.stack, b, a)
+			r2, err := subExecute(sub2, defn)
+			if err != nil {
+				return false
+			}
+
+			if !semanticValuesEqual(r1, r2) {
+				return false
+			}
+			pairs++
+		}
+	}
+	return pairs > 0
 }
