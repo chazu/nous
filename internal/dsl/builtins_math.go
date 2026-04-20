@@ -81,6 +81,7 @@ func init() {
 	builtins["list-get"] = bListGet // ( list index -- element )
 	builtins["list-take"] = bListTake
 	builtins["list-filter-gt"] = bListFilterGt // ( list threshold -- filtered )
+	builtins["mutate-multiplicities"] = bMutateMult
 
 	// Constructors
 	builtins["iota"] = bIota // ( n -- [0 1 2 ... n-1] )
@@ -1036,4 +1037,24 @@ func commutativeOnSamples(vm *VM, defn string, samples []Value) bool {
 		}
 	}
 	return pairs > 0
+}
+
+// mutate-multiplicities ( list -- list' )
+// For each element: with equal probability drop, keep, or keep+duplicate.
+// Uses VM.Rng so test runs are deterministic when the engine RNG is seeded.
+func bMutateMult(vm *VM) error {
+	in := vm.pop().AsList()
+	out := make([]Value, 0, len(in)+2)
+	for _, el := range in {
+		switch vm.Rng.Intn(3) {
+		case 0:
+			// drop
+		case 1:
+			out = append(out, el)
+		case 2:
+			out = append(out, el, el)
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
 }
