@@ -3405,3 +3405,41 @@ func TestStructureClassificationCategoriesLoad(t *testing.T) {
 		}
 	}
 }
+
+// TestStructureClassificationTagsPropagate verifies that classification
+// parent categories flow via store.IsA chain walks. Each type and instance
+// should participate in the correct classification dimensions.
+func TestStructureClassificationTagsPropagate(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	wantTrue := []struct{ unit, cat string }{
+		{"Set", "UnOrdStruc"},
+		{"Set", "NoMultEleStruc"},
+		{"OSet", "OrdStruc"},
+		{"OSet", "NoMultEleStruc"},
+		{"List", "OrdStruc"},
+		{"List", "MultEleStruc"},
+		{"Bag", "UnOrdStruc"},
+		{"Bag", "MultEleStruc"},
+		{"EmptySet", "EmptyStruc"},
+		{"SetOfNumbers", "NonEmptyStruc"},
+		{"OSetOfPrimesDesc", "NonEmptyStruc"},
+	}
+	for _, tc := range wantTrue {
+		if !eng.Store.IsA(tc.unit, tc.cat) {
+			t.Errorf("IsA(%q, %q): want true, got false", tc.unit, tc.cat)
+		}
+	}
+
+	wantFalse := []struct{ unit, cat string }{
+		{"Set", "OrdStruc"},
+		{"Set", "MultEleStruc"},
+		{"OSet", "MultEleStruc"},
+		{"EmptySet", "NonEmptyStruc"},
+	}
+	for _, tc := range wantFalse {
+		if eng.Store.IsA(tc.unit, tc.cat) {
+			t.Errorf("IsA(%q, %q): want false, got true", tc.unit, tc.cat)
+		}
+	}
+}

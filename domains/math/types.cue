@@ -8,7 +8,7 @@ units: [
 	{
 		name:    "Set"
 		worth:   700
-		isA: ["Structure", "MathObj", "Anything"]
+		isA: ["UnOrdStruc", "NoMultEleStruc", "Structure", "MathObj", "Anything"]
 		english: "An unordered collection with no duplicate elements"
 		specializations: ["EmptySet", "SetOfNumbers", "SetOfPrimes", "SetOfEvens", "OSet"]
 		defn: #"""
@@ -18,7 +18,7 @@ units: [
 	{
 		name:    "List"
 		worth:   600
-		isA: ["Structure", "MathObj", "Anything"]
+		isA: ["OrdStruc", "MultEleStruc", "Structure", "MathObj", "Anything"]
 		english: "An ordered collection that may contain duplicates"
 		specializations: ["SortedList"]
 		defn: #"""
@@ -28,7 +28,7 @@ units: [
 	{
 		name:  "Bag"
 		worth: 500
-		isA: ["Structure", "MathObj", "Anything"]
+		isA: ["UnOrdStruc", "MultEleStruc", "Structure", "MathObj", "Anything"]
 		defn: #"""
 			is-list?
 			"""#
@@ -36,7 +36,7 @@ units: [
 	{
 		name:    "OSet"
 		worth:   600
-		isA: ["Set", "Structure", "MathObj", "Anything"]
+		isA: ["OrdStruc", "NoMultEleStruc", "Set", "Structure", "MathObj", "Anything"]
 		english: "An ordered collection with no duplicate elements"
 		specializations: ["OSetOfNumbers", "OSetOfPrimesDesc"]
 		defn: #"""
