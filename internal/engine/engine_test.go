@@ -3568,3 +3568,58 @@ func TestFirstEleAppliedToOSetOfPrimesDesc(t *testing.T) {
 		t.Errorf("No FirstEle applic on OSetOfPrimesDesc with output 19; applics=%v", applics)
 	}
 }
+
+// TestBagOfTalliesSeedsLoad verifies the H29 seed family loads from CUE:
+// BagOfTallies (canonical multiset) with three example children carrying
+// real multi-element data with duplicates.
+func TestBagOfTalliesSeedsLoad(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	bag := eng.Store.Get("BagOfTallies")
+	if bag == nil {
+		t.Fatal("BagOfTallies not loaded")
+	}
+	isA := bag.GetStrings("isA")
+	wantTags := []string{"MultEleStruc", "UnOrdStruc", "NonEmptyStruc", "Bag"}
+	isAMap := make(map[string]bool, len(isA))
+	for _, s := range isA {
+		isAMap[s] = true
+	}
+	for _, want := range wantTags {
+		if !isAMap[want] {
+			t.Errorf("BagOfTallies.isA missing %q; got %v", want, isA)
+		}
+	}
+	examples := bag.GetStrings("examples")
+	wantChildren := []string{"Bag-ex-tally-a", "Bag-ex-tally-b", "Bag-ex-tally-c"}
+	exMap := make(map[string]bool, len(examples))
+	for _, e := range examples {
+		exMap[e] = true
+	}
+	for _, want := range wantChildren {
+		if !exMap[want] {
+			t.Errorf("BagOfTallies.examples missing %q; got %v", want, examples)
+		}
+	}
+
+	for _, name := range wantChildren {
+		child := eng.Store.Get(name)
+		if child == nil {
+			t.Errorf("%s child not loaded", name)
+			continue
+		}
+		data := child.Get("data")
+		switch d := data.(type) {
+		case []int:
+			if len(d) == 0 {
+				t.Errorf("%s.data empty", name)
+			}
+		case []any:
+			if len(d) == 0 {
+				t.Errorf("%s.data empty", name)
+			}
+		default:
+			t.Errorf("%s.data unexpected type %T: %v", name, data, data)
+		}
+	}
+}
