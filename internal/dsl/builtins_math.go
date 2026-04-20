@@ -74,6 +74,7 @@ func init() {
 	builtins["first"] = bFirst
 	builtins["rest"] = bRest
 	builtins["last"] = bLast
+	builtins["but-last"] = bButLast
 	builtins["reverse"] = bReverse
 	builtins["sort"] = bSort
 	builtins["list-empty?"] = func(vm *VM) error { vm.push(BoolVal(len(vm.pop().AsList()) == 0)); return nil }
@@ -489,6 +490,16 @@ func bLast(vm *VM) error {
 	} else {
 		vm.push(list[len(list)-1])
 	}
+	return nil
+}
+
+func bButLast(vm *VM) error {
+	list := vm.pop().AsList()
+	if len(list) == 0 {
+		vm.push(ListVal(nil))
+		return nil
+	}
+	vm.push(ListVal(list[:len(list)-1]))
 	return nil
 }
 
