@@ -3867,3 +3867,66 @@ func TestApplicsRedundantDomainPermutation(t *testing.T) {
 		t.Fatalf("applics-redundant? should return true for domain-equal + output-equal child, got false")
 	}
 }
+
+// TestRestrictOpCreatesNarrowedUnit verifies restrict-op builds a new Op
+// unit with one domain position narrowed to a specialization of the
+// parent's type at that position, delegating defn, and correct creditor.
+func TestRestrictOpCreatesNarrowedUnit(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	// Add's seed has domain=[Number,Number]; Number has specializations
+	// ["EvenNum","OddNum","PrimeNum","PerfectNum","SquareNum"].
+	v, err := eng.VM.Execute(`"Add" restrict-op`)
+	if err != nil {
+		t.Fatalf("restrict-op: %v", err)
+	}
+	newName := v.AsString()
+	if newName == "" {
+		t.Fatalf("restrict-op returned empty — expected a Restrict-Add-* name")
+	}
+	u := eng.Store.Get(newName)
+	if u == nil {
+		t.Fatalf("new unit %q not found in store", newName)
+	}
+
+	if !strings.HasPrefix(newName, "Restrict-Add-") {
+		t.Errorf("expected name prefix Restrict-Add-, got %q", newName)
+	}
+	gens := u.GetStrings("generalizations")
+	if len(gens) != 1 || gens[0] != "Add" {
+		t.Errorf("generalizations = %v, want [Add]", gens)
+	}
+	creds := u.GetStrings("creditors")
+	if len(creds) != 1 || creds[0] != "H-Restrict" {
+		t.Errorf("creditors = %v, want [H-Restrict]", creds)
+	}
+	domain := u.GetStrings("domain")
+	if len(domain) != 2 {
+		t.Fatalf("domain len %d, want 2: %v", len(domain), domain)
+	}
+	numberCount := 0
+	specCount := 0
+	for _, d := range domain {
+		if d == "Number" {
+			numberCount++
+		} else if eng.Store.IsA(d, "Number") {
+			specCount++
+		}
+	}
+	if numberCount != 1 || specCount != 1 {
+		t.Errorf("domain %v: want exactly one Number and one Number-specialization", domain)
+	}
+	rng := u.GetStrings("range")
+	if len(rng) != 1 || rng[0] != "Number" {
+		t.Errorf("range = %v, want [Number]", rng)
+	}
+	defn := u.GetString("defn")
+	if !strings.Contains(defn, "Add") {
+		t.Errorf("defn = %q, want containing \"Add\"", defn)
+	}
+	parent := eng.Store.Get("Add")
+	flag, _ := parent.Get("restrictRan").(bool)
+	if !flag {
+		t.Errorf("Add.restrictRan should be true after restrict-op")
+	}
+}

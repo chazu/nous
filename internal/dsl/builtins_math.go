@@ -93,6 +93,7 @@ func init() {
 	builtins["run-generator"] = bRunGenerator
 	builtins["transpose-op"] = bTransposeOp
 	builtins["compose-ops"] = bComposeOps
+	builtins["restrict-op"] = bRestrictOp
 	builtins["applics-redundant?"] = bApplicsRedundant
 }
 
@@ -820,6 +821,91 @@ func bComposeOps(vm *VM) error {
 	newU.Set("creditors", []string{"H-Compose"})
 	vm.Store.Put(newU)
 	vm.Store.SetSlot(newName, "generalizations", []string{fName, gName})
+	vm.push(StringVal(newName))
+	return nil
+}
+
+// restrict-op: ( opName -- newOpName | "" )
+// Picks a random domain position whose type has ≥1 immediate specialization,
+// chooses a random specialization, and creates Restrict-<op>-<N> with the
+// narrowed domain, same range/arity, and a defn delegating to parent via
+// apply-op-args. Sets <op>.restrictRan = true (one-shot guard).
+// Returns "" on precondition failure (not an Op, missing defn, no
+// specializable domain position).
+func bRestrictOp(vm *VM) error {
+	opName := vm.pop().AsString()
+	u := vm.Store.Get(opName)
+	if u == nil {
+		vm.push(StringVal(""))
+		return nil
+	}
+	if !vm.Store.IsA(opName, "Op") {
+		vm.push(StringVal(""))
+		return nil
+	}
+	defn := u.GetString("defn")
+	if defn == "" {
+		vm.push(StringVal(""))
+		return nil
+	}
+	domain := u.GetStrings("domain")
+	if len(domain) == 0 {
+		vm.push(StringVal(""))
+		return nil
+	}
+
+	type cand struct {
+		pos   int
+		specs []string
+	}
+	var candidates []cand
+	for i, t := range domain {
+		specs := vm.Store.Specializations(t)
+		if len(specs) > 0 {
+			candidates = append(candidates, cand{pos: i, specs: specs})
+		}
+	}
+	if len(candidates) == 0 {
+		vm.push(StringVal(""))
+		return nil
+	}
+
+	c := candidates[vm.Rng.Intn(len(candidates))]
+	chosen := c.specs[vm.Rng.Intn(len(c.specs))]
+
+	newDomain := make([]string, len(domain))
+	copy(newDomain, domain)
+	newDomain[c.pos] = chosen
+
+	var newName string
+	for n := 1; ; n++ {
+		newName = fmt.Sprintf("Restrict-%s-%d", opName, n)
+		if !vm.Store.Has(newName) {
+			break
+		}
+	}
+
+	// Worth: average of parent and static H-Restrict worth (600) — matches
+	// EURISKO's AverageWorths convention.
+	parentWorth := u.Worth()
+	newWorth := (parentWorth + 600) / 2
+
+	newDefnStr := fmt.Sprintf(`"%s" apply-op-args`, opName)
+
+	newU := unit.New(newName)
+	newU.Set("isA", append([]string{}, u.GetStrings("isA")...))
+	newU.SetWorth(newWorth)
+	newU.Set("domain", newDomain)
+	newU.Set("range", append([]string{}, u.GetStrings("range")...))
+	if arity := u.Get("arity"); arity != nil {
+		newU.Set("arity", arity)
+	}
+	newU.Set("defn", newDefnStr)
+	newU.Set("creditors", []string{"H-Restrict"})
+	vm.Store.Put(newU)
+	vm.Store.SetSlot(newName, "generalizations", []string{opName})
+	vm.Store.SetSlot(newName, "extensions", []string{opName})
+	vm.Store.SetSlot(opName, "restrictRan", true)
 	vm.push(StringVal(newName))
 	return nil
 }
