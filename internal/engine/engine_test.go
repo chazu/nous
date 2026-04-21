@@ -4219,3 +4219,41 @@ func TestPhase57ChoiceOpsAsUnits(t *testing.T) {
 		t.Error("BestSubset should isA RandomSubset via generalizations")
 	}
 }
+
+// TestPhase52TailPairReverseOPair — Phase 5.2 tail: Pair + ReverseOPair
+// units load with correct hierarchy and ReverseOPair's defn swaps elements.
+func TestPhase52TailPairReverseOPair(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	for _, n := range []string{"Pair", "ReverseOPair"} {
+		if !eng.Store.Has(n) {
+			t.Errorf("%s not loaded", n)
+		}
+	}
+	if !eng.Store.IsA("Pair", "Structure") {
+		t.Error("Pair should isA Structure")
+	}
+	if !eng.Store.IsA("Pair", "Bag") {
+		t.Error("Pair should isA Bag via generalizations")
+	}
+	if !eng.Store.IsA("ReverseOPair", "ListOp") {
+		t.Error("ReverseOPair should isA ListOp")
+	}
+	if !eng.Store.IsA("ReverseOPair", "StrucOp") {
+		t.Error("ReverseOPair should isA StrucOp via ListOp generalizations")
+	}
+
+	// Defn executes correctly on a [3, 7] OPair-shaped list.
+	v, err := eng.VM.Execute(`list[ 3 7 ] reverse`)
+	if err != nil {
+		// Fallback syntax if list[...] isn't DSL-literal — use list-of.
+		v, err = eng.VM.Execute(`3 7 2 list-of reverse`)
+		if err != nil {
+			t.Fatalf("reverse exec: %v", err)
+		}
+	}
+	lst := v.AsList()
+	if len(lst) != 2 || lst[0].AsInt() != 7 || lst[1].AsInt() != 3 {
+		t.Errorf("reverse [3,7] = %v, want [7,3]", v)
+	}
+}

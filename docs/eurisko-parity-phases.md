@@ -170,7 +170,7 @@ Companion heuristic **H24-Seeder** schedules whyInt tasks when an examples task 
 
 `OSet` added as `Set` specialization in `domains/math/types.cue`. Five op units (OSetUnion, OSetIntersect, OSetInsert, OSetDelete, OSetEqual) with corresponding order-preserving DSL builtins (`oset-union`, `oset-intersect`, `oset-insert`, `oset-delete`, `oset-equal?`) that linear-scan inputs without sorting. Seed instances `OSetOfNumbers` (ascending) and `OSetOfPrimesDesc` (descending); the descending seed makes order preservation observable to heuristics. Engine smoke test (`TestOSetUnionPreservesOrderViaEngine`) guards against silent regression to canonicalizing set-*. OSetDifference and ReverseOSet deferred.
 
-**5.2: OPair and Pair types** -- PARTIAL (OPair + H25/H26 complete; Pair and ReverseOPair deferred)
+**5.2: OPair and Pair types** -- COMPLETE (2026-04-21)
 
 Added `OPair` category in `domains/math/pairs.cue`. Instances carry `data=[a, b]` and are materialized on-demand by H25/H26 with deterministic names `OPair-<a>-<b>` + `unit-exists?` dedupe.
 
@@ -182,7 +182,7 @@ H-ExercisePreds extended to schedule a one-shot whyInt task on each BinaryPred (
 
 300-cycle math-domain shakeout produced: H25/H26 each firing twice (on SetEqual + SubsetOf), H27/H28 firing once each, 115 OPair instances, 6 new pair/element categories, specialization pipeline still producing units.
 
-Deferred: unordered `Pair` type (separate abstraction — binary-pred analysis only needs OPair), `ReverseOPair` operation (future mutation target), `Relation` (emergent from H25 output — needs no new machinery).
+**Phase 5.2 tail (2026-04-21):** unordered `Pair` type added to `domains/math/pairs.cue` (isA Structure, generalizations include Bag — matching EURISKO's UnOrdStruc/MultEleStruc lineage without re-introducing the Phase 5.4 instance-level-tagging conflict); defn `dup is-list? swap list-length 2 = and`. `ReverseOPair` added as UnaryOp domain=[OPair]→[OPair] with defn `reverse` and seeded examples. isA chain tags ListOp/OrdStrucOp/StrucOp per EURISKO. Deferred: `Relation` (emergent from H25 output — needs no new machinery).
 
 **5.3: Projection operations** -- PARTIAL (2026-04-20)
 
