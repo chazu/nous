@@ -1159,6 +1159,28 @@ units: [
 			"""#
 	},
 	{
+		name:    "H-Invert"
+		worth:   100
+		isA: ["Heuristic", "MetaOpHeuristic", "Anything"]
+		english: "Create a structural inversion of an Op (swapped domain/range; behavior-stub)"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"ArgU" @ "invertRan" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ invert-op
+			"newOp" !
+			"newOp" @ "" !=
+			if
+				"Inverted " "ArgU" @ concat " → " concat "newOp" @ concat print
+			then
+			"""#
+	},
+	{
 		name:    "H-SemanticDup"
 		worth:   600
 		isA: ["Heuristic", "Anything"]

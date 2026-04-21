@@ -91,6 +91,27 @@ units: [
 		english: "Apply an operation only when a predicate is satisfied"
 	},
 	{
+		// Phase 5.6 D' — structural meta-op that creates an "inverted" Op
+		// with swapped domain/range. EURISKO worth 100; no algorithm for
+		// real inversion — created units are discovery shells.
+		name:    "InvertOp"
+		worth:   100
+		isA: ["UnaryOp", "Op", "MathOp", "MathConcept", "Anything"]
+		domain:  ["Op"]
+		range:   ["InvertedOp"]
+		arity:   1
+		english: "Meta-op: create a structurally-inverted Op (swapped domain/range; no algorithm)"
+	},
+	{
+		// Phase 5.6 D' — category for units produced by InvertOp.
+		name:    "InvertedOp"
+		worth:   500
+		isA: ["Category", "MathConcept", "MathObj", "Anything"]
+		english: "Category: operations formed via InvertOp (structurally swapped; no behavior)"
+		generalizations: ["MathConcept", "Op", "MathOp", "Anything"]
+		isRangeOf: ["InvertOp"]
+	},
+	{
 		name:    "Add"
 		worth:   500
 		isA: ["BinaryOp", "Op", "MathOp", "Anything"]

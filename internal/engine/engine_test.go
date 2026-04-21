@@ -4322,3 +4322,91 @@ func TestPhase71DefnFallbackChain(t *testing.T) {
 		t.Errorf("Defn.specializations = %v, want to contain NecDefn and SufDefn", specs)
 	}
 }
+
+// TestPhase56DPrimeInvertOp — Phase 5.6 D': invert-op builtin + H-Invert
+// heuristic + InvertOp/InvertedOp units all load, and invert-op produces
+// a structural marker unit with swapped domain↔range.
+func TestPhase56DPrimeInvertOp(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	for _, n := range []string{"InvertOp", "InvertedOp", "H-Invert"} {
+		if !eng.Store.Has(n) {
+			t.Errorf("%s not loaded", n)
+		}
+	}
+	if !eng.Store.IsA("H-Invert", "MetaOpHeuristic") {
+		t.Error("H-Invert should isA MetaOpHeuristic")
+	}
+
+	// invert-op on Add creates a structural shell.
+	v, err := eng.VM.Execute(`"Add" invert-op`)
+	if err != nil {
+		t.Fatalf("invert-op: %v", err)
+	}
+	newName := v.AsString()
+	if newName == "" {
+		t.Fatal("invert-op returned empty")
+	}
+	u := eng.Store.Get(newName)
+	if u == nil {
+		t.Fatalf("new unit %q missing", newName)
+	}
+	if !strings.HasPrefix(newName, "Invert-Add-") {
+		t.Errorf("unexpected name %q", newName)
+	}
+	// Domain/range swapped.
+	add := eng.Store.Get("Add")
+	addDomain := add.GetStrings("domain")
+	addRange := add.GetStrings("range")
+	invDomain := u.GetStrings("domain")
+	invRange := u.GetStrings("range")
+	if !sameStrings(invDomain, addRange) {
+		t.Errorf("inverted domain = %v, want %v", invDomain, addRange)
+	}
+	if !sameStrings(invRange, addDomain) {
+		t.Errorf("inverted range = %v, want %v", invRange, addDomain)
+	}
+	// Tagged InvertedOp.
+	if !eng.Store.IsA(newName, "InvertedOp") {
+		t.Errorf("%s should isA InvertedOp", newName)
+	}
+	// Creditor.
+	creds := u.GetStrings("creditors")
+	if len(creds) != 1 || creds[0] != "H-Invert" {
+		t.Errorf("creditors = %v, want [H-Invert]", creds)
+	}
+	// No defn (structural shell).
+	if defn := u.GetString("defn"); defn != "" {
+		t.Errorf("defn = %q, want empty (structural shell)", defn)
+	}
+	// One-shot flag set on parent.
+	if flag, _ := add.Get("invertRan").(bool); !flag {
+		t.Error("Add.invertRan should be true after invert-op")
+	}
+
+	// H-Invert fires via fireUnitRule on a clean Op.
+	eng2, _ := testEngine(t)
+	eng2.fireUnitRule("H-Invert", "Multiply")
+	foundMult := false
+	for _, name := range eng2.Store.All() {
+		if strings.HasPrefix(name, "Invert-Multiply-") {
+			foundMult = true
+			break
+		}
+	}
+	if !foundMult {
+		t.Error("H-Invert should have created Invert-Multiply-* when fired on Multiply")
+	}
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

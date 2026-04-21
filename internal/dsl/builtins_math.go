@@ -94,6 +94,7 @@ func init() {
 	builtins["transpose-op"] = bTransposeOp
 	builtins["compose-ops"] = bComposeOps
 	builtins["restrict-op"] = bRestrictOp
+	builtins["invert-op"] = bInvertOp
 	builtins["applics-redundant?"] = bApplicsRedundant
 }
 
@@ -847,6 +848,65 @@ func bComposeOps(vm *VM) error {
 	newU.Set("creditors", []string{"H-Compose"})
 	vm.Store.Put(newU)
 	vm.Store.SetSlot(newName, "generalizations", []string{fName, gName})
+	vm.push(StringVal(newName))
+	return nil
+}
+
+// invert-op: ( opName -- newOpName | "" )
+// Creates Invert-<op>-<N> as a structural marker with swapped domain↔range.
+// The new unit has NO defn — inversion as behavior requires real inverse
+// search (EURISKO worth 100, "genuinely complex", deferred to future work).
+// What ships here is the discovery scaffold: the unit exists, is tagged
+// InvertedOp, has creditors=[H-Invert], and can be reasoned about by
+// meta-op heuristics. Sets <op>.invertRan = true for the one-shot guard.
+// Returns "" on precondition failure (not an Op, missing domain/range).
+func bInvertOp(vm *VM) error {
+	opName := vm.pop().AsString()
+	u := vm.Store.Get(opName)
+	if u == nil {
+		vm.push(StringVal(""))
+		return nil
+	}
+	if !vm.Store.IsA(opName, "Op") {
+		vm.push(StringVal(""))
+		return nil
+	}
+	domain := u.GetStrings("domain")
+	rng := u.GetStrings("range")
+	if len(domain) == 0 || len(rng) == 0 {
+		vm.push(StringVal(""))
+		return nil
+	}
+
+	var newName string
+	for n := 1; ; n++ {
+		newName = fmt.Sprintf("Invert-%s-%d", opName, n)
+		if !vm.Store.Has(newName) {
+			break
+		}
+	}
+
+	parentWorth := u.Worth()
+	newWorth := (parentWorth + 100) / 2 // EURISKO AverageWorths, InvertOp worth 100
+
+	newU := unit.New(newName)
+	// Inherit parent's arity bucket + add InvertedOp category.
+	isA := append([]string{}, u.GetStrings("isA")...)
+	isA = append(isA, "InvertedOp")
+	newU.Set("isA", isA)
+	newU.SetWorth(newWorth)
+	newU.Set("domain", rng)
+	newU.Set("range", domain)
+	if arity := u.Get("arity"); arity != nil {
+		newU.Set("arity", arity)
+	}
+	// No defn — inversion as behavior is not implemented. The unit is a
+	// structural discovery target, not executable.
+	newU.Set("creditors", []string{"H-Invert"})
+	vm.Store.Put(newU)
+	vm.Store.SetSlot(newName, "generalizations", []string{opName})
+	vm.Store.SetSlot(newName, "isRangeOf", []string{"InvertOp"})
+	vm.Store.SetSlot(opName, "invertRan", true)
 	vm.push(StringVal(newName))
 	return nil
 }
