@@ -845,6 +845,21 @@ func bApplicsRedundant(vm *VM) error {
 		return nil
 	}
 
+	// Domain-multiset precheck: if unit explicitly defines a domain that
+	// differs from parent's, behavioral match on sampled applics does not
+	// imply redundancy (Restrict's narrowed domain is the discovery).
+	// Only activate if unit has a domain slot; if missing, proceed to output check.
+	// Multiset (not ordered) compare so reversed-domain Transpose on a
+	// commutative op still reaches the output-matching loop below.
+	uDomain := u.GetStrings("domain")
+	if len(uDomain) > 0 {
+		pDomain := parent.GetStrings("domain")
+		if !multisetEqualStrings(uDomain, pDomain) {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+
 	applicsRaw, ok := u.Get("applics").([]map[string]any)
 	if !ok || len(applicsRaw) < 3 {
 		vm.push(BoolVal(false))
@@ -938,6 +953,25 @@ func semanticValuesEqual(a, b Value) bool {
 		return true
 	}
 	return a.Equal(b)
+}
+
+// multisetEqualStrings returns true iff a and b contain the same strings
+// with the same multiplicities. Ignores order. nil and empty compare equal.
+func multisetEqualStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, s := range a {
+		counts[s]++
+	}
+	for _, s := range b {
+		counts[s]--
+		if counts[s] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // stringSlicesEqual compares two []string for elementwise equality.

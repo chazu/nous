@@ -3805,3 +3805,65 @@ func TestMetaOpHeuristicCategoryWalk(t *testing.T) {
 		}
 	}
 }
+
+// TestApplicsRedundantDomainMismatch verifies that applics-redundant? returns
+// false when the unit's domain is a different multiset from the parent's,
+// even if outputs would otherwise match. This is the precheck that exempts
+// Restrict from H-SemanticDup killing.
+func TestApplicsRedundantDomainMismatch(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	child := unit.New("Restricted-Add")
+	child.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
+	child.SetWorth(500)
+	child.Set("domain", []string{"PrimeNum", "Number"})
+	child.Set("range", []string{"Number"})
+	child.Set("defn", `"Add" apply-op-args`)
+	child.Set("creditors", []string{"H-Restrict"})
+	child.Set("applics", []map[string]any{
+		{"args": []string{"N-2", "N-3"}, "output": "N-5"},
+		{"args": []string{"N-5", "N-7"}, "output": "N-12"},
+		{"args": []string{"N-3", "N-11"}, "output": "N-14"},
+	})
+	eng.Store.Put(child)
+	eng.Store.SetSlot("Restricted-Add", "generalizations", []string{"Add"})
+
+	v, err := eng.VM.Execute(`"Restricted-Add" "Add" applics-redundant?`)
+	if err != nil {
+		t.Fatalf("applics-redundant? error: %v", err)
+	}
+	if v.AsBool() {
+		t.Fatalf("applics-redundant? should return false when domains differ (multiset), got true")
+	}
+}
+
+// TestApplicsRedundantDomainPermutation verifies that a reversed domain
+// (Transpose case) compares equal as a multiset, so behaviorally identical
+// outputs are still flagged redundant — regression guardrail for the
+// 2026-04-19 commutative-Transpose killing behavior.
+func TestApplicsRedundantDomainPermutation(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	child := unit.New("Pseudo-Transpose-Add")
+	child.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
+	child.SetWorth(500)
+	child.Set("domain", []string{"Number", "Number"})
+	child.Set("range", []string{"Number"})
+	child.Set("defn", `+`)
+	child.Set("creditors", []string{"H-Transpose"})
+	child.Set("applics", []map[string]any{
+		{"args": []string{"N-2", "N-3"}, "output": "N-5"},
+		{"args": []string{"N-5", "N-7"}, "output": "N-12"},
+		{"args": []string{"N-3", "N-11"}, "output": "N-14"},
+	})
+	eng.Store.Put(child)
+	eng.Store.SetSlot("Pseudo-Transpose-Add", "generalizations", []string{"Add"})
+
+	v, err := eng.VM.Execute(`"Pseudo-Transpose-Add" "Add" applics-redundant?`)
+	if err != nil {
+		t.Fatalf("applics-redundant? error: %v", err)
+	}
+	if !v.AsBool() {
+		t.Fatalf("applics-redundant? should return true for domain-equal + output-equal child, got false")
+	}
+}
