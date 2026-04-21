@@ -4018,3 +4018,61 @@ func TestHRestrictSkipsOpWithoutSpecializableDomain(t *testing.T) {
 		}
 	}
 }
+
+// TestSemanticDupExemptsRestrict verifies the end-to-end path: a Restrict-style
+// unit with narrower domain + behaviorally-identical applics survives H-SemanticDup
+// because the multiset domain precheck in applics-redundant? returns false.
+func TestSemanticDupExemptsRestrict(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	r := unit.New("Restrict-Add-test")
+	r.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
+	r.SetWorth(550)
+	r.Set("domain", []string{"PrimeNum", "Number"})
+	r.Set("range", []string{"Number"})
+	r.Set("defn", `"Add" apply-op-args`)
+	r.Set("creditors", []string{"H-Restrict"})
+	r.Set("applics", []map[string]any{
+		{"args": []string{"N-2", "N-3"}, "output": "N-5"},
+		{"args": []string{"N-5", "N-7"}, "output": "N-12"},
+		{"args": []string{"N-3", "N-11"}, "output": "N-14"},
+	})
+	eng.Store.Put(r)
+	eng.Store.SetSlot("Restrict-Add-test", "generalizations", []string{"Add"})
+
+	eng.fireUnitRule("H-SemanticDup", "Restrict-Add-test")
+
+	if eng.Store.Get("Restrict-Add-test") == nil {
+		t.Fatalf("Restrict-Add-test was killed — multiset domain precheck should have spared it")
+	}
+}
+
+// TestSemanticDupStillKillsCommutativeTranspose — regression: reversed-domain
+// Transpose on a commutative op has same-multiset domain as parent AND identical
+// outputs, so H-SemanticDup must kill it (preserves 2026-04-19 behavior).
+func TestSemanticDupStillKillsCommutativeTranspose(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	tr := unit.New("Transpose-Add-test")
+	tr.Set("isA", []string{"BinaryOp", "Op", "MathOp", "Anything"})
+	tr.SetWorth(500)
+	tr.Set("domain", []string{"Number", "Number"})
+	tr.Set("range", []string{"Number"})
+	tr.Set("defn", `swap +`)
+	tr.Set("creditors", []string{"H-Transpose"})
+	tr.Set("applics", []map[string]any{
+		{"args": []string{"N-2", "N-3"}, "output": "N-5"},
+		{"args": []string{"N-5", "N-7"}, "output": "N-12"},
+		{"args": []string{"N-3", "N-11"}, "output": "N-14"},
+	})
+	eng.Store.Put(tr)
+	eng.Store.SetSlot("Transpose-Add-test", "generalizations", []string{"Add"})
+
+	eng.fireUnitRule("H-SemanticDup", "Transpose-Add-test")
+
+	if eng.Store.Get("Transpose-Add-test") != nil {
+		t.Fatalf("Transpose-Add-test should have been killed by H-SemanticDup (behavioral + multiset-domain-equal match)")
+	}
+}
