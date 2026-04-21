@@ -211,8 +211,8 @@ Phase 5.6 was sliced into four independent pieces. Slices C.1 and C.2 shipped to
 **5.7: Choice operations**
 RandomChoose, RandomSubset, GoodChoose, GoodSubset, BestChoose, BestSubset as unit concepts (they exist as behaviors in H3/H5 but need to be first-class units that other heuristics can discover and reason about).
 
-**5.8: Logical operations as units**
-AND, OR, NOT, Implies, TheFirstOf, TheSecondOf as operation units with defn and domain/range.
+**5.8: Logical operations as units** -- COMPLETE (2026-04-21)
+Six logical ops (And, Or, Not, Implies, TheFirstOf, TheSecondOf) + LogicOp category + True/False TruthValue instances landed in `domains/math/logic.cue`. And/Or/Not/Implies use TruthValue domains (tighter than EURISKO's Anything); TheFirstOf/TheSecondOf are polymorphic (Anything). Generalizations chain mirrors EURISKO: And → [TheFirstOf, TheSecondOf, Or]. No new heuristics — existing H-Transpose/H-Compose/H-Restrict pick them up organically. Note: TheFirstOf/TheSecondOf defn order — `drop` returns arg1 (TheFirstOf), `swap drop` returns arg2 (TheSecondOf). Spec: `docs/superpowers/specs/2026-04-21-logical-ops-as-units-design.md`. Plan: `docs/superpowers/plans/2026-04-21-logical-ops-as-units.md`.
 
 **5.9: Numeric operations as units** -- COMPLETE
 Add, Multiply, Successor, Square landed as seed units in `domains/math/operations.cue` (Phase 5.9 + 5.11 plan, 2026-04-19). Each has worth 500, BinaryOp/UnaryOp isA as appropriate, [Number]→[Number] signatures, and seeded raw-literal examples matching the GCD/DivisorsOf precedent. H-RunOnExamples picks them up via the existing pipeline; no engine changes.
@@ -324,7 +324,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 | COMPLETE |
-| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.3 partial, 5.4 partial, 5.6 A/B/C.1/C.2/D, 5.9, 5.10, 5.11 numeric-preds + H27/H28, 5.12) |
+| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.3 partial, 5.4 partial, 5.6 A/B/C.1/C.2/D, 5.8, 5.9, 5.10, 5.11 numeric-preds + H27/H28, 5.12) |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
 
