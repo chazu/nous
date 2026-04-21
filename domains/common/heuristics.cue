@@ -1168,4 +1168,71 @@ units: [
 			end
 			"""#
 	},
+	{
+		name:    "H29-Seeder"
+		worth:   400
+		isA: ["Heuristic", "Anything"]
+		english: "Schedule an examples task on any MultEleStruc unit with ≥1 example so H29 can mutate its children"
+		overallRecord: {successes: 0, failures: 0}
+		ifFinishedWorkingOnTask: #"""
+			"CurUnit" @ "MultEleStruc" isa?
+			if
+				"CurUnit" @ "examples" get-slot "exs" !
+				"exs" @ nil !=
+				if
+					"exs" @ list-length 0 >
+					"CurUnit" @ "h29Scheduled" get-slot nil =
+					and
+					if
+						500 "CurUnit" @ "examples" "H29-Seeder: schedule examples task for H29 mutation" add-task
+						true "CurUnit" @ "h29Scheduled" set-slot
+						"H29-Seeder: queued examples task for " "CurUnit" @ concat print
+					then
+				then
+			then
+			"""#
+	},
+	{
+		name:    "H29"
+		worth:   500
+		isA: ["Heuristic", "Anything"]
+		english: "New examples of a MultEleStruc can be found by randomly mutating element multiplicities in known examples"
+		overallRecord: {successes: 0, failures: 0}
+		h29Cap: 5
+		ifWorkingOnTask: #"""
+			"CurUnit" @ "MultEleStruc" isa?
+			"CurSlot" @ "examples" =
+			and
+			"CurUnit" @ "h29Ran" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			true "CurUnit" @ "h29Ran" set-slot
+
+			"CurUnit" @ "examples" get-slot "srcExs" !
+			"H29" "h29Cap" get-slot "cap" !
+			0 "made" !
+
+			"srcExs" @ each
+				"made" @ "cap" @ < if
+					it "srcName" !
+					"srcName" @ "data" get-slot mutate-multiplicities "newData" !
+					"newData" @ list-length 0 > if
+						"Bag-ex-H29-" "CurUnit" @ concat "-" concat "made" @ concat "newName" !
+						"newName" @ unit-exists? not if
+							"newName" @ "Bag" create-unit drop
+							"newData" @ "newName" @ "data" set-slot
+							"newName" @ "CurUnit" @ "examples" add-to-slot
+							"H29" "newName" @ "creditors" set-slot
+							"made" @ 1 + "made" !
+						then
+					then
+				then
+			end
+
+			"made" @ 0 > if
+				"H29: created " "made" @ concat " new multiplicity-mutated examples for " concat "CurUnit" @ concat print
+			then
+			"""#
+	},
 ]

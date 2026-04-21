@@ -272,6 +272,22 @@ func (e *Engine) SeedInitialAgenda() {
 				Reasons:  []string{"Bootstrap H24 on pre-populated category"},
 			})
 		}
+		// Phase 5.12: seed examples tasks for MultEleStruc units that already
+		// have ≥1 example pre-populated from CUE (BagOfTallies etc).
+		// H29 mutates known examples to discover new ones; without this
+		// bootstrap MultEleStruc units never appear on the agenda because
+		// SeedInitialAgenda only seeds Op units and H29-Seeder only fires
+		// after a MultEleStruc examples task is processed.
+		if e.Store.IsA(name, "MultEleStruc") && name != "MultEleStruc" {
+			if exs := u.GetStrings("examples"); len(exs) >= 1 {
+				e.Agenda.Push(&agenda.Task{
+					Priority: 700,
+					UnitName: name,
+					SlotName: "examples",
+					Reasons:  []string{"Bootstrap H29 on pre-populated MultEleStruc"},
+				})
+			}
+		}
 	}
 }
 

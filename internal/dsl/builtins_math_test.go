@@ -375,3 +375,61 @@ func TestButLast(t *testing.T) {
 		t.Errorf("empty: want [] got %v", v.AsList())
 	}
 }
+
+func TestMutateMultiplicities(t *testing.T) {
+	// Every output element must come from the input alphabet.
+	t.Run("element_preservation", func(t *testing.T) {
+		vm := testVM(t)
+		inputAlphabet := map[int]bool{1: true, 2: true, 3: true, 5: true}
+		for i := 0; i < 50; i++ {
+			v, err := vm.Execute(`1 2 3 5 4 list-of mutate-multiplicities`)
+			if err != nil {
+				t.Fatalf("exec: %v", err)
+			}
+			for _, e := range v.AsList() {
+				if !inputAlphabet[e.AsInt()] {
+					t.Errorf("foreign element %d in output %v", e.AsInt(), v.AsList())
+				}
+			}
+		}
+	})
+
+	t.Run("empty_input", func(t *testing.T) {
+		vm := testVM(t)
+		v, err := vm.Execute(`0 list-of mutate-multiplicities`)
+		if err != nil {
+			t.Fatalf("exec: %v", err)
+		}
+		if len(v.AsList()) != 0 {
+			t.Errorf("empty input should produce empty output, got %v", v.AsList())
+		}
+	})
+
+	t.Run("distribution_shows_drops_and_duplicates", func(t *testing.T) {
+		vm := testVM(t)
+		sawLonger := false
+		sawShorter := false
+		for i := 0; i < 200; i++ {
+			v, err := vm.Execute(`1 2 3 3 list-of mutate-multiplicities`)
+			if err != nil {
+				t.Fatalf("exec: %v", err)
+			}
+			n := len(v.AsList())
+			if n > 3 {
+				sawLonger = true
+			}
+			if n < 3 {
+				sawShorter = true
+			}
+			if sawLonger && sawShorter {
+				return
+			}
+		}
+		if !sawLonger {
+			t.Error("200 runs never produced a longer-than-3 output — duplicate branch unreachable?")
+		}
+		if !sawShorter {
+			t.Error("200 runs never produced a shorter-than-3 output — drop branch unreachable?")
+		}
+	})
+}

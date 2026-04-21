@@ -61,4 +61,30 @@ units: [
 		english: "Primes under 20 in descending order"
 		data: [19, 17, 13, 11, 7, 5, 3, 2]
 	},
+	{
+		name:    "BagOfTallies"
+		worth:   500
+		isA: ["MultEleStruc", "UnOrdStruc", "NonEmptyStruc", "Bag", "Structure", "MathObj", "Anything"]
+		english: "A bag with duplicate elements — a canonical multiset for mutation experiments"
+		data: [1, 1, 2, 2, 2, 3, 5]
+		examples: ["Bag-ex-tally-a", "Bag-ex-tally-b", "Bag-ex-tally-c"]
+	},
+	{
+		name:    "Bag-ex-tally-a"
+		worth:   300
+		isA: ["Bag", "Structure", "MathObj", "Anything"]
+		data: [1, 1, 2, 3]
+	},
+	{
+		name:    "Bag-ex-tally-b"
+		worth:   300
+		isA: ["Bag", "Structure", "MathObj", "Anything"]
+		data: [2, 2, 4, 5, 5]
+	},
+	{
+		name:    "Bag-ex-tally-c"
+		worth:   300
+		isA: ["Bag", "Structure", "MathObj", "Anything"]
+		data: [3, 3, 3, 7]
+	},
 ]
