@@ -208,8 +208,8 @@ Phase 5.6 was sliced into four independent pieces. Slices C.1 and C.2 shipped to
 
 **Resolved (2026-04-21, Phase 5.6 D):** H-SemanticDup gate refactored to walk `creditors isA MetaOpHeuristic` instead of hardcoded allowlist; H-Transpose/H-Compose/H-Restrict tagged with `MetaOpHeuristic` isA. See `internal/engine/engine_test.go:TestH19CriterialSparesSpecializations` for the gate semantics.
 
-**5.7: Choice operations**
-RandomChoose, RandomSubset, GoodChoose, GoodSubset, BestChoose, BestSubset as unit concepts (they exist as behaviors in H3/H5 but need to be first-class units that other heuristics can discover and reason about).
+**5.7: Choice operations** -- COMPLETE (2026-04-21)
+Six choice ops landed in `domains/math/choice_ops.cue` as first-class UnaryOp units with domain=[Set]: RandomChoose + RandomSubset (roots with `defn: random-choice`/`random-subset`) plus Good/Best specializations that delegate to the random parents (matching EURISKO's fallback convention — specializations inherit parent behavior absent their own FastAlg). Full generalizations chain: BestChoose → GoodChoose → RandomChoose; BestSubset → GoodSubset → RandomSubset. All tagged SetOp/StrucOp via isA so Phase 5.5 category queries resolve. Goodness-metric-aware behavior is a follow-up (nous lacks a worth-driven selection primitive).
 
 **5.8: Logical operations as units** -- COMPLETE (2026-04-21)
 Six logical ops (And, Or, Not, Implies, TheFirstOf, TheSecondOf) + LogicOp category + True/False TruthValue instances landed in `domains/math/logic.cue`. And/Or/Not/Implies use TruthValue domains (tighter than EURISKO's Anything); TheFirstOf/TheSecondOf are polymorphic (Anything). Generalizations chain mirrors EURISKO: And → [TheFirstOf, TheSecondOf, Or]. No new heuristics — existing H-Transpose/H-Compose/H-Restrict pick them up organically. Note: TheFirstOf/TheSecondOf defn order — `drop` returns arg1 (TheFirstOf), `swap drop` returns arg2 (TheSecondOf). Spec: `docs/superpowers/specs/2026-04-21-logical-ops-as-units-design.md`. Plan: `docs/superpowers/plans/2026-04-21-logical-ops-as-units.md`.

@@ -4190,3 +4190,32 @@ func TestPhase55PerTypeOpCategories(t *testing.T) {
 		t.Error("BagOp should isA MultEleStrucOp via generalizations")
 	}
 }
+
+// TestPhase57ChoiceOpsAsUnits — Phase 5.7: choice ops exist as first-class
+// units with correct hierarchy.
+func TestPhase57ChoiceOpsAsUnits(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	for _, n := range []string{"RandomChoose", "RandomSubset", "GoodChoose", "GoodSubset", "BestChoose", "BestSubset"} {
+		if !eng.Store.Has(n) {
+			t.Errorf("%s not loaded", n)
+		}
+		if !eng.Store.IsA(n, "SetOp") {
+			t.Errorf("%s should isA SetOp", n)
+		}
+		if !eng.Store.IsA(n, "StrucOp") {
+			t.Errorf("%s should isA StrucOp via SetOp generalizations", n)
+		}
+	}
+
+	// BestChoose inherits from GoodChoose from RandomChoose.
+	if !eng.Store.IsA("BestChoose", "GoodChoose") {
+		t.Error("BestChoose should isA GoodChoose via generalizations")
+	}
+	if !eng.Store.IsA("BestChoose", "RandomChoose") {
+		t.Error("BestChoose should isA RandomChoose via generalizations")
+	}
+	if !eng.Store.IsA("BestSubset", "RandomSubset") {
+		t.Error("BestSubset should isA RandomSubset via generalizations")
+	}
+}
