@@ -3930,3 +3930,91 @@ func TestRestrictOpCreatesNarrowedUnit(t *testing.T) {
 		t.Errorf("Add.restrictRan should be true after restrict-op")
 	}
 }
+
+// TestHRestrictFiresOnEligibleOp exercises H-Restrict via fireUnitRule on Add,
+// which satisfies all gates: isA Op, has defn, has applics, has specializable
+// domain (Number has specializations), and restrictRan not yet set.
+func TestHRestrictFiresOnEligibleOp(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	if !eng.Store.Has("H-Restrict") {
+		t.Fatal("H-Restrict heuristic not loaded from common/heuristics.cue")
+	}
+	add := eng.Store.Get("Add")
+	add.Set("applics", []map[string]any{
+		{"args": []string{"N-2", "N-3"}, "output": "N-5"},
+	})
+	eng.Store.Put(add)
+
+	eng.fireUnitRule("H-Restrict", "Add")
+
+	found := 0
+	for _, name := range eng.Store.All() {
+		if strings.HasPrefix(name, "Restrict-Add-") {
+			found++
+		}
+	}
+	if found == 0 {
+		t.Fatalf("expected >=1 Restrict-Add-* unit after H-Restrict fired; got 0")
+	}
+	if flag, _ := eng.Store.Get("Add").Get("restrictRan").(bool); !flag {
+		t.Errorf("Add.restrictRan should be true after H-Restrict fired")
+	}
+
+	// One-shot: fire again, count should not increase.
+	eng.fireUnitRule("H-Restrict", "Add")
+	found2 := 0
+	for _, name := range eng.Store.All() {
+		if strings.HasPrefix(name, "Restrict-Add-") {
+			found2++
+		}
+	}
+	if found2 > found {
+		t.Errorf("one-shot guard failed: %d before, %d after second fire", found, found2)
+	}
+}
+
+// TestHRestrictSkipsOpWithoutApplics — zero applics on Add disables the gate.
+func TestHRestrictSkipsOpWithoutApplics(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	add := eng.Store.Get("Add")
+	add.Set("applics", []map[string]any{})
+	eng.Store.Put(add)
+
+	eng.fireUnitRule("H-Restrict", "Add")
+
+	for _, name := range eng.Store.All() {
+		if strings.HasPrefix(name, "Restrict-Add-") {
+			t.Fatalf("H-Restrict fired despite zero applics: created %s", name)
+		}
+	}
+}
+
+// TestHRestrictSkipsOpWithoutSpecializableDomain — op whose domain types have
+// no specializations is ineligible.
+func TestHRestrictSkipsOpWithoutSpecializableDomain(t *testing.T) {
+	eng, _ := testEngine(t)
+	eng.Verbosity = 0
+
+	opU := unit.New("TestNoSpec")
+	opU.Set("isA", []string{"UnaryOp", "Op", "MathOp", "Anything"})
+	opU.SetWorth(500)
+	opU.Set("domain", []string{"TruthValue"})
+	opU.Set("range", []string{"TruthValue"})
+	opU.Set("defn", `not`)
+	opU.Set("applics", []map[string]any{
+		{"args": []string{"True"}, "output": "False"},
+	})
+	eng.Store.Put(opU)
+
+	eng.fireUnitRule("H-Restrict", "TestNoSpec")
+
+	for _, name := range eng.Store.All() {
+		if strings.HasPrefix(name, "Restrict-TestNoSpec-") {
+			t.Fatalf("H-Restrict fired despite no specializable domain: created %s", name)
+		}
+	}
+}

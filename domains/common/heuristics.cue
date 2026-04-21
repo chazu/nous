@@ -1134,6 +1134,31 @@ units: [
 			"""#
 	},
 	{
+		name:    "H-Restrict"
+		worth:   600
+		isA: ["Heuristic", "MetaOpHeuristic", "Anything"]
+		english: "Create a narrowed version of an Op by specializing one domain position"
+		overallRecord: {successes: 0, failures: 0}
+		ifPotentiallyRelevant: #"""
+			"ArgU" @ "Op" isa?
+			"ArgU" @ "defn" get-slot nil !=
+			and
+			"ArgU" @ "applics" get-slot 0 >
+			and
+			"ArgU" @ "restrictRan" get-slot nil =
+			and
+			"""#
+		thenCompute: #"""
+			"ArgU" @ restrict-op
+			"newOp" !
+			"newOp" @ "" !=
+			if
+				400 "newOp" @ "examples" "Examples for restricted op" add-task
+				"Restricted " "ArgU" @ concat " → " concat "newOp" @ concat print
+			then
+			"""#
+	},
+	{
 		name:    "H-SemanticDup"
 		worth:   600
 		isA: ["Heuristic", "Anything"]
