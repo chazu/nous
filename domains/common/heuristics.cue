@@ -1143,9 +1143,15 @@ units: [
 			"ArgU" @ "Op" isa?
 			"ArgU" @ "creditors" get-slot nil !=
 			and
-			"ArgU" @ "creditors" get-slot "H-Transpose" list-contains
-			"ArgU" @ "creditors" get-slot "H-Compose" list-contains
-			or
+			false "metaOp" !
+			"ArgU" @ "creditors" get-slot
+			each
+				it "MetaOpHeuristic" isa?
+				if
+					true "metaOp" !
+				then
+			end
+			"metaOp" @
 			and
 			"ArgU" @ "generalizations" get-slot nil !=
 			and
