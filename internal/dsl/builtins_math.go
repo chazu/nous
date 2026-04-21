@@ -565,6 +565,11 @@ func bListFilterGt(vm *VM) error {
 //           ( arg1 opUnitName -- result ) for unary ops
 // Looks up the "defn" slot of opUnitName and executes it with args.
 // Checks the unit's isA to determine arity.
+//
+// Phase 7.1: resolves a defn via the slot-priority chain
+// fastAlg → alg → fastDefn → unitizedDefn → iterativeDefn → recursiveDefn →
+// compiledDefn → defn (first non-empty wins). Existing ops that use only
+// `defn` are unaffected; ops may now carry specialized defn flavors.
 func bApplyOp(vm *VM) error {
 	opName := vm.pop().AsString()
 	u := vm.Store.Get(opName)
@@ -572,7 +577,7 @@ func bApplyOp(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	defn := u.GetString("defn")
+	defn := resolveDefn(u)
 	if defn == "" {
 		vm.push(Nil())
 		return nil
@@ -650,6 +655,27 @@ func bApplyPred(vm *VM) error {
 	return bApplyOp(vm)
 }
 
+// resolveDefn returns the first non-empty value from a unit's defn-family
+// slots in priority order. Mirrors EURISKO's RunAlg/RunDefn fallback: most
+// specialized/fastest first, general defn last. Phase 7.1.
+func resolveDefn(u *unit.Unit) string {
+	for _, slot := range []string{
+		"fastAlg",
+		"alg",
+		"fastDefn",
+		"unitizedDefn",
+		"iterativeDefn",
+		"recursiveDefn",
+		"compiledDefn",
+		"defn",
+	} {
+		if s := u.GetString(slot); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // apply-op-args: ( argList opName -- result )
 // Applies opName's defn to args looked up from the unit names in argList.
 // Each arg name is resolved to its `data` slot value; those values are
@@ -666,7 +692,7 @@ func bApplyOpArgs(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	defn := u.GetString("defn")
+	defn := resolveDefn(u)
 	if defn == "" {
 		vm.push(Nil())
 		return nil

@@ -58,6 +58,7 @@ units: [{
 	isA:      ["Slot", "CriterialSlot", "Anything"]
 	dataType: "LispPred"
 	elimSlots: ["Applics"]
+	specializations: ["NecDefn", "SufDefn"]
 	english:  "Predicate definition of a concept"
 }, {
 	name:     "FastDefn"

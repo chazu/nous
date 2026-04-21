@@ -4257,3 +4257,68 @@ func TestPhase52TailPairReverseOPair(t *testing.T) {
 		t.Errorf("reverse [3,7] = %v, want [7,3]", v)
 	}
 }
+
+// TestPhase71DefnFallbackChain — Phase 7.1: apply-op resolves the defn via
+// the priority chain fastAlg → alg → fastDefn → unitizedDefn → iterativeDefn
+// → recursiveDefn → compiledDefn → defn. Verifies an op carrying ONLY a
+// FastDefn executes correctly via apply-op.
+func TestPhase71DefnFallbackChain(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	// Synthetic UnaryOp with only fastDefn set, no plain defn.
+	op := unit.New("FastOnlyDouble")
+	op.Set("isA", []string{"UnaryOp", "Op", "MathOp", "Anything"})
+	op.SetWorth(500)
+	op.Set("domain", []string{"Number"})
+	op.Set("range", []string{"Number"})
+	op.Set("arity", 1)
+	op.Set("fastDefn", `2 *`)
+	eng.Store.Put(op)
+
+	v, err := eng.VM.Execute(`7 "FastOnlyDouble" apply-op`)
+	if err != nil {
+		t.Fatalf("apply-op exec: %v", err)
+	}
+	if v.AsInt() != 14 {
+		t.Errorf("fastDefn fallback: got %d, want 14", v.AsInt())
+	}
+
+	// Priority: if both fastAlg and fastDefn are set, fastAlg wins.
+	op2 := unit.New("PriorityProbe")
+	op2.Set("isA", []string{"UnaryOp", "Op", "MathOp", "Anything"})
+	op2.SetWorth(500)
+	op2.Set("domain", []string{"Number"})
+	op2.Set("range", []string{"Number"})
+	op2.Set("arity", 1)
+	op2.Set("fastAlg", `3 *`)
+	op2.Set("fastDefn", `100 +`)
+	op2.Set("defn", `0 +`)
+	eng.Store.Put(op2)
+
+	v2, err := eng.VM.Execute(`5 "PriorityProbe" apply-op`)
+	if err != nil {
+		t.Fatalf("apply-op exec priority: %v", err)
+	}
+	if v2.AsInt() != 15 {
+		t.Errorf("priority chain: fastAlg should win; got %d, want 15", v2.AsInt())
+	}
+
+	// Defn slot has NecDefn, SufDefn listed as specializations (EURISKO parity).
+	defnSlot := eng.Store.Get("Defn")
+	if defnSlot == nil {
+		t.Fatal("Defn slot unit missing")
+	}
+	specs := defnSlot.GetStrings("specializations")
+	foundNec, foundSuf := false, false
+	for _, s := range specs {
+		if s == "NecDefn" {
+			foundNec = true
+		}
+		if s == "SufDefn" {
+			foundSuf = true
+		}
+	}
+	if !foundNec || !foundSuf {
+		t.Errorf("Defn.specializations = %v, want to contain NecDefn and SufDefn", specs)
+	}
+}

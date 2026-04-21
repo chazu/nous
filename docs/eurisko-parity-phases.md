@@ -277,8 +277,8 @@ Both slots defined with inverse pair wiring. Verified by test.
 
 ### Issues
 
-**7.1: Multiple definition types**
-FastDefn, FastAlg, CompiledDefn, UnitizedDefn, IterativeDefn, RecursiveDefn. Allow heuristics to switch between representations and compile slow definitions into fast ones.
+**7.1: Multiple definition types** -- COMPLETE (2026-04-21)
+Slot definitions for FastDefn/FastAlg/CompiledDefn/UnitizedDefn/IterativeDefn/RecursiveDefn/NecDefn/SufDefn + Alg/FastAlg already existed in `domains/common/slots.cue` with `superSlots: ["Defn"]`/`["Alg"]` wiring. Phase 7.1 added runtime fallback: `apply-op` and `apply-op-args` now resolve a unit's defn via the priority chain `fastAlg → alg → fastDefn → unitizedDefn → iterativeDefn → recursiveDefn → compiledDefn → defn` (first non-empty wins). Existing ops that carry only `defn` are unaffected; new or mutated ops may now declare specialized flavors and have them preferred without runtime changes. Also added `specializations: ["NecDefn", "SufDefn"]` to the Defn slot unit for EURISKO parity. Deferred: heuristics that compile/translate between defn flavors (e.g., a "compile this Defn into a FastDefn" meta-heuristic) — needs a separate planning pass once the first slow/fast discrepancy surfaces organically.
 
 **7.2: Generator slot** -- COMPLETE
 
