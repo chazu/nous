@@ -4399,6 +4399,80 @@ func TestPhase56DPrimeInvertOp(t *testing.T) {
 	}
 }
 
+// TestPhase55ListBagOpsComplete — Phase 5.5 (deferred tail): the 14 concrete
+// List/Bag ops load with correct hierarchy, and the core defns execute via
+// apply-op producing the expected results.
+func TestPhase55ListBagOpsComplete(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	// All 14 ops present.
+	listOps := []string{"ListInsert", "ListDelete", "ListDelete1", "ListUnion", "ListIntersect", "ListDifference", "ListEqual"}
+	bagOps := []string{"BagInsert", "BagDelete", "BagDelete1", "BagUnion", "BagIntersect", "BagDifference", "BagEqual"}
+	for _, n := range listOps {
+		if !eng.Store.Has(n) {
+			t.Errorf("%s not loaded", n)
+		}
+		if !eng.Store.IsA(n, "ListOp") {
+			t.Errorf("%s should isA ListOp", n)
+		}
+		if !eng.Store.IsA(n, "StrucOp") {
+			t.Errorf("%s should isA StrucOp via generalizations", n)
+		}
+	}
+	for _, n := range bagOps {
+		if !eng.Store.Has(n) {
+			t.Errorf("%s not loaded", n)
+		}
+		if !eng.Store.IsA(n, "BagOp") {
+			t.Errorf("%s should isA BagOp", n)
+		}
+		if !eng.Store.IsA(n, "StrucOp") {
+			t.Errorf("%s should isA StrucOp via generalizations", n)
+		}
+	}
+	// Equal ops are preds too.
+	if !eng.Store.IsA("ListEqual", "Pred") {
+		t.Error("ListEqual should isA Pred")
+	}
+	if !eng.Store.IsA("BagEqual", "Pred") {
+		t.Error("BagEqual should isA Pred")
+	}
+
+	// apply-op smoke tests on core subset. Result lists are compared via list-equal?.
+	// list-of pattern: push elements then `<n> list-of` wraps into a list Value.
+	progs := []struct {
+		name string
+		prog string
+	}{
+		// ListUnion: [1 2 3] ++ [3 4] = [1 2 3 3 4]
+		{"ListUnion", `1 2 3 3 list-of  3 4 2 list-of  "ListUnion" apply-op  1 2 3 3 4 5 list-of  list-equal?`},
+		// ListEqual: [1 2 3] = [1 2 3] → true
+		{"ListEqual-true", `1 2 3 3 list-of  1 2 3 3 list-of  "ListEqual" apply-op`},
+		// ListEqual: [1 2] = [2 1] → false (position-wise)
+		{"ListEqual-false", `1 2 2 list-of  2 1 2 list-of  "ListEqual" apply-op  not`},
+		// BagUnion: [1 2 2] ++ [2 3] = [1 2 2 2 3]
+		{"BagUnion", `1 2 2 3 list-of  2 3 2 list-of  "BagUnion" apply-op  1 2 2 2 3 5 list-of  list-equal?`},
+		// BagEqual: [1 2 2] ≡ [2 1 2] multiset → true
+		{"BagEqual-true", `1 2 2 3 list-of  2 1 2 3 list-of  "BagEqual" apply-op`},
+		// BagEqual: [1 2] ≠ [1 1 2] multiset → false
+		{"BagEqual-false", `1 2 2 list-of  1 1 2 3 list-of  "BagEqual" apply-op  not`},
+		// BagIntersect: [1 2 2 3] ∩ [2 2 4] = [2 2]
+		{"BagIntersect", `1 2 2 3 4 list-of  2 2 4 3 list-of  "BagIntersect" apply-op  2 2 2 list-of  list-equal?`},
+		// BagDifference: [1 2 2 3] - [2 3] = [1 2]
+		{"BagDifference", `1 2 2 3 4 list-of  2 3 2 list-of  "BagDifference" apply-op  1 2 2 list-of  list-equal?`},
+	}
+	for _, c := range progs {
+		v, err := eng.VM.Execute(c.prog)
+		if err != nil {
+			t.Errorf("%s: Execute error: %v", c.name, err)
+			continue
+		}
+		if !v.Truthy() {
+			t.Errorf("%s: expected truthy, got %v", c.name, v)
+		}
+	}
+}
+
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

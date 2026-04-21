@@ -71,6 +71,17 @@ var builtins = map[string]builtinFn{
 	"list-contains": bListContains,
 	"to-string-list": bToStringList,
 
+	// List/Bag ops (Phase 5.5 parity)
+	"list-concat":        bListConcat,
+	"list-equal?":        bListEqual,
+	"list-remove-all":    bListRemoveAll,
+	"list-remove-one":    bListRemoveOne,
+	"list-intersect-ord": bListIntersectOrd,
+	"list-diff-ord":      bListDiffOrd,
+	"bag-equal?":         bBagEqual,
+	"bag-intersect":      bBagIntersect,
+	"bag-diff":           bBagDiff,
+
 	// Output
 	"print": bPrint,
 	".s":    bDotS, // debug: print stack
@@ -469,6 +480,184 @@ func bListContains(vm *VM) error {
 		}
 	}
 	vm.push(BoolVal(false))
+	return nil
+}
+
+// list-concat: ( list1 list2 -- list )
+// Append list2 after list1 as-is, preserving order and duplicates.
+func bListConcat(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	out := make([]Value, 0, len(a)+len(b))
+	out = append(out, a...)
+	out = append(out, b...)
+	vm.push(ListVal(out))
+	return nil
+}
+
+// list-equal?: ( list1 list2 -- bool )
+// Position-wise equality using Value.Equal on each element.
+func bListEqual(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	if len(a) != len(b) {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	for i := range a {
+		if !a[i].Equal(b[i]) {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+	vm.push(BoolVal(true))
+	return nil
+}
+
+// list-remove-all: ( list elem -- list )
+// Return list with every instance of elem removed.
+func bListRemoveAll(vm *VM) error {
+	elem := vm.pop()
+	list := vm.pop().AsList()
+	out := make([]Value, 0, len(list))
+	for _, v := range list {
+		if !v.Equal(elem) {
+			out = append(out, v)
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+// list-remove-one: ( list elem -- list )
+// Return list with first occurrence of elem removed.
+func bListRemoveOne(vm *VM) error {
+	elem := vm.pop()
+	list := vm.pop().AsList()
+	out := make([]Value, 0, len(list))
+	removed := false
+	for _, v := range list {
+		if !removed && v.Equal(elem) {
+			removed = true
+			continue
+		}
+		out = append(out, v)
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+// list-intersect-ord: ( list1 list2 -- list )
+// Elements of list1 that are present in list2, preserving list1's order and duplicates.
+func bListIntersectOrd(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	out := make([]Value, 0, len(a))
+	for _, x := range a {
+		for _, y := range b {
+			if x.Equal(y) {
+				out = append(out, x)
+				break
+			}
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+// list-diff-ord: ( list1 list2 -- list )
+// Elements of list1 NOT in list2, preserving list1's order and duplicates.
+func bListDiffOrd(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	out := make([]Value, 0, len(a))
+	for _, x := range a {
+		found := false
+		for _, y := range b {
+			if x.Equal(y) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, x)
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+// bagCounts builds a count map keyed by v.AsString() — sufficient for seed
+// data where elements are primitives rendering to unique strings.
+func bagCounts(list []Value) map[string]int {
+	m := make(map[string]int, len(list))
+	for _, v := range list {
+		m[v.AsString()]++
+	}
+	return m
+}
+
+// bag-equal?: ( bag1 bag2 -- bool )
+// Multiset equality via count map on v.AsString().
+func bBagEqual(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	if len(a) != len(b) {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	ca := bagCounts(a)
+	cb := bagCounts(b)
+	if len(ca) != len(cb) {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	for k, n := range ca {
+		if cb[k] != n {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+	vm.push(BoolVal(true))
+	return nil
+}
+
+// bag-intersect: ( bag1 bag2 -- bag )
+// For each element in bag1's order, keep it if remaining count in bag2 > 0.
+// Result count for each key = min(countB1, countB2).
+func bBagIntersect(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	cb := bagCounts(b)
+	out := make([]Value, 0, len(a))
+	for _, v := range a {
+		k := v.AsString()
+		if cb[k] > 0 {
+			out = append(out, v)
+			cb[k]--
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+// bag-diff: ( bag1 bag2 -- bag )
+// For each element in bag1's order, emit unless bag2 still has a copy to
+// "cancel" it. Result count for each key = max(0, countB1 - countB2).
+func bBagDiff(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	cb := bagCounts(b)
+	out := make([]Value, 0, len(a))
+	for _, v := range a {
+		k := v.AsString()
+		if cb[k] > 0 {
+			cb[k]--
+			continue
+		}
+		out = append(out, v)
+	}
+	vm.push(ListVal(out))
 	return nil
 }
 
