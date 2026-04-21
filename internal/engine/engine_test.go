@@ -4076,3 +4076,70 @@ func TestSemanticDupStillKillsCommutativeTranspose(t *testing.T) {
 		t.Fatalf("Transpose-Add-test should have been killed by H-SemanticDup (behavioral + multiset-domain-equal match)")
 	}
 }
+
+// TestLogicalOpUnitsPresent — Phase 5.8: all logical-op units load from CUE
+// with expected isA + category membership.
+func TestLogicalOpUnitsPresent(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	wantUnits := []string{"LogicOp", "True", "False", "And", "Or", "Not", "Implies", "TheFirstOf", "TheSecondOf"}
+	for _, name := range wantUnits {
+		if !eng.Store.Has(name) {
+			t.Errorf("unit %q not loaded", name)
+		}
+	}
+
+	// Category membership: every logical op isA LogicOp.
+	for _, op := range []string{"And", "Or", "Not", "Implies", "TheFirstOf", "TheSecondOf"} {
+		if !eng.Store.IsA(op, "LogicOp") {
+			t.Errorf("%s should isA LogicOp", op)
+		}
+	}
+	// And/Or/Not/Implies are Ops.
+	for _, op := range []string{"And", "Or", "Not", "Implies", "TheFirstOf", "TheSecondOf"} {
+		if !eng.Store.IsA(op, "Op") {
+			t.Errorf("%s should isA Op", op)
+		}
+	}
+	// True/False are TruthValue instances.
+	for _, tv := range []string{"True", "False"} {
+		if !eng.Store.IsA(tv, "TruthValue") {
+			t.Errorf("%s should isA TruthValue", tv)
+		}
+	}
+}
+
+// TestLogicOpDefnsExecute — smoke-test each logical op's defn runs and
+// produces the correct boolean result on the stack.
+func TestLogicOpDefnsExecute(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	cases := []struct {
+		name   string
+		script string
+		want   bool
+	}{
+		{"Not true", `true not`, false},
+		{"Not false", `false not`, true},
+		{"And tt", `true true and`, true},
+		{"And tf", `true false and`, false},
+		{"Or ff", `false false or`, false},
+		{"Or tf", `true false or`, true},
+		{"Implies tt", `true true swap not swap or`, true},
+		{"Implies tf", `true false swap not swap or`, false},
+		{"Implies ff", `false false swap not swap or`, true},
+		{"TheFirstOf", `true false swap drop`, false},
+		{"TheSecondOf", `true false drop`, true},
+	}
+
+	for _, c := range cases {
+		v, err := eng.VM.Execute(c.script)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if v.AsBool() != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, v.AsBool(), c.want)
+		}
+	}
+}
