@@ -767,6 +767,12 @@ units: [
 			"""#
 	},
 	{
+		name:    "MetaOpHeuristic"
+		worth:   400
+		isA: ["Anything"]
+		english: "Heuristic category: produces new Op units via meta-operation (Transpose/Compose/Restrict/...). Consumed by H-SemanticDup to gate behavioral-duplicate checks."
+	},
+	{
 		name:    "H-ExercisePreds"
 		worth:   400
 		isA: ["Heuristic", "Anything"]
