@@ -46,7 +46,7 @@ Stack: `( opName -- newName | "" )`.
 5. Construct `newDomain = f.domain` with `[i] := s`.
 6. Gensym `newName = "Restrict-<opName>-<N>"`.
 7. Create unit with slots:
-   - `isA`: copy of `f.isA` ∪ `{"MetaOp"}` (deduplicated)
+   - `isA`: copy of `f.isA` (matching Transpose/Compose convention — the gate lives on the *heuristic*, not the output unit, so no extra marker on the Op itself)
    - `domain`: `newDomain`
    - `range`: copy of `f.range`
    - `arity`: `f.arity`
@@ -150,7 +150,7 @@ Separately: task on Transpose-Add accumulates applics, Add is commutative
 
 All tests live in `internal/engine/engine_test.go`.
 
-1. **`TestRestrictOpCreatesNarrowedUnit`** — unit-level on the builtin. Seed Add (Number×Number→Number) + Integer as specialization of Number. Call `"Add" restrict-op`. Assert the pushed name exists, has generalizations `[Add]`, creditor `H-Restrict`, `isA` contains `MetaOp`, domain is either `[Integer, Number]` or `[Number, Integer]`.
+1. **`TestRestrictOpCreatesNarrowedUnit`** — unit-level on the builtin. Seed Add (Number×Number→Number) + Integer as specialization of Number. Call `"Add" restrict-op`. Assert the pushed name exists, has generalizations `[Add]`, creditor `H-Restrict`, domain is either `[Integer, Number]` or `[Number, Integer]`.
 2. **`TestHRestrictFiresOnEligibleOp`** — engine-loop smoke. Seed Add + ≥1 Add applic + Integer specialization. Tick engine. Assert `Restrict-Add-*` unit exists and `Add.restrictRan == true`. Tick again. Assert exactly one Restrict-Add unit (one-shot behavior).
 3. **`TestHRestrictSkipsOpWithoutApplics`** — seed Add with zero applics. Tick. Assert no Restrict-Add unit created.
 4. **`TestHRestrictSkipsOpWithoutSpecializableDomain`** — seed op whose every domain type has no specializations. Tick. Assert no Restrict unit created.
