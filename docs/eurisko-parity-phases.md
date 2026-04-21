@@ -223,9 +223,7 @@ Predicates as first-class units were already usable (MemberOf/SubsetOf/SetEqual 
 - `AlwaysT`, `AlwaysNIL` constant predicates (the key ConstantPred subcategory members)
 - Rarity tracking hook in `apply-op`: any call to a unit whose isA includes "Pred" now increments the Rarity tuple `[freqTrue, numT, numF]` on the predicate unit. Unblocks H24 and the Phase 6.3 population gap.
 
-Deferred: numeric comparison predicates (IEQP, IGEQ, IGREATERP, ILESSP) with Transpose — natural to add alongside 5.6 meta-ops, not needed yet.
-
-**5.11: H25-H28 -- Predicate set analysis** -- PARTIAL (H27/H28 COMPLETE; H25/H26 deferred)
+**5.11: H25-H28 -- Predicate set analysis** -- COMPLETE (H25/H26/H27/H28 all landed; see Phase 5.2 for H25/H26 implementation details)
 
 Unary satisfying/failing set heuristics in `domains/common/heuristics.cue`. When a unit-focus lands on an interesting UnaryPred, H27 creates `SatisfyingSetFor<pred>` and H28 creates `FailingSetFor<pred>` — new categories whose examples are the source domain's elements that respectively satisfy or fail the predicate.
 
@@ -235,10 +233,10 @@ Each new category inherits `isA` from the source category, sets `generalizations
 
 Uses the existing `apply-pred` builtin; no new Go primitive needed. One-shot dedupe via `unit-exists?`.
 
-H25 / H26 (n-ary satisfying/failing) deferred — they need tuple evaluation that waits on Pair/Tuple types (Phase 5.2).
+H25 / H26 (n-ary satisfying/failing) landed in Phase 5.2 — OPair-based Cartesian-product evaluation with `pairCap` limit, seeded whyInt tasks on output categories.
 
 **Numeric comparison predicates** -- COMPLETE (2026-04-19)
-IEQP, IGEQ, IGREATERP, ILESSP landed in `domains/math/predicates.cue` as BinaryPred units with [Number, Number]→TruthValue. Phase 5.10 Rarity hook populates rarity on invocation. Transpose variants (EURISKO pairs IGEQ↔IGREATERP and ILESSP) deferred to Phase 5.6A.
+IEQP, IGEQ, IGREATERP, ILESSP landed in `domains/math/predicates.cue` as BinaryPred units with [Number, Number]→TruthValue. Phase 5.10 Rarity hook populates rarity on invocation. Transpose variants are created reactively by H-Transpose at runtime (Phase 5.6 A).
 
 **5.12: H29 -- Multiplicity mutation** -- COMPLETE (2026-04-20)
 
