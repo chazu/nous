@@ -3304,7 +3304,10 @@ func TestOSetUnionPreservesOrderViaEngine(t *testing.T) {
 	// in the first pass rather than waiting for unit-focus (which OSetUnion
 	// at worth=500 would reach only after all higher-worth units are exhausted).
 	eng.SeedInitialAgenda()
-	eng.MaxCycles = 80
+	// Budget raised from 80 → 250 after Phase 5.5 added 14 List/Bag ops that
+	// share the priority-700 examples-task slice with OSetUnion; 80 cycles
+	// could no longer reach OSetUnion reliably under the expanded agenda.
+	eng.MaxCycles = 250
 	eng.Verbosity = 0
 
 	if err := eng.Run(context.Background()); err != nil {
@@ -3512,7 +3515,8 @@ func TestProjectionUnitsLoad(t *testing.T) {
 func TestFirstEleAppliedToOSetOfPrimesDesc(t *testing.T) {
 	eng, _ := testEngine(t)
 	eng.SeedInitialAgenda()
-	eng.MaxCycles = 100
+	// Budget raised from 100 → 300 after Phase 5.5 expanded the Op pool.
+	eng.MaxCycles = 300
 	eng.Verbosity = 0
 
 	if err := eng.Run(context.Background()); err != nil {
