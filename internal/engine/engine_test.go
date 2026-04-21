@@ -4143,3 +4143,50 @@ func TestLogicOpDefnsExecute(t *testing.T) {
 		}
 	}
 }
+
+// TestPhase55PerTypeOpCategories — Phase 5.5: per-type Op categories load and
+// concrete ops resolve into them via store.IsA's isA+generalizations walk.
+func TestPhase55PerTypeOpCategories(t *testing.T) {
+	eng, _ := testEngine(t)
+
+	// Category units present.
+	for _, cat := range []string{"StrucOp", "SetOp", "BagOp", "ListOp", "OSetOp", "MultEleStrucOp", "OrdStrucOp", "UnitOp"} {
+		if !eng.Store.Has(cat) {
+			t.Errorf("category %q not loaded", cat)
+		}
+	}
+
+	// Concrete ops resolve to their categories and to StrucOp via generalizations chain.
+	cases := []struct {
+		op, cat string
+	}{
+		{"SetUnion", "SetOp"},
+		{"SetUnion", "StrucOp"},
+		{"SetIntersect", "SetOp"},
+		{"SetDifference", "StrucOp"},
+		{"OSetUnion", "OSetOp"},
+		{"OSetUnion", "OrdStrucOp"},
+		{"OSetUnion", "StrucOp"},
+		{"FirstEle", "OrdStrucOp"},
+		{"FirstEle", "StrucOp"},
+		{"Proj1", "OrdStrucOp"},
+		{"AllButLast", "OrdStrucOp"},
+	}
+	for _, c := range cases {
+		if !eng.Store.IsA(c.op, c.cat) {
+			t.Errorf("%s should isA %s", c.op, c.cat)
+		}
+	}
+
+	// ListOp/BagOp should resolve to MultEleStrucOp even without concrete ops
+	// tagged — category-to-category lineage through generalizations.
+	if !eng.Store.IsA("ListOp", "MultEleStrucOp") {
+		t.Error("ListOp should isA MultEleStrucOp via generalizations")
+	}
+	if !eng.Store.IsA("ListOp", "OrdStrucOp") {
+		t.Error("ListOp should isA OrdStrucOp via generalizations")
+	}
+	if !eng.Store.IsA("BagOp", "MultEleStrucOp") {
+		t.Error("BagOp should isA MultEleStrucOp via generalizations")
+	}
+}

@@ -2,7 +2,7 @@ units: [
 	{
 		name:    "SetUnion"
 		worth:   600
-		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		isA: ["BinaryOp", "Op", "SetOp", "MathOp", "Anything"]
 		domain: ["Set", "Set"]
 		range: ["Set"]
 		english: "Combine two sets, keeping all elements"
@@ -17,7 +17,7 @@ units: [
 	{
 		name:    "SetIntersect"
 		worth:   600
-		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		isA: ["BinaryOp", "Op", "SetOp", "MathOp", "Anything"]
 		domain: ["Set", "Set"]
 		range: ["Set"]
 		english: "Elements common to both sets"
@@ -32,7 +32,7 @@ units: [
 	{
 		name:    "SetDifference"
 		worth:   500
-		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		isA: ["BinaryOp", "Op", "SetOp", "MathOp", "Anything"]
 		domain: ["Set", "Set"]
 		range: ["Set"]
 		english: "Elements in first set but not second"
@@ -153,7 +153,7 @@ units: [
 	{
 		name:    "OSetUnion"
 		worth:   500
-		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		isA: ["BinaryOp", "Op", "OSetOp", "MathOp", "Anything"]
 		domain: ["OSet", "OSet"]
 		range: ["OSet"]
 		english: "Combine two ordered sets, preserving first's order then appending second's novel elements"
@@ -168,7 +168,7 @@ units: [
 	{
 		name:    "OSetIntersect"
 		worth:   500
-		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		isA: ["BinaryOp", "Op", "OSetOp", "MathOp", "Anything"]
 		domain: ["OSet", "OSet"]
 		range: ["OSet"]
 		english: "Elements common to both ordered sets, in first's order"
@@ -183,7 +183,7 @@ units: [
 	{
 		name:    "OSetInsert"
 		worth:   500
-		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		isA: ["BinaryOp", "Op", "OSetOp", "MathOp", "Anything"]
 		domain: ["OSet", "Anything"]
 		range: ["OSet"]
 		english: "Append element to ordered set if not already present"
@@ -198,7 +198,7 @@ units: [
 	{
 		name:    "OSetDelete"
 		worth:   500
-		isA: ["BinaryOp", "Op", "MathOp", "Anything"]
+		isA: ["BinaryOp", "Op", "OSetOp", "MathOp", "Anything"]
 		domain: ["OSet", "Anything"]
 		range: ["OSet"]
 		english: "Remove element from ordered set, preserving remaining order"
@@ -213,7 +213,7 @@ units: [
 	{
 		name:    "OSetEqual"
 		worth:   500
-		isA: ["BinaryPred", "Pred", "Op", "MathOp", "Anything"]
+		isA: ["BinaryPred", "Pred", "Op", "OSetOp", "MathOp", "Anything"]
 		domain: ["OSet", "OSet"]
 		range: ["TruthValue"]
 		english: "True iff two ordered sets contain the same elements in the same order"
@@ -228,7 +228,7 @@ units: [
 	{
 		name:    "Proj1"
 		worth:   500
-		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		isA: ["UnaryOp", "Op", "OrdStrucOp", "MathOp", "Anything"]
 		domain: ["OPair"]
 		range: ["Anything"]
 		english: "First projection of an ordered pair"
@@ -243,7 +243,7 @@ units: [
 	{
 		name:    "Proj2"
 		worth:   500
-		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		isA: ["UnaryOp", "Op", "OrdStrucOp", "MathOp", "Anything"]
 		domain: ["OPair"]
 		range: ["Anything"]
 		english: "Second projection of an ordered pair"
@@ -258,7 +258,7 @@ units: [
 	{
 		name:    "FirstEle"
 		worth:   500
-		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		isA: ["UnaryOp", "Op", "OrdStrucOp", "MathOp", "Anything"]
 		domain: ["OrdStruc"]
 		range: ["Anything"]
 		english: "First element of an ordered structure"
@@ -273,7 +273,7 @@ units: [
 	{
 		name:    "LastEle"
 		worth:   500
-		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		isA: ["UnaryOp", "Op", "OrdStrucOp", "MathOp", "Anything"]
 		domain: ["OrdStruc"]
 		range: ["Anything"]
 		english: "Last element of an ordered structure"
@@ -288,7 +288,7 @@ units: [
 	{
 		name:    "AllButFirst"
 		worth:   500
-		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		isA: ["UnaryOp", "Op", "OrdStrucOp", "MathOp", "Anything"]
 		domain: ["OrdStruc"]
 		range: ["OrdStruc"]
 		english: "Ordered structure with its first element removed"
@@ -303,7 +303,7 @@ units: [
 	{
 		name:    "AllButLast"
 		worth:   500
-		isA: ["UnaryOp", "Op", "MathOp", "Anything"]
+		isA: ["UnaryOp", "Op", "OrdStrucOp", "MathOp", "Anything"]
 		domain: ["OrdStruc"]
 		range: ["OrdStruc"]
 		english: "Ordered structure with its last element removed"
