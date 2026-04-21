@@ -324,9 +324,9 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 | COMPLETE |
-| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.3 partial, 5.4 partial, 5.6 A/B/C.1/C.2/D, 5.8, 5.9, 5.10, 5.11 numeric-preds + H27/H28, 5.12) |
+| 5 | Type hierarchy + operations | 12 | COMPLETE (5.1, 5.2, 5.3 partial, 5.4 partial, 5.5, 5.6 A/B/C.1/C.2/D/D', 5.7, 5.8, 5.9, 5.10, 5.11 numeric-preds + H27/H28, 5.12) |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
-| 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
+| 7 | Definition representations | 5 | COMPLETE (7.1, 7.2, 7.3, 7.4, 7.5) |
 
 **Dependencies:** Phases 4 and 5 can be parallelized. Phase 7 can start after Phase 1. Phase 6 requires Phases 4 and 5.
 
