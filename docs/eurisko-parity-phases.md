@@ -239,8 +239,11 @@ H25 / H26 (n-ary satisfying/failing) deferred — they need tuple evaluation tha
 **Numeric comparison predicates** -- COMPLETE (2026-04-19)
 IEQP, IGEQ, IGREATERP, ILESSP landed in `domains/math/predicates.cue` as BinaryPred units with [Number, Number]→TruthValue. Phase 5.10 Rarity hook populates rarity on invocation. Transpose variants (EURISKO pairs IGEQ↔IGREATERP and ILESSP) deferred to Phase 5.6A.
 
-**5.12: H29 -- Multiplicity mutation**
-Once MultEleStruc exists, implement element multiplicity mutation for generating new examples.
+**5.12: H29 -- Multiplicity mutation** -- COMPLETE (2026-04-20)
+
+H29 landed in `domains/common/heuristics.cue`. Fires `ifWorkingOnTask` when `CurUnit isA MultEleStruc` and `CurSlot == examples`; iterates existing example children and creates up to `h29Cap` (default 5) new children with element multiplicities mutated via new `mutate-multiplicities` DSL builtin (1/3 drop, 1/3 keep, 1/3 duplicate per element). One-shot per source via `h29Ran` flag. Seed family `BagOfTallies` + three children in `domains/math/sets.cue` gives H29 immediate material. First live exercise of the Phase 5.4 instance-level classification dispatch.
+
+Dispatch chain: `H29-Seeder` (CUE) fires `ifFinishedWorkingOnTask` on MultEleStruc units with ≥1 example, scheduling a second examples task so H29 fires via the main loop; guarded by `h29Scheduled`. Because H29-Seeder itself needs a MultEleStruc task already on the agenda to fire, `SeedInitialAgenda` was extended with a Phase 5.12 bootstrap (16 lines Go) that queues a priority-700 examples task for any MultEleStruc unit with pre-populated examples at startup — analogous to the existing H24 whyInt bootstrap. Also fixed asymmetry in `valueToAny`: all-int DSL lists now round-trip as `[]int` to match the all-string case (previously fell through to raw `[]Value`).
 
 ---
 
@@ -320,7 +323,7 @@ Tests: `TestMakeProtoConjec` (builtin round-trip, inverse, dedupe), `TestHConjec
 | 2 | Generalization/specialization | 8 | COMPLETE (+ stabilization fixes) |
 | 3 | Rich HindSight | 6 | COMPLETE |
 | 4 | Remaining heuristics | 10 | COMPLETE |
-| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.3 partial, 5.4 partial, 5.6 A/B/C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28) |
+| 5 | Type hierarchy + operations | 12 | PARTIAL (5.1, 5.2, 5.3 partial, 5.4 partial, 5.6 A/B/C.1/C.2, 5.9, 5.10, 5.11 numeric-preds + H27/H28, 5.12) |
 | 6 | Interestingness + rarity | 5 | COMPLETE (scaffolding; population in 4b/5.10) |
 | 7 | Definition representations | 5 | PARTIAL (7.2, 7.3, 7.4, 7.5 complete; 7.1 not started) |
 
