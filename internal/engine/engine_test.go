@@ -3793,3 +3793,15 @@ func TestH29FiresViaEngineLoop(t *testing.T) {
 		t.Errorf("engine loop did not grow BagOfTallies.examples: before=%d after=%d", beforeCount, afterCount)
 	}
 }
+
+// TestMetaOpHeuristicCategoryWalk verifies that H-Transpose and H-Compose
+// (and later H-Restrict) have MetaOpHeuristic in their isA chain, so the
+// H-SemanticDup gate can walk creditors.isA MetaOpHeuristic.
+func TestMetaOpHeuristicCategoryWalk(t *testing.T) {
+	eng, _ := testEngine(t)
+	for _, h := range []string{"H-Transpose", "H-Compose"} {
+		if !eng.Store.IsA(h, "MetaOpHeuristic") {
+			t.Errorf("%s should isA MetaOpHeuristic", h)
+		}
+	}
+}

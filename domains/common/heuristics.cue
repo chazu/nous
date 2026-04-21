@@ -1079,7 +1079,7 @@ units: [
 	{
 		name:    "H-Transpose"
 		worth:   500
-		isA: ["Heuristic", "Anything"]
+		isA: ["Heuristic", "MetaOpHeuristic", "Anything"]
 		english: "Create transposed version of binary ops"
 		overallRecord: {successes: 0, failures: 0}
 		ifPotentiallyRelevant: #"""
@@ -1103,7 +1103,7 @@ units: [
 	{
 		name:    "H-Compose"
 		worth:   500
-		isA: ["Heuristic", "Anything"]
+		isA: ["Heuristic", "MetaOpHeuristic", "Anything"]
 		english: "Compose pairs of ops with matching range/domain"
 		overallRecord: {successes: 0, failures: 0}
 		ifPotentiallyRelevant: #"""
