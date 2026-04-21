@@ -100,7 +100,7 @@ units: [
 		english: "Polymorphic projection returning the first argument"
 		generalizations: ["Or"]
 		defn: #"""
-			swap drop
+			drop
 			"""#
 	},
 	{
@@ -113,7 +113,7 @@ units: [
 		english: "Polymorphic projection returning the second argument"
 		generalizations: ["Or"]
 		defn: #"""
-			drop
+			swap drop
 			"""#
 	},
 ]

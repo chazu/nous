@@ -4128,8 +4128,8 @@ func TestLogicOpDefnsExecute(t *testing.T) {
 		{"Implies tt", `true true swap not swap or`, true},
 		{"Implies tf", `true false swap not swap or`, false},
 		{"Implies ff", `false false swap not swap or`, true},
-		{"TheFirstOf", `true false swap drop`, false},
-		{"TheSecondOf", `true false drop`, true},
+		{"TheFirstOf", `true false drop`, true},
+		{"TheSecondOf", `true false swap drop`, false},
 	}
 
 	for _, c := range cases {
