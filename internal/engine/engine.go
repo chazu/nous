@@ -325,6 +325,23 @@ func (e *Engine) Cycle() int {
 
 // Stats returns a summary of the current state.
 func (e *Engine) Stats() string {
-	return fmt.Sprintf("units=%d agenda=%d tasks=%d cycles=%d",
-		e.Store.Count(), e.Agenda.Len(), e.TaskNum, e.cycle)
+	// Count categories
+	var ops, heuristics, conjectures, havoids int
+	for _, name := range e.Store.All() {
+		if e.Store.IsA(name, "Op") {
+			ops++
+		}
+		if e.Store.IsA(name, "Heuristic") {
+			heuristics++
+		}
+		if e.Store.IsA(name, "Conjecture") || e.Store.IsA(name, "ProtoConjec") {
+			conjectures++
+		}
+		if e.Store.IsA(name, "HAvoidRule") {
+			havoids++
+		}
+	}
+	return fmt.Sprintf("units=%d agenda=%d tasks=%d cycles=%d killed=%d ops=%d heuristics=%d conjectures=%d havoids=%d",
+		e.Store.Count(), e.Agenda.Len(), e.TaskNum, e.cycle,
+		len(e.Graveyard), ops, heuristics, conjectures, havoids)
 }
