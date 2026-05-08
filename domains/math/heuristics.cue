@@ -208,6 +208,12 @@ units: [
 			"ArgU" @ "OPair-False" starts-with? not
 			"ArgU" @ "OPair-True" starts-with? not
 			and and
+			"ArgU" @ "OPair-Bag-ex" starts-with? not
+			"ArgU" @ "OPair-BagOfTallies" starts-with? not
+			and and
+			"ArgU" @ "BestSubset-on-OPair" starts-with? not
+			"ArgU" @ "GoodSubset-on-OPair" starts-with? not
+			and and
 			"""#
 		thenCompute: #"""
 			"Set" examples
@@ -220,6 +226,9 @@ units: [
 				# (type-error results like OPair-False-True, Bag-ex-tally-*)
 				"other" @ "OPair-False" starts-with? not
 				"other" @ "OPair-True" starts-with? not
+				and and
+				"other" @ "OPair-Bag-ex" starts-with? not
+				"other" @ "OPair-BagOfTallies" starts-with? not
 				and and
 				# Both sides must have non-empty set data
 				"ArgU" @ "data" get-slot is-list?
