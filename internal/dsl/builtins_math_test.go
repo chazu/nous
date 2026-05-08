@@ -433,3 +433,66 @@ func TestMutateMultiplicities(t *testing.T) {
 		}
 	})
 }
+
+func TestOpDepth(t *testing.T) {
+	tests := []struct {
+		name  string
+		depth int
+	}{
+		{"SetUnion", 0},
+		{"Compose-SetUnion-Not", 1},
+		{"Transpose-SetUnion", 1},
+		{"Restrict-SetUnion-1", 1},
+		{"Invert-SetUnion-1", 1},
+		{"SetUnion-gen-Set", 1},
+		{"Compose-Transpose-SetUnion-Not", 2},
+		{"Restrict-Compose-Compose-OSetEqual-Not-Not-on-OSetOfNumbers-1", 3},
+		{"Compose-Restrict-Compose-Compose-OSetEqual-Not-Not-1-Not", 4},
+		{"BagUnion-on-Pair-gen-BagUnion-on-Pair-gen-BagUnion-on-Pair-gen-BagUnion-on-Pair", 3},
+	}
+	for _, tt := range tests {
+		got := opDepth(tt.name)
+		if got != tt.depth {
+			t.Errorf("opDepth(%q) = %d, want %d", tt.name, got, tt.depth)
+		}
+	}
+}
+
+func TestDepthCapBlocksDeepCompose(t *testing.T) {
+	store := unit.NewStore()
+	ag := agenda.New()
+	vm := NewVM(store, ag, nil)
+
+	// Create two ops that are each at depth 4
+	mkOp := func(name string, depth int) {
+		u := unit.New(name)
+		u.Set("isA", []string{"UnaryOp", "Op", "MathOp", "Anything"})
+		u.Set("defn", "drop 42")
+		u.Set("domain", []string{"Number"})
+		u.Set("range", []string{"Number"})
+		u.SetWorth(500)
+		store.Put(u)
+	}
+
+	mkOp("Compose-Compose-Compose-A-B-C-D", 0) // depth 3
+	mkOp("E", 0) // depth 0
+
+	// Composing depth-3 + depth-0 = 4, +1 for new Compose = 5, should succeed
+	vm.push(StringVal("Compose-Compose-Compose-A-B-C-D"))
+	vm.push(StringVal("E"))
+	bComposeOps(vm)
+	result := vm.pop()
+	if result.IsNil() {
+		t.Error("depth 3+0+1=4 should be allowed (<=5)")
+	}
+
+	// Composing depth-3 + depth-3 = 6, +1 = 7, should be rejected
+	mkOp("Compose-Compose-Compose-X-Y-Z-W", 0)
+	vm.push(StringVal("Compose-Compose-Compose-A-B-C-D"))
+	vm.push(StringVal("Compose-Compose-Compose-X-Y-Z-W"))
+	bComposeOps(vm)
+	result = vm.pop()
+	if !result.IsNil() {
+		t.Error("depth 3+3+1=7 should be rejected (> MaxMetaOpDepth)")
+	}
+}

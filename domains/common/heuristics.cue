@@ -204,6 +204,8 @@ units: [
 			if
 			"CurUnit" @ "-gen-" concat "to" @ concat "genName" !
 			"genName" @ unit-exists? not
+			"CurUnit" @ op-depth max-meta-depth <
+			and
 			if
 				"genName" @ "CurUnit" @ "isA" get-slot first create-unit "genUnit" !
 
@@ -1056,6 +1058,8 @@ units: [
 			"H-Generate" "generateCount" get-slot "cnt" !
 			"ArgU" @ "cnt" @ run-generator "vals" !
 			"vals" @ list-length 0 >
+			"ArgU" @ op-depth max-meta-depth <
+			and
 			if
 				0 "i" !
 				"vals" @

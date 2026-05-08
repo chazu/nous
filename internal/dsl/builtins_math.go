@@ -4,9 +4,28 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/chazu/nous/internal/unit"
 )
+
+// MaxMetaOpDepth caps the nesting depth of meta-operations (Compose, Transpose,
+// Restrict, Invert) and generalization chains (-gen-). Without this cap, the
+// system produces unbounded recursive nesting: Compose-Restrict-Compose-... with
+// names reaching thousands of characters and no mathematical content.
+const MaxMetaOpDepth = 5
+
+// opDepth returns the meta-operation nesting depth of a unit name by counting
+// occurrences of Compose-, Transpose-, Restrict-, Invert-, and -gen- prefixes.
+func opDepth(name string) int {
+	depth := 0
+	depth += strings.Count(name, "Compose-")
+	depth += strings.Count(name, "Transpose-")
+	depth += strings.Count(name, "Restrict-")
+	depth += strings.Count(name, "Invert-")
+	depth += strings.Count(name, "-gen-")
+	return depth
+}
 
 func init() {
 	// Number predicates
@@ -96,6 +115,8 @@ func init() {
 	builtins["restrict-op"] = bRestrictOp
 	builtins["invert-op"] = bInvertOp
 	builtins["applics-redundant?"] = bApplicsRedundant
+	builtins["op-depth"] = bOpDepth         // ( name -- int )
+	builtins["max-meta-depth"] = bMaxMetaDepth // ( -- int )
 }
 
 // run-generator: (unitName count -- list)
@@ -750,6 +771,10 @@ func bTransposeOp(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	if opDepth(opName) >= MaxMetaOpDepth {
+		vm.push(Nil())
+		return nil
+	}
 	if !vm.Store.IsA(opName, "BinaryOp") {
 		vm.push(Nil())
 		return nil
@@ -811,6 +836,11 @@ func bComposeOps(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	// Depth check: combined depth of both operands + 1 for this Compose
+	if opDepth(fName)+opDepth(gName)+1 > MaxMetaOpDepth {
+		vm.push(Nil())
+		return nil
+	}
 	fDefn := f.GetString("defn")
 	gDefn := g.GetString("defn")
 	if fDefn == "" || gDefn == "" {
@@ -864,6 +894,10 @@ func bInvertOp(vm *VM) error {
 	opName := vm.pop().AsString()
 	u := vm.Store.Get(opName)
 	if u == nil {
+		vm.push(StringVal(""))
+		return nil
+	}
+	if opDepth(opName) >= MaxMetaOpDepth {
 		vm.push(StringVal(""))
 		return nil
 	}
@@ -922,6 +956,10 @@ func bRestrictOp(vm *VM) error {
 	opName := vm.pop().AsString()
 	u := vm.Store.Get(opName)
 	if u == nil {
+		vm.push(StringVal(""))
+		return nil
+	}
+	if opDepth(opName) >= MaxMetaOpDepth {
 		vm.push(StringVal(""))
 		return nil
 	}
@@ -1262,5 +1300,20 @@ func bMutateMult(vm *VM) error {
 		}
 	}
 	vm.push(ListVal(out))
+	return nil
+}
+
+// op-depth: ( name -- int )
+// Returns the meta-operation nesting depth of a unit name.
+func bOpDepth(vm *VM) error {
+	name := vm.pop().AsString()
+	vm.push(IntVal(opDepth(name)))
+	return nil
+}
+
+// max-meta-depth: ( -- int )
+// Pushes the MaxMetaOpDepth constant.
+func bMaxMetaDepth(vm *VM) error {
+	vm.push(IntVal(MaxMetaOpDepth))
 	return nil
 }
