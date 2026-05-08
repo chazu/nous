@@ -202,6 +202,12 @@ units: [
 			"ArgU" @ "Set" isa?
 			"ArgU" @ "data" get-slot nil !=
 			and
+			"ArgU" @ "data" get-slot is-list?
+			"ArgU" @ "data" get-slot list-length 1 >=
+			and and
+			"ArgU" @ "OPair-False" starts-with? not
+			"ArgU" @ "OPair-True" starts-with? not
+			and and
 			"""#
 		thenCompute: #"""
 			"Set" examples
@@ -210,6 +216,19 @@ units: [
 				"other" @ "ArgU" @ !=
 				"other" @ "data" get-slot nil !=
 				and
+				# Quality gate: skip comparisons with trivially-named units
+				# (type-error results like OPair-False-True, Bag-ex-tally-*)
+				"other" @ "OPair-False" starts-with? not
+				"other" @ "OPair-True" starts-with? not
+				and and
+				# Both sides must have non-empty set data
+				"ArgU" @ "data" get-slot is-list?
+				"ArgU" @ "data" get-slot list-length 1 >=
+				and
+				"other" @ "data" get-slot is-list?
+				"other" @ "data" get-slot list-length 1 >=
+				and
+				and and
 				if
 					"ArgU" @ "data" get-slot
 					"other" @ "data" get-slot
