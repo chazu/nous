@@ -390,6 +390,10 @@ func bCreateUnit(vm *VM) error {
 func bKillUnit(vm *VM) error {
 	name := vm.pop()
 	nameStr := name.AsString()
+	// Skip if already dead (prevents repeated kill logging and HindSight spam)
+	if !vm.Store.Has(nameStr) {
+		return nil
+	}
 	// Snapshot the unit's slots before deletion for HindSight
 	u := vm.Store.Get(nameStr)
 	if u != nil {

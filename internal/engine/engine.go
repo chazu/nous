@@ -292,7 +292,9 @@ func (e *Engine) SeedInitialAgenda() {
 }
 
 // processDeletedUnits handles credit assignment and HindSight for units
-// killed during the current cycle.
+// killed during the current cycle. Deduplicates to avoid processing the
+// same unit death multiple times (e.g., when multiple heuristics independently
+// kill the same unit in one cycle).
 func (e *Engine) processDeletedUnits() {
 	deleted := e.VM.DeletedUnits
 	if len(deleted) == 0 {
@@ -300,7 +302,12 @@ func (e *Engine) processDeletedUnits() {
 	}
 	e.VM.DeletedUnits = nil
 
+	seen := make(map[string]bool, len(deleted))
 	for _, name := range deleted {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 		e.HandleDeletedUnit(name)
 	}
 }
