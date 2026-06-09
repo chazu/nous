@@ -2,11 +2,9 @@ module github.com/chazu/nous
 
 go 1.25.8
 
-replace github.com/chazu/pudl => ../pudl
-
 require (
 	cuelang.org/go v0.16.0
-	github.com/chazu/pudl v0.1.0
+	github.com/chazu/pudl v0.1.2
 )
 
 require (
