@@ -5,7 +5,7 @@ issues by reasoning over observations recorded by agents and humans.
 
 THE LOOP:
 
-    1. You work on a codebase and record observations with pudl observe
+    1. You work on a codebase and record observations with pudl facts observe
     2. nous loads those observations and runs heuristics against them
     3. nous writes discoveries back to pudl (hotspots, patterns, conjectures)
     4. Those discoveries are queryable by you and future agents
@@ -16,7 +16,7 @@ YOUR ROLE:
     honest your observations, the better nous can reason.
 
     Record what you see — obstacles, bugs, patterns, suggestions — using
-    pudl observe. Run "nous guide observations" for the full protocol.
+    pudl facts observe. Run "nous guide observations" for the full protocol.
 
 WHAT NOUS DETECTS:
 

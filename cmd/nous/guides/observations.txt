@@ -5,7 +5,7 @@ Your task is NOT complete until you have recorded at least one observation.
 
 COMMAND TEMPLATE (copy and adapt):
 
-    pudl observe "description of what you found" \
+    pudl facts observe "description of what you found" \
         --kind <kind> --scope <repo>:<path>
 
 REQUIRED FLAGS:
@@ -45,19 +45,19 @@ DO NOT:
 
 EXAMPLES:
 
-    pudl observe "auth.go has circular import with user package" \
+    pudl facts observe "auth.go has circular import with user package" \
         --kind obstacle --scope myapp:pkg/auth
 
-    pudl observe "TestCache_Invalidation has race condition under -count=100" \
+    pudl facts observe "TestCache_Invalidation has race condition under -count=100" \
         --kind bug --scope myapp:internal/cache
 
-    pudl observe "all handlers follow middleware chain pattern consistently" \
+    pudl facts observe "all handlers follow middleware chain pattern consistently" \
         --kind pattern --scope myapp:cmd/api
 
-    pudl observe "config.Config struct has 43 fields across 6 concerns" \
+    pudl facts observe "config.Config struct has 43 fields across 6 concerns" \
         --kind suggestion --scope myapp:internal/config
 
-    pudl observe "no integration tests exist for the billing API" \
+    pudl facts observe "no integration tests exist for the billing API" \
         --kind obstacle --scope myapp:cmd/api
 
 BEFORE COMPLETING YOUR TASK, VERIFY:
