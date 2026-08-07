@@ -18,7 +18,10 @@ tests every finite-state protocol transform against every candidate relation,
 retaining evidence for the schemas it promotes. The `rewrite` pack advances
 from selection to construction by synthesizing executable two-step string
 transformations, recording contextual credit for successful decisions and
-components, and testing that credit under a hard exploration budget.
+components, and testing that credit under a hard exploration budget. The
+`configrepair` pack constructs bounded unordered sets of typed configuration
+assignments and selects the unique plan that satisfies two related schemas
+without changing protected operator intent.
 
 ## Run it
 
@@ -29,6 +32,7 @@ mise exec -- go run ./cmd/nous run -domain math -cycles 300
 mise exec -- go run ./cmd/nous run -domain buildgraphs -cycles 100 -no-mutate
 mise exec -- go run ./cmd/nous run -domain protocols -cycles 120 -no-mutate
 mise exec -- go run ./cmd/nous run -domain rewrite -cycles 220 -no-mutate
+mise exec -- go run ./cmd/nous run -domain configrepair -cycles 700 -no-mutate
 mise exec -- go run ./cmd/nous rewrite-trials -problems 100 -curricula 300 -budget 4
 mise exec -- go test -race ./...
 ```

@@ -105,5 +105,23 @@ robustness, the limits of scalar credit, and the improvement from
 [contextual exact-decision credit](contextual-credit-mechanics-plan.md) plus a
 bounded exploration reserve.
 
+## Experimental pack: configuration repair
+
+`domains/configrepair` represents bounded typed configurations and schemas as
+lists of canonical records. Six neutral primitive assignments generate every
+valid unordered subset of size one through three. A separate evaluation
+heuristic applies all 41 plans to four examples, materializes 164 linked
+results and observations, and promotes only the plan that satisfies every
+schema, preserves protected fields, and is idempotent.
+
+The seed includes protected-field shortcuts that satisfy all constraints but
+destroy operator intent. An independent evaluator, opaque aliases, occupied
+name tests, primitive deletion, held-out inputs, malformed and no-solution
+controls, and a runtime-built vocabulary with different fields and values test
+that the discovery is behavioral. The winning decision assigns ordinary and
+contextual credit to the synthesis heuristic and its three repair components.
+
+See [the stabilized configuration-repair plan](configuration-repair-vocabulary-plan.md).
+
 The point is not to prove that EURISKO transfers after one small pack. The
 point is to make transfer an empirical question with a cheap, repeatable test.
