@@ -677,14 +677,7 @@ func TestSelfModificationLoop(t *testing.T) {
 	setType.Set("isA", []string{"Anything"})
 	store.Put(setType)
 
-	// Load seed domain first
-	seed.DomainsDir = "../../domains"
-	if err := seed.LoadDomain(store, "math"); err != nil {
-		t.Fatal(err)
-	}
-
 	// A heuristic that creates low-worth units (they'll be killed by H-KillWorthless)
-	// Created AFTER domain load so it doesn't get overwritten. High worth so it fires often.
 	hBadCreator := unit.New("H-BadCreator")
 	hBadCreator.SetWorth(900)
 	hBadCreator.Set("isA", []string{"Heuristic", "Anything"})
@@ -705,47 +698,72 @@ func TestSelfModificationLoop(t *testing.T) {
 	`)
 	store.Put(hBadCreator)
 
-	// A high-worth seed unit to trigger the heuristic early
+	// Keep this proof small and causal. Loading the entire math vocabulary made
+	// its outcome depend on hundreds of unrelated units and eventually caused
+	// the assertions to be replaced by logging. This is the same kernel loop
+	// with an explicit garbage collector heuristic.
+	hKillWorthless := unit.New("H-KillWorthless")
+	hKillWorthless.SetWorth(800)
+	hKillWorthless.Set("isA", []string{"Heuristic", "Anything"})
+	hKillWorthless.Set("overallRecord", map[string]any{"successes": 0, "failures": 0})
+	hKillWorthless.Set("ifPotentiallyRelevant", `
+		"ArgU" @ "worth" get-slot 100 <
+		"ArgU" @ "creditors" get-slot nil !=
+		and
+	`)
+	hKillWorthless.Set("thenCompute", `"ArgU" @ kill-unit`)
+	store.Put(hKillWorthless)
+
 	target := unit.New("TestSet")
 	target.SetWorth(900)
 	target.Set("isA", []string{"Set", "Anything"})
 	store.Put(target)
 
-	// More cycles needed with full domain loaded (many units compete for attention)
-	eng.MaxCycles = 300
+	eng.MaxCycles = 80
 	eng.MutConfig.Enabled = true
 	eng.MutConfig.Interval = 5
-	eng.MutConfig.MinApplics = 3
-	eng.MutConfig.MutationThreshold = 0.5
+	eng.MutConfig.MinApplics = 1
+	eng.MutConfig.MutationThreshold = 1.0
 
 	err := eng.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
-	// Verify self-modification machinery is functioning.
-	// With full domain (100+ units), H-BadCreator competes for attention.
-	// Log results rather than hard-assert on specific counts.
 	record := hBadCreator.GetMap("overallRecord")
 	if record == nil {
 		t.Fatal("H-BadCreator overallRecord is nil")
 	}
 	failures := toInt(record["failures"])
+	if failures == 0 {
+		t.Fatal("bad creator accumulated no failure credit")
+	}
+	if hBadCreator.Worth() >= 900 {
+		t.Fatalf("bad creator worth did not fall: got %d", hBadCreator.Worth())
+	}
+	if len(eng.Graveyard) == 0 {
+		t.Fatal("failed units were not preserved in the graveyard")
+	}
 
 	avoidCount := 0
+	mutantCount := 0
 	for _, name := range store.All() {
 		if store.IsA(name, "HAvoidRule") {
 			avoidCount++
 		}
+		if store.Get(name).GetString("mutant_of") != "" {
+			mutantCount++
+		}
+	}
+	if avoidCount == 0 {
+		t.Fatal("HindSight created no HAvoid rule")
+	}
+	if mutantCount == 0 {
+		t.Fatal("performance feedback created no mutant heuristic")
 	}
 
-	t.Logf("Loop results: H-BadCreator worth=%d, failures=%d, graveyard=%d, HAvoid rules=%d",
-		hBadCreator.Worth(), failures, len(eng.Graveyard), avoidCount)
-
-	// Engine should have run to completion
-	if eng.Cycle() < 100 {
-		t.Errorf("expected at least 100 cycles, got %d", eng.Cycle())
-	}
+	t.Logf("loop: worth=%d failures=%d graves=%d avoid=%d mutants=%d",
+		hBadCreator.Worth(), failures, len(eng.Graveyard), avoidCount, mutantCount)
 }
 
 func TestSpecializationPipeline(t *testing.T) {
@@ -1686,7 +1704,7 @@ func TestPerThenPartRecord(t *testing.T) {
 	h.SetWorth(600)
 	h.Set("isA", []string{"Heuristic", "Anything"})
 	h.Set("ifWorkingOnTask", `true`)
-	h.Set("thenCompute", `1 drop`) // runs cleanly
+	h.Set("thenCompute", `1 drop`)                // runs cleanly
 	h.Set("thenAddToAgenda", `undefined-builtin`) // errors
 	store.Put(h)
 

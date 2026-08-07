@@ -35,6 +35,18 @@ func TestAgendaBasics(t *testing.T) {
 	}
 }
 
+func TestAgendaPreservesInsertionOrderForEqualPriorities(t *testing.T) {
+	ag := New()
+	for _, name := range []string{"first", "second", "third"} {
+		ag.Push(&Task{Priority: 500, UnitName: name, SlotName: "examples"})
+	}
+	for _, want := range []string{"first", "second", "third"} {
+		if got := ag.Pop().UnitName; got != want {
+			t.Fatalf("equal-priority pop = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestAgendaMerge(t *testing.T) {
 	ag := New()
 
@@ -53,6 +65,25 @@ func TestAgendaMerge(t *testing.T) {
 	}
 	if len(task.Reasons) != 2 {
 		t.Errorf("expected 2 reasons after merge, got %d", len(task.Reasons))
+	}
+}
+
+func TestAgendaMergePromotesBareTaskToPopulatedTask(t *testing.T) {
+	ag := New()
+	ag.Push(&Task{Priority: 500, UnitName: "Op", SlotName: "specializations"})
+	ag.Push(&Task{
+		Priority: 600,
+		UnitName: "Op",
+		SlotName: "specializations",
+		Extra: map[string]any{
+			"SlotToChange": "domain",
+			"SpecializeTo": "SetOfPrimes",
+		},
+	})
+
+	got := ag.Pop()
+	if got.Extra == nil || got.Extra["SlotToChange"] != "domain" {
+		t.Fatalf("merged task lost specialization parameters: Extra=%v", got.Extra)
 	}
 }
 

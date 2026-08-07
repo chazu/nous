@@ -15,26 +15,6 @@ units: [
 		isA: ["Anything"]
 	},
 	{
-		name:  "MathConcept"
-		worth: 500
-		isA: ["Anything"]
-	},
-	{
-		name:  "MathObj"
-		worth: 500
-		isA: ["MathConcept", "Anything"]
-	},
-	{
-		name:  "MathOp"
-		worth: 500
-		isA: ["MathConcept", "Anything"]
-	},
-	{
-		name:  "MathPred"
-		worth: 500
-		isA: ["MathConcept", "Anything"]
-	},
-	{
 		name:  "Op"
 		worth: 500
 		isA: ["Anything"]
@@ -42,12 +22,12 @@ units: [
 	{
 		name:  "BinaryOp"
 		worth: 500
-		isA: ["Op", "MathOp", "Anything"]
+		isA: ["Op", "Anything"]
 	},
 	{
 		name:  "UnaryOp"
 		worth: 500
-		isA: ["Op", "MathOp", "Anything"]
+		isA: ["Op", "Anything"]
 	},
 	{
 		name:  "Pred"
@@ -57,12 +37,12 @@ units: [
 	{
 		name:  "BinaryPred"
 		worth: 500
-		isA: ["Pred", "MathPred", "Anything"]
+		isA: ["Pred", "Anything"]
 	},
 	{
 		name:  "UnaryPred"
 		worth: 500
-		isA: ["Pred", "MathPred", "Anything"]
+		isA: ["Pred", "Anything"]
 	},
 	{
 		name:  "ProtoConjec"

@@ -68,6 +68,11 @@ units: [
 		english: "A bag with duplicate elements — a canonical multiset for mutation experiments"
 		data: [1, 1, 2, 2, 2, 3, 5]
 		examples: ["Bag-ex-tally-a", "Bag-ex-tally-b", "Bag-ex-tally-c"]
+		initialTasks: [{
+			priority: 700
+			slot: "examples"
+			reason: "Bootstrap H29 on a pre-populated MultEleStruc"
+		}]
 	},
 	{
 		name:    "Bag-ex-tally-a"

@@ -2,7 +2,9 @@ package seed
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/chazu/nous/internal/cueload"
@@ -107,7 +109,28 @@ func lcFirst(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
 }
 
-// Available returns the list of known domain names.
+// Available discovers vocabulary packs. LoadDomain has never required a
+// registry entry; keeping help text dynamic makes adding a domain a directory
+// operation rather than a kernel-code change.
 func Available() string {
-	return "math, observations"
+	root := DomainsDir
+	if root == "" {
+		root = "domains"
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "math, buildgraphs"
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "common" {
+			continue
+		}
+		files, err := filepath.Glob(filepath.Join(root, entry.Name(), "*.cue"))
+		if err == nil && len(files) > 0 {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }

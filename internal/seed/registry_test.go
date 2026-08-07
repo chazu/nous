@@ -1,10 +1,73 @@
 package seed
 
 import (
+	"context"
+	"io"
+	"strings"
 	"testing"
 
+	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/unit"
 )
+
+func TestBuildGraphVocabularyIsIndependentAndExecutable(t *testing.T) {
+	store := unit.NewStore()
+	DomainsDir = "../../domains"
+	if err := LoadDomain(store, "buildgraphs"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"BuildGraph", "MergeBuildGraphs", "H-RunGraphOps"} {
+		if !store.Has(name) {
+			t.Fatalf("buildgraphs vocabulary missing %s", name)
+		}
+	}
+	for _, mathOnly := range []string{"MathConcept", "Set", "H1"} {
+		if store.Has(mathOnly) {
+			t.Fatalf("buildgraphs unexpectedly loaded math-only unit %s", mathOnly)
+		}
+	}
+
+	ag := agenda.New()
+	eng := engine.New(store, ag)
+	eng.Out = io.Discard
+	eng.VM.Out = io.Discard
+	eng.MaxCycles = 80
+	eng.MutConfig.Enabled = false
+	eng.SeedInitialAgenda()
+	if err := eng.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	foundResult := false
+	for _, name := range store.All() {
+		if strings.HasPrefix(name, "MergeBuildGraphs-on-") {
+			foundResult = true
+			if len(store.Get(name).GetStrings("creditors")) == 0 {
+				t.Fatalf("generated graph %s has no provenance", name)
+			}
+		}
+	}
+	if !foundResult {
+		t.Fatal("build-graph heuristic produced no MergeBuildGraphs result")
+	}
+	if len(store.Get("MergeBuildGraphs").Get("applics").([]map[string]any)) == 0 {
+		t.Fatal("MergeBuildGraphs recorded no applications")
+	}
+}
+
+func TestAvailableDiscoversVocabularyDirectories(t *testing.T) {
+	DomainsDir = "../../domains"
+	got := Available()
+	for _, want := range []string{"buildgraphs", "math"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Available() = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "common") {
+		t.Fatalf("Available() = %q, common is not a standalone vocabulary", got)
+	}
+}
 
 func TestPhase6SlotsLoaded(t *testing.T) {
 	store := unit.NewStore()

@@ -1,4 +1,7 @@
-# Ecosystem Report: defn, pudl, mu, nous
+# Historical ecosystem report: defn, PUDL, Mu, and Nous
+
+> Archived on the `eurisko-core` branch as context for the superseded product
+> direction. It is not the current Nous architecture.
 
 **Date:** 2026-04-14
 

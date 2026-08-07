@@ -41,6 +41,32 @@ func TestArithmetic(t *testing.T) {
 	}
 }
 
+func TestCollectionWordsSupportStringVocabularies(t *testing.T) {
+	vm := testVM(t)
+	value, err := vm.Execute(`"web>api" "api>core" 2 list-of "api>core" "db>schema" 2 list-of collection-union`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := value.AsList()
+	want := []string{"web>api", "api>core", "db>schema"}
+	if len(got) != len(want) {
+		t.Fatalf("union length = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i, expected := range want {
+		if got[i].AsString() != expected {
+			t.Fatalf("union[%d] = %q, want %q", i, got[i].AsString(), expected)
+		}
+	}
+
+	equal, err := vm.Execute(`"a" "b" 2 list-of "b" "a" "a" 3 list-of collection-equal?`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equal.AsBool() {
+		t.Fatal("collection equality should ignore order and duplicates")
+	}
+}
+
 func TestComparison(t *testing.T) {
 	vm := testVM(t)
 	tests := []struct {

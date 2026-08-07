@@ -1,3 +1,5 @@
+// EURISKO's source-derived heuristic corpus belongs to the reference math
+// vocabulary. It is intentionally not loaded for unrelated domains.
 units: [
 	{
 		name:    "H6-Specialize"
