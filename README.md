@@ -21,7 +21,10 @@ transformations, recording contextual credit for successful decisions and
 components, and testing that credit under a hard exploration budget. The
 `configrepair` pack constructs bounded unordered sets of typed configuration
 assignments and selects the unique plan that satisfies two related schemas
-without changing protected operator intent.
+without changing protected operator intent. The `games` pack exhaustively
+evaluates all deterministic memory-one Prisoner's Dilemma policies, retains
+complete match evidence, and promotes a Pareto frontier instead of collapsing
+adversarial trade-offs into one worth score.
 
 ## Run it
 
@@ -33,7 +36,9 @@ mise exec -- go run ./cmd/nous run -domain buildgraphs -cycles 100 -no-mutate
 mise exec -- go run ./cmd/nous run -domain protocols -cycles 120 -no-mutate
 mise exec -- go run ./cmd/nous run -domain rewrite -cycles 220 -no-mutate
 mise exec -- go run ./cmd/nous run -domain configrepair -cycles 700 -no-mutate
+mise exec -- go run ./cmd/nous run -domain games -cycles 500 -no-mutate
 mise exec -- go run ./cmd/nous rewrite-trials -problems 100 -curricula 300 -budget 4
+mise exec -- go run ./cmd/nous game-trials
 mise exec -- go test -race ./...
 ```
 

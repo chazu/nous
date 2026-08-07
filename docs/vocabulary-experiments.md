@@ -81,6 +81,12 @@ Goals:
   and
 - probe the limits of scalar worth before attempting a consequential domain.
 
+Implemented as the deterministic memory-one Prisoner's Dilemma pack. The
+[stabilized plan](iterated-game-strategies-vocabulary-plan.md) fixes the
+candidate space, evaluation profile, held-out cases, and non-claims. The
+[trial report](iterated-game-strategies-trials.md) records exhaustive oracle
+agreement and a concrete scalar-versus-Pareto selection difference.
+
 ## Experimental standard
 
 Every vocabulary must have deterministic seeds, behavior-level unit tests, and

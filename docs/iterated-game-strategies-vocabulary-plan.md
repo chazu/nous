@@ -2,11 +2,11 @@
 
 ## Status
 
-Stabilization draft after the first architecture, game-theory, and experimental
-validity reviews. Implementation begins only after all reviewers accept this
-contract. The stabilized design is committed before any implementation-backed
-trial is run; later fixture changes require a new experiment version and must
-preserve the v1 report.
+Accepted after iterative architecture, game-theory, and experimental-validity
+review. Implemented and verified against the frozen v1 profile. The stabilized
+design was committed before any implementation-backed trial was run; later
+fixture changes require a new experiment version and must preserve the v1
+report.
 
 ## Research question
 

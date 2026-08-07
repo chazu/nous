@@ -142,5 +142,26 @@ store controls bound the result.
 See the [cross-experiment synthesis analysis](bounded-program-synthesis-analysis.md)
 and [stabilized tiny-stack plan](tiny-stack-vocabulary-plan.md).
 
+## Experimental pack: iterated-game strategies
+
+`domains/games` represents every deterministic memory-one policy for a
+finitely repeated Prisoner's Dilemma as five canonical actions. Three generic
+CUE heuristics enumerate all 32 policies, evaluate each against a descriptor's
+training, self-play, and perturbation cases, and promote the full nondominated
+frontier only after a complete-evidence barrier.
+
+The v1 profile materializes 192 matches and observations, 32 aggregate
+evidence records, one selection record, and 14 evidence-linked schemas and
+conjectures. An independent simulator checks every match, objective vector,
+ordered dominance decision, frontier member, scalar leader, and behavioral
+equivalence relation. Held-out opponents reveal distinctions hidden by the
+training profile without modifying the training store.
+
+This demonstrates correct descriptor-driven adversarial evaluation and the
+value of preserving vector trade-offs. It does not demonstrate a search
+advantage: the policy space is deliberately small and exhaustively enumerated.
+See the [stabilized design](iterated-game-strategies-vocabulary-plan.md) and
+[trial report](iterated-game-strategies-trials.md).
+
 The point is not to prove that EURISKO transfers after one small pack. The
 point is to make transfer an empirical question with a cheap, repeatable test.
