@@ -123,5 +123,24 @@ contextual credit to the synthesis heuristic and its three repair components.
 
 See [the stabilized configuration-repair plan](configuration-repair-vocabulary-plan.md).
 
+## Experimental pack: tiny stack programs
+
+`domains/tinystack` is the first descriptor-driven bounded program-synthesis
+pack. Seven unary instructions generate all 399 ordered programs of length one
+through three. Generic CUE heuristics evaluate the complete corpus, retain
+underflow and mismatch evidence, select every shortest exact program behind a
+structural barrier, and compare all two-instruction programs with primitives
+on a bounded partial-function probe set.
+
+An independent test interpreter checks every candidate and simplification
+pair. A fully renamed alternate descriptor changes all category, primitive,
+example, probe, method, and credit-context identities without changing the
+heuristics. Ambiguity, vacuity, malformed-descriptor, no-solution, collision,
+held-out, exhaustive, forged-evidence, contextual-credit, and deterministic
+store controls bound the result.
+
+See the [cross-experiment synthesis analysis](bounded-program-synthesis-analysis.md)
+and [stabilized tiny-stack plan](tiny-stack-vocabulary-plan.md).
+
 The point is not to prove that EURISKO transfers after one small pack. The
 point is to make transfer an empirical question with a cheap, repeatable test.
