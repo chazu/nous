@@ -32,6 +32,9 @@ units: [
 					"first" @ "defn" get-slot " " concat "second" @ "defn" get-slot concat "program" @ "defn" set-slot
 					"ordered-distinct-pairs/v1" "program" @ "synthesisMethod" set-slot
 					"H-ComposeRewritePrograms" "first" @ "second" @ 3 list-of "program" @ "creditors" set-slot
+					"rewrite/ordered-distinct-pairs/v1" "program" @ "creditContext" set-slot
+					"first" @ "second" @ rewrite-decision-key "program" @ "creditDecision" set-slot
+					"synthesis" "first" "second" 3 list-of "program" @ "creditRoles" set-slot
 					700 "program" @ "rewriteEvaluation" "Evaluate synthesized rewrite program" add-task
 				then
 			end
@@ -181,4 +184,3 @@ units: [
 			"""#
 	},
 ]
-

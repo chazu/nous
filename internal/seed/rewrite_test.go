@@ -11,9 +11,11 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/credit"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/unit"
+	rewritevocab "github.com/chazu/nous/internal/vocab/rewrite"
 )
 
 const rewriteCycles = 220
@@ -83,6 +85,17 @@ func TestRewriteVocabularySynthesizesAndCreditsUniqueProgram(t *testing.T) {
 			t.Fatalf("%s worth = %d, want %d", primitive, got, want)
 		}
 	}
+	decision := rewritevocab.DecisionKey(components[0], components[1])
+	if target.GetString("creditContext") != rewritevocab.CreditContext || target.GetString("creditDecision") != decision {
+		t.Fatalf("contextual declaration = context %q decision %q", target.GetString("creditContext"), target.GetString("creditDecision"))
+	}
+	if got := target.GetStrings("creditRoles"); !equalStringSlices(got, []string{"synthesis", "first", "second"}) {
+		t.Fatalf("credit roles = %v", got)
+	}
+	assertContextualCredit(t, store, credit.DecisionTuple(rewritevocab.CreditContext, decision), 300)
+	assertContextualCredit(t, store, credit.Tuple{Context: rewritevocab.CreditContext, Subject: "H-ComposeRewritePrograms", Role: "synthesis"}, 150)
+	assertContextualCredit(t, store, credit.Tuple{Context: rewritevocab.CreditContext, Subject: components[0], Role: "first"}, 150)
+	assertContextualCredit(t, store, credit.Tuple{Context: rewritevocab.CreditContext, Subject: components[1], Role: "second"}, 150)
 	assertRewriteHeldOut(t, store, target, map[string]string{
 		"qabcw":     "qyw",
 		"cabcd":     "cyd",
@@ -178,6 +191,9 @@ func TestRewriteOpaqueAliasesCollisionsAndPrimitiveDeletion(t *testing.T) {
 	if !strings.Contains(target.Name, "collision-1") {
 		t.Fatalf("occupied target name did not receive deterministic suffix: %s", target.Name)
 	}
+	if got, want := target.GetString("creditDecision"), rewritevocab.DecisionKey("Alias.dot", "Alias-then-Z"); got != want {
+		t.Fatalf("collision changed semantic credit key: got %q want %q", got, want)
+	}
 	for _, occupied := range []string{targetBase, resultCollisionName} {
 		if got := store.Get(occupied).GetString("sentinel"); got != "preserve" {
 			t.Fatalf("occupied unit %s was overwritten", occupied)
@@ -192,6 +208,26 @@ func TestRewriteOpaqueAliasesCollisionsAndPrimitiveDeletion(t *testing.T) {
 	if err != nil || value.AsString() != "qyw" {
 		t.Fatalf("inlined composite after primitive deletion = (%q,%v)", value.AsString(), err)
 	}
+}
+
+func assertContextualCredit(t *testing.T, store *unit.Store, tuple credit.Tuple, want int) {
+	t.Helper()
+	record := credit.Lookup(store, tuple)
+	if record == nil || record.GetInt("rewardTotal") != want || record.GetInt("evidenceCount") != 1 {
+		t.Fatalf("contextual credit %v = %#v, want %d", tuple, record, want)
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRewriteAlternateRuntimeCorpusDefeatsSeedHardcoding(t *testing.T) {

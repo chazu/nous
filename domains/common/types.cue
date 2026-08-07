@@ -16,6 +16,12 @@ units: [
 		english: "A domain vocabulary that may select a scoped DSL extension"
 	},
 	{
+		name:  "ContextualCredit"
+		worth: 0
+		isA: ["Anything"]
+		english: "Compact context, subject, and role-specific credit record"
+	},
+	{
 		name:  "Slot"
 		worth: 300
 		isA: ["Anything"]

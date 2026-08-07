@@ -101,8 +101,9 @@ facade that delegates to the original units.
 
 See [the stabilized rewrite plan](string-rewrite-vocabulary-plan.md).
 The [follow-up trial report](rewrite-trials.md) records generated-problem
-robustness and the limits of scalar credit under related and unrelated
-curricula.
+robustness, the limits of scalar credit, and the improvement from
+[contextual exact-decision credit](contextual-credit-mechanics-plan.md) plus a
+bounded exploration reserve.
 
 The point is not to prove that EURISKO transfers after one small pack. The
 point is to make transfer an empirical question with a cheap, repeatable test.

@@ -12,9 +12,11 @@ import (
 	"strings"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/credit"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
+	rewritevocab "github.com/chazu/nous/internal/vocab/rewrite"
 )
 
 const engineCycles = 220
@@ -55,14 +57,30 @@ type RobustnessReport struct {
 type StrategyReport struct {
 	Tasks           int
 	Solved          int
+	Evaluations     int
+	MaxEvaluations  int
 	MeanEvaluations float64
 }
 
 type CohortReport struct {
-	Learned    StrategyReport
-	Reset      StrategyReport
-	Randomized StrategyReport
-	Exhaustive StrategyReport
+	Contextual     StrategyReport
+	Scalar         StrategyReport
+	ScalarReserved StrategyReport
+	Reset          StrategyReport
+	Randomized     StrategyReport
+	Exhaustive     StrategyReport
+}
+
+type PairwiseReport struct {
+	ContextualWins   int
+	ContextualLosses int
+	Ties             int
+}
+
+type IsolationReport struct {
+	Checks               int
+	WrongContextMatches  int
+	AbsentContextMatches int
 }
 
 type CurriculumReport struct {
@@ -70,6 +88,8 @@ type CurriculumReport struct {
 	Budget    int
 	Overall   CohortReport
 	Cohorts   map[string]CohortReport
+	Paired    map[string]PairwiseReport
+	Isolation IsolationReport
 }
 
 type Report struct {
@@ -145,7 +165,7 @@ func RunCurriculum(domainsDir string, seedValue int64, count, budget int) (Curri
 	if count <= 0 || budget <= 0 || budget > 12 {
 		return CurriculumReport{}, fmt.Errorf("curricula must be positive and budget must be in [1,12]")
 	}
-	rng := rand.New(rand.NewSource(seedValue))
+	generationRNG := rand.New(rand.NewSource(seedValue))
 	report := CurriculumReport{
 		Curricula: count,
 		Budget:    budget,
@@ -154,11 +174,16 @@ func RunCurriculum(domainsDir string, seedValue int64, count, budget int) (Curri
 			"reuse-one":  {},
 			"unrelated":  {},
 		},
+		Paired: map[string]PairwiseReport{
+			"scalar":          {},
+			"scalar-reserved": {},
+			"randomized":      {},
+		},
 	}
 	cohortNames := []string{"reuse-both", "reuse-one", "unrelated"}
 	for index := 0; index < count; index++ {
 		cohort := cohortNames[index%len(cohortNames)]
-		phaseOne, phaseTwo, err := generateCurriculum(rng, fmt.Sprintf("C%03d", index), cohort)
+		phaseOne, phaseTwo, err := generateCurriculum(generationRNG, fmt.Sprintf("C%03d", index), cohort)
 		if err != nil {
 			return report, fmt.Errorf("generate curriculum %d: %w", index, err)
 		}
@@ -177,24 +202,53 @@ func RunCurriculum(domainsDir string, seedValue int64, count, budget int) (Curri
 		if learnedWorth[firstName] != 750 || learnedWorth[secondName] != 750 {
 			return report, fmt.Errorf("curriculum %d did not earn expected component credit", index)
 		}
+		decision := rewritevocab.DecisionKey(firstName, secondName)
+		if got := credit.RewardTotal(store, credit.DecisionTuple(rewritevocab.CreditContext, decision)); got != 300 {
+			return report, fmt.Errorf("curriculum %d decision credit = %d, want 300", index, got)
+		}
 
-		learnedOrder := rankedPairs(phaseTwo, learnedWorth)
+		policyRNG := rand.New(rand.NewSource(curriculumPolicySeed(seedValue, index)))
+		sharedOrder := append([]pair(nil), allPairs()...)
+		policyRNG.Shuffle(len(sharedOrder), func(i, j int) { sharedOrder[i], sharedOrder[j] = sharedOrder[j], sharedOrder[i] })
+		contextualOrder := contextualPairs(phaseTwo, store, rewritevocab.CreditContext, sharedOrder)
+		scalarOrder := rankedPairs(phaseTwo, learnedWorth)
+		scalarReservedOrder := scalarReservedPairs(phaseTwo, learnedWorth, sharedOrder)
 		resetOrder := rankedPairs(phaseTwo, resetWorth)
-		randomOrder := append([]pair(nil), allPairs()...)
-		rng.Shuffle(len(randomOrder), func(i, j int) { randomOrder[i], randomOrder[j] = randomOrder[j], randomOrder[i] })
+		randomOrder := append([]pair(nil), sharedOrder...)
 		exhaustiveOrder := allPairs()
+		if !equalPairs(contextualPairs(phaseTwo, store, "wrong/context/v1", sharedOrder), sharedOrder) ||
+			!equalPairs(contextualPairs(phaseTwo, store, "", sharedOrder), sharedOrder) {
+			return report, fmt.Errorf("curriculum %d contextual isolation changed exploration order", index)
+		}
+		report.Isolation.Checks++
+		report.Isolation.WrongContextMatches++
+		report.Isolation.AbsentContextMatches++
+
+		contextualSolved, contextualEvaluations := solveWithinBudget(phaseTwo, contextualOrder, budget)
+		scalarSolved, scalarEvaluations := solveWithinBudget(phaseTwo, scalarOrder, budget)
+		scalarReservedSolved, scalarReservedEvaluations := solveWithinBudget(phaseTwo, scalarReservedOrder, budget)
+		resetSolved, resetEvaluations := solveWithinBudget(phaseTwo, resetOrder, budget)
+		randomSolved, randomEvaluations := solveWithinBudget(phaseTwo, randomOrder, budget)
+		exhaustiveSolved, exhaustiveEvaluations := solveWithinBudget(phaseTwo, exhaustiveOrder, len(exhaustiveOrder))
 
 		cohortReport := report.Cohorts[cohort]
-		updateStrategy(&cohortReport.Learned, solveRank(phaseTwo, learnedOrder), budget)
-		updateStrategy(&cohortReport.Reset, solveRank(phaseTwo, resetOrder), budget)
-		updateStrategy(&cohortReport.Randomized, solveRank(phaseTwo, randomOrder), budget)
-		updateStrategy(&cohortReport.Exhaustive, solveRank(phaseTwo, exhaustiveOrder), 12)
+		updateStrategy(&cohortReport.Contextual, contextualSolved, contextualEvaluations)
+		updateStrategy(&cohortReport.Scalar, scalarSolved, scalarEvaluations)
+		updateStrategy(&cohortReport.ScalarReserved, scalarReservedSolved, scalarReservedEvaluations)
+		updateStrategy(&cohortReport.Reset, resetSolved, resetEvaluations)
+		updateStrategy(&cohortReport.Randomized, randomSolved, randomEvaluations)
+		updateStrategy(&cohortReport.Exhaustive, exhaustiveSolved, exhaustiveEvaluations)
 		report.Cohorts[cohort] = cohortReport
 
-		updateStrategy(&report.Overall.Learned, solveRank(phaseTwo, learnedOrder), budget)
-		updateStrategy(&report.Overall.Reset, solveRank(phaseTwo, resetOrder), budget)
-		updateStrategy(&report.Overall.Randomized, solveRank(phaseTwo, randomOrder), budget)
-		updateStrategy(&report.Overall.Exhaustive, solveRank(phaseTwo, exhaustiveOrder), 12)
+		updateStrategy(&report.Overall.Contextual, contextualSolved, contextualEvaluations)
+		updateStrategy(&report.Overall.Scalar, scalarSolved, scalarEvaluations)
+		updateStrategy(&report.Overall.ScalarReserved, scalarReservedSolved, scalarReservedEvaluations)
+		updateStrategy(&report.Overall.Reset, resetSolved, resetEvaluations)
+		updateStrategy(&report.Overall.Randomized, randomSolved, randomEvaluations)
+		updateStrategy(&report.Overall.Exhaustive, exhaustiveSolved, exhaustiveEvaluations)
+		updatePairwise(report.Paired, "scalar", contextualSolved, scalarSolved)
+		updatePairwise(report.Paired, "scalar-reserved", contextualSolved, scalarReservedSolved)
+		updatePairwise(report.Paired, "randomized", contextualSolved, randomSolved)
 	}
 	finalizeCohort(&report.Overall)
 	for name, cohort := range report.Cohorts {
@@ -403,8 +457,55 @@ func rankedPairs(problem problem, worth map[string]int) []pair {
 	return pairs
 }
 
-func solveRank(problem problem, order []pair) int {
-	for index, candidate := range order {
+func contextualPairs(problem problem, store *unit.Store, contextName string, exploration []pair) []pair {
+	bestIndex := -1
+	bestScore := 0
+	for index, candidate := range exploration {
+		decision := rewritevocab.DecisionKey(
+			problem.Rules[candidate.First].Name,
+			problem.Rules[candidate.Second].Name,
+		)
+		score := credit.RewardTotal(store, credit.DecisionTuple(contextName, decision))
+		if score > bestScore {
+			bestIndex, bestScore = index, score
+		}
+	}
+	if bestIndex < 0 {
+		return append([]pair(nil), exploration...)
+	}
+	return movePairFirst(exploration, bestIndex)
+}
+
+func scalarReservedPairs(problem problem, worth map[string]int, exploration []pair) []pair {
+	bestIndex := -1
+	bestScore := -1
+	for index, candidate := range exploration {
+		score := worth[problem.Rules[candidate.First].Name] + worth[problem.Rules[candidate.Second].Name]
+		if score > bestScore {
+			bestIndex, bestScore = index, score
+		}
+	}
+	if bestIndex < 0 {
+		return append([]pair(nil), exploration...)
+	}
+	return movePairFirst(exploration, bestIndex)
+}
+
+func movePairFirst(order []pair, index int) []pair {
+	out := make([]pair, 0, len(order))
+	out = append(out, order[index])
+	out = append(out, order[:index]...)
+	out = append(out, order[index+1:]...)
+	return out
+}
+
+func solveWithinBudget(problem problem, order []pair, budget int) (bool, int) {
+	limit := budget
+	if limit > len(order) {
+		limit = len(order)
+	}
+	for index := 0; index < limit; index++ {
+		candidate := order[index]
 		matched := true
 		for _, example := range problem.Examples {
 			actual, ok := applyPair(example.Input, problem.Rules, candidate)
@@ -414,20 +515,35 @@ func solveRank(problem problem, order []pair) int {
 			}
 		}
 		if matched {
-			return index + 1
+			return true, index + 1
 		}
 	}
-	return len(order) + 1
+	return false, limit
 }
 
-func updateStrategy(report *StrategyReport, rank, budget int) {
+func updateStrategy(report *StrategyReport, solved bool, evaluations int) {
 	report.Tasks++
-	if rank <= budget {
+	if solved {
 		report.Solved++
-		report.MeanEvaluations += float64(rank)
-	} else {
-		report.MeanEvaluations += float64(budget)
 	}
+	report.Evaluations += evaluations
+	if evaluations > report.MaxEvaluations {
+		report.MaxEvaluations = evaluations
+	}
+	report.MeanEvaluations += float64(evaluations)
+}
+
+func updatePairwise(reports map[string]PairwiseReport, name string, contextual, other bool) {
+	report := reports[name]
+	switch {
+	case contextual && !other:
+		report.ContextualWins++
+	case !contextual && other:
+		report.ContextualLosses++
+	default:
+		report.Ties++
+	}
+	reports[name] = report
 }
 
 func finalizeStrategy(report *StrategyReport) {
@@ -437,10 +553,31 @@ func finalizeStrategy(report *StrategyReport) {
 }
 
 func finalizeCohort(report *CohortReport) {
-	finalizeStrategy(&report.Learned)
+	finalizeStrategy(&report.Contextual)
+	finalizeStrategy(&report.Scalar)
+	finalizeStrategy(&report.ScalarReserved)
 	finalizeStrategy(&report.Reset)
 	finalizeStrategy(&report.Randomized)
 	finalizeStrategy(&report.Exhaustive)
+}
+
+func equalPairs(a, b []pair) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func curriculumPolicySeed(seedValue int64, index int) int64 {
+	value := uint64(seedValue) + uint64(index+1)*0x9e3779b97f4a7c15
+	value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9
+	value = (value ^ (value >> 27)) * 0x94d049bb133111eb
+	return int64(value ^ (value >> 31))
 }
 
 func promotedPrograms(store *unit.Store) []string {

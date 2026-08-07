@@ -160,6 +160,69 @@ units: [{
 	dontCopy: true
 	english:  "Heuristics that contributed to this unit"
 }, {
+	name:     "CreditContext"
+	worth:    500
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Text"
+	dontCopy: true
+	english:  "Versioned context in which a reward is informative"
+}, {
+	name:     "CreditDecision"
+	worth:    500
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Text"
+	dontCopy: true
+	english:  "Canonical semantic identity of a rewarded decision"
+}, {
+	name:     "CreditRoles"
+	worth:    500
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Text"
+	dontCopy: true
+	english:  "Roles aligned with a derived unit's creditors"
+}, {
+	name:     "CreditSubject"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Text"
+	dontCopy: true
+	english:  "Decision or component identity receiving contextual credit"
+}, {
+	name:     "CreditRole"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Text"
+	dontCopy: true
+	english:  "Role in which a contextual-credit subject was useful"
+}, {
+	name:     "RewardTotal"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Integer"
+	dontCopy: true
+	english:  "Accumulated reward for one contextual-credit tuple"
+}, {
+	name:     "EvidenceCount"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Integer"
+	dontCopy: true
+	english:  "Number of rewards aggregated into a contextual-credit record"
+}, {
+	name:     "LastSourceUnit"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Unit"
+	dontCopy: true
+	english:  "Most recent useful unit that contributed contextual credit"
+}, {
+	name:     "LastRewardTaskNum"
+	worth:    300
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "Integer"
+	dontCopy: true
+	english:  "Engine task counter when contextual reward was processed"
+}, {
 	name:     "Applics"
 	worth:    500
 	isA:      ["Slot", "NonCriterialSlot", "Anything"]

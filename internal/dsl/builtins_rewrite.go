@@ -16,6 +16,7 @@ func init() {
 		"rewrite-rule-applies?": bRewriteRuleApplies,
 		"rewrite-output-length": bRewriteOutputLength,
 		"rewrite-compose-name":  bRewriteComposeName,
+		"rewrite-decision-key":  bRewriteDecisionKey,
 		"rewrite-artifact-name": bRewriteArtifactName,
 	})
 }
@@ -108,6 +109,12 @@ func bRewriteComposeName(vm *VM) error {
 	second, first := vm.pop().AsString(), vm.pop().AsString()
 	base := "Compose." + encodeRewriteIdentity(first) + "." + encodeRewriteIdentity(second)
 	vm.push(StringVal(freshRewriteName(vm, base)))
+	return nil
+}
+
+func bRewriteDecisionKey(vm *VM) error {
+	second, first := vm.pop().AsString(), vm.pop().AsString()
+	vm.push(StringVal(rewritevocab.DecisionKey(first, second)))
 	return nil
 }
 

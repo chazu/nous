@@ -3,14 +3,24 @@
 package rewrite
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
 
 const (
-	MaxTextBytes = 256
-	MaxRuleBytes = 8
+	MaxTextBytes    = 256
+	MaxRuleBytes    = 8
+	CreditContext   = "rewrite/ordered-distinct-pairs/v1"
+	SynthesisMethod = "ordered-distinct-pairs/v1"
 )
+
+// DecisionKey identifies the semantic ordered composition independently of
+// the allocated composite unit name.
+func DecisionKey(first, second string) string {
+	encoded, _ := json.Marshal([]string{SynthesisMethod, first, second})
+	return string(encoded)
+}
 
 // Rule is one global, non-overlapping, left-to-right replacement pass.
 type Rule struct {

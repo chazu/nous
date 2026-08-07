@@ -21,21 +21,61 @@ func TestGeneratedRobustnessTrial(t *testing.T) {
 	}
 }
 
-func TestCreditCurriculumShowsSpecificAndNegativeTransfer(t *testing.T) {
-	report, err := RunCurriculum(testDomainsDir, 4243, 30, 4)
+func TestContextualCreditPreservesReuseAndRestoresExploration(t *testing.T) {
+	report, err := RunCurriculum(testDomainsDir, 4243, 90, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	reuse := report.Cohorts["reuse-both"]
-	if reuse.Learned.Solved != reuse.Learned.Tasks || reuse.Learned.MeanEvaluations > 2 {
-		t.Fatalf("credit did not prioritize exact reuse: %+v", reuse)
+	if reuse.Contextual.Solved != reuse.Contextual.Tasks || reuse.Contextual.MeanEvaluations != 1 {
+		t.Fatalf("contextual credit did not prioritize exact reuse: %+v", reuse)
 	}
 	unrelated := report.Cohorts["unrelated"]
-	if unrelated.Learned.Solved != 0 || unrelated.Exhaustive.Solved != unrelated.Exhaustive.Tasks {
-		t.Fatalf("negative-transfer control did not separate learned and exhaustive search: %+v", unrelated)
+	if unrelated.Contextual.Solved <= unrelated.Scalar.Solved || unrelated.Exhaustive.Solved != unrelated.Exhaustive.Tasks {
+		t.Fatalf("exploration did not improve scalar negative transfer: %+v", unrelated)
 	}
 	if report.Cohorts["reuse-one"].Exhaustive.Solved != report.Cohorts["reuse-one"].Exhaustive.Tasks {
 		t.Fatalf("reuse-one corpus was not solvable: %+v", report.Cohorts["reuse-one"])
+	}
+	if report.Overall.Contextual.Solved <= report.Overall.Scalar.Solved || report.Overall.Contextual.Solved <= report.Overall.ScalarReserved.Solved {
+		t.Fatalf("contextual policy did not improve overall: %+v", report.Overall)
+	}
+	for name, strategy := range map[string]StrategyReport{
+		"contextual": report.Overall.Contextual, "scalar": report.Overall.Scalar,
+		"scalar-reserved": report.Overall.ScalarReserved, "reset": report.Overall.Reset,
+		"randomized": report.Overall.Randomized,
+	} {
+		if strategy.MaxEvaluations > report.Budget || strategy.Evaluations > strategy.Tasks*report.Budget {
+			t.Fatalf("%s exceeded budget: %+v", name, strategy)
+		}
+	}
+	if report.Isolation.Checks != report.Curricula || report.Isolation.WrongContextMatches != report.Curricula || report.Isolation.AbsentContextMatches != report.Curricula {
+		t.Fatalf("isolation controls = %+v", report.Isolation)
+	}
+	for name, paired := range report.Paired {
+		if paired.ContextualWins+paired.ContextualLosses+paired.Ties != report.Curricula {
+			t.Fatalf("paired %s = %+v", name, paired)
+		}
+	}
+}
+
+func TestSolveWithinBudgetStopsWithoutReadingTargetLabel(t *testing.T) {
+	problem := problem{
+		Rules: []ruleSpec{
+			{Name: "P0", Left: "a", Right: "b"},
+			{Name: "P1", Left: "b", Right: "c"},
+			{Name: "P2", Left: "a", Right: "x"},
+			{Name: "P3", Left: "x", Right: "y"},
+		},
+		Target:   pair{First: 2, Second: 3}, // deliberately unrelated to the corpus
+		Examples: []example{{Name: "E", Input: "a", Expected: "c"}},
+	}
+	order := []pair{{2, 3}, {0, 1}, {1, 0}}
+	if solved, evaluations := solveWithinBudget(problem, order, 1); solved || evaluations != 1 {
+		t.Fatalf("budget-one result = solved %v evaluations %d", solved, evaluations)
+	}
+	if solved, evaluations := solveWithinBudget(problem, order, 2); !solved || evaluations != 2 {
+		t.Fatalf("budget-two result = solved %v evaluations %d", solved, evaluations)
 	}
 }
 

@@ -18,6 +18,15 @@ package domains
 	generalizations?: [...string]
 	specializations?: [...string]
 	creditors?:       [...string]
+	creditContext?:   string
+	creditDecision?:  string
+	creditRoles?:     [...string]
+	creditSubject?:   string
+	creditRole?:      string
+	rewardTotal?:     int & >=0
+	evidenceCount?:   int & >=0
+	lastSourceUnit?:  string
+	lastRewardTaskNum?: int & >=0
 	inverse?:         string
 	status?:          string
 	overallRecord?: {successes: int, failures: int}

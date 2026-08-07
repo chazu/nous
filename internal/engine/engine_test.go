@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/credit"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
@@ -450,6 +451,111 @@ func TestWorthGrowthReward(t *testing.T) {
 	eng.rewardForWorthGrowth()
 	if hCreator.Worth() != 600 {
 		t.Errorf("expected H-Creator worth still 600 after second call, got %d", hCreator.Worth())
+	}
+}
+
+func TestWorthGrowthRecordsContextualCreditOnce(t *testing.T) {
+	store := unit.NewStore()
+	eng := New(store, agenda.New())
+	eng.Verbosity = 0
+	eng.TaskNum = 17
+
+	creator := unit.New("Creator")
+	creator.SetWorth(500)
+	store.Put(creator)
+	capped := unit.New("Capped")
+	capped.SetWorth(950)
+	store.Put(capped)
+
+	child := unit.New("UsefulChild")
+	child.SetWorth(700)
+	child.Set("creditors", []string{"Creator", "Capped", "Missing"})
+	child.Set("creditRoles", []string{"synthesis", "first", "second"})
+	child.Set("creditContext", "test/context/v1")
+	child.Set("creditDecision", "decision/A>B")
+	child.Set("creationWorth", 500)
+	child.Set("lastRewardedWorth", 500)
+	store.Put(child)
+
+	eng.rewardForWorthGrowth()
+	if creator.Worth() != 600 || capped.Worth() != 1000 || child.GetInt("lastRewardedWorth") != 700 {
+		t.Fatalf("scalar state creator=%d capped=%d baseline=%d", creator.Worth(), capped.Worth(), child.GetInt("lastRewardedWorth"))
+	}
+	assertCredit := func(tuple credit.Tuple, amount int) {
+		t.Helper()
+		record := credit.Lookup(store, tuple)
+		if record == nil || record.GetInt("rewardTotal") != amount || record.GetInt("evidenceCount") != 1 || record.GetInt("lastRewardTaskNum") != 17 {
+			t.Fatalf("credit %v = %#v, want %d", tuple, record, amount)
+		}
+		if record.Worth() != 0 || record.Has("creditors") || record.Has("creationWorth") || record.Has("lastRewardedWorth") {
+			t.Fatalf("credit record can recursively reward: %#v", record.Slots)
+		}
+	}
+	assertCredit(credit.DecisionTuple("test/context/v1", "decision/A>B"), 200)
+	assertCredit(credit.Tuple{Context: "test/context/v1", Subject: "Creator", Role: "synthesis"}, 100)
+	assertCredit(credit.Tuple{Context: "test/context/v1", Subject: "Capped", Role: "first"}, 50)
+	if credit.RewardTotal(store, credit.Tuple{Context: "test/context/v1", Subject: "Missing", Role: "second"}) != 0 {
+		t.Fatal("missing creditor received contextual credit")
+	}
+
+	eng.rewardForWorthGrowth()
+	if credit.RewardTotal(store, credit.DecisionTuple("test/context/v1", "decision/A>B")) != 200 || creator.Worth() != 600 {
+		t.Fatal("second reward pass double-counted credit")
+	}
+}
+
+func TestWorthGrowthMalformedContextFailsClosed(t *testing.T) {
+	store := unit.NewStore()
+	eng := New(store, agenda.New())
+	creator := unit.New("Creator")
+	creator.SetWorth(500)
+	store.Put(creator)
+	child := unit.New("Child")
+	child.SetWorth(600)
+	child.Set("creditors", []string{"Creator"})
+	child.Set("creditRoles", []string{})
+	child.Set("creditContext", "test/context/v1")
+	child.Set("creditDecision", "decision")
+	child.Set("creationWorth", 500)
+	child.Set("lastRewardedWorth", 500)
+	store.Put(child)
+
+	eng.rewardForWorthGrowth()
+	if creator.Worth() != 550 || child.GetInt("lastRewardedWorth") != 600 {
+		t.Fatalf("legacy reward changed: creator=%d baseline=%d", creator.Worth(), child.GetInt("lastRewardedWorth"))
+	}
+	if got := store.Examples(credit.Category); len(got) != 0 {
+		t.Fatalf("malformed declaration wrote contextual records: %v", got)
+	}
+}
+
+func TestWorthGrowthPreservesSinglePointAccumulation(t *testing.T) {
+	store := unit.NewStore()
+	eng := New(store, agenda.New())
+	creator := unit.New("Creator")
+	creator.SetWorth(500)
+	store.Put(creator)
+	child := unit.New("Child")
+	child.SetWorth(501)
+	child.Set("creditors", []string{"Creator"})
+	child.Set("creditRoles", []string{"creator"})
+	child.Set("creditContext", "test/context/v1")
+	child.Set("creditDecision", "decision")
+	child.Set("creationWorth", 500)
+	child.Set("lastRewardedWorth", 500)
+	store.Put(child)
+
+	eng.rewardForWorthGrowth()
+	if creator.Worth() != 500 || child.GetInt("lastRewardedWorth") != 500 {
+		t.Fatal("single-point growth consumed the legacy baseline")
+	}
+	child.SetWorth(502)
+	eng.rewardForWorthGrowth()
+	if creator.Worth() != 501 || child.GetInt("lastRewardedWorth") != 502 {
+		t.Fatalf("accumulated reward = creator %d baseline %d", creator.Worth(), child.GetInt("lastRewardedWorth"))
+	}
+	if credit.RewardTotal(store, credit.DecisionTuple("test/context/v1", "decision")) != 2 {
+		t.Fatal("contextual decision did not receive accumulated delta")
 	}
 }
 

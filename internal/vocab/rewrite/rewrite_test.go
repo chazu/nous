@@ -28,6 +28,16 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+func TestDecisionKeyIsOrderedAndUnambiguous(t *testing.T) {
+	first := DecisionKey("a/b", "c")
+	if first == DecisionKey("a", "b/c") || first == DecisionKey("c", "a/b") {
+		t.Fatal("decision key lost tuple boundaries or order")
+	}
+	if first != DecisionKey("a/b", "c") {
+		t.Fatal("decision key is not deterministic")
+	}
+}
+
 func TestApplyIsOnePassAndNonOverlapping(t *testing.T) {
 	tests := []struct {
 		input string

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/credit"
 	"github.com/chazu/nous/internal/unit"
 )
 
@@ -15,6 +16,19 @@ func testVM(t *testing.T) *VM {
 	vm := NewVM(s, ag, nil)
 	vm.Out = &bytes.Buffer{}
 	return vm
+}
+
+func TestContextCreditLookupWord(t *testing.T) {
+	vm := testVM(t)
+	credit.Upsert(vm.Store, credit.Tuple{Context: "ctx", Subject: "subject", Role: "role"}, 42, credit.Provenance{})
+	value, err := vm.Execute(`"ctx" "subject" "role" context-credit`)
+	if err != nil || value.AsInt() != 42 {
+		t.Fatalf("context-credit = (%v,%v), want 42", value, err)
+	}
+	value, err = vm.Execute(`"other" "subject" "role" context-credit`)
+	if err != nil || value.AsInt() != 0 {
+		t.Fatalf("isolated context-credit = (%v,%v), want 0", value, err)
+	}
 }
 
 func TestArithmetic(t *testing.T) {

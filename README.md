@@ -17,7 +17,8 @@ heuristics. The `protocols` pack is the first blinded transfer experiment: it
 tests every finite-state protocol transform against every candidate relation,
 retaining evidence for the schemas it promotes. The `rewrite` pack advances
 from selection to construction by synthesizing executable two-step string
-transformations and crediting the components of the successful program.
+transformations, recording contextual credit for successful decisions and
+components, and testing that credit under a hard exploration budget.
 
 ## Run it
 

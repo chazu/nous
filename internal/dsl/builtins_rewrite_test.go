@@ -83,4 +83,12 @@ func TestRewriteNamesPreserveOrderAndAvoidOccupiedIdentities(t *testing.T) {
 	if err != nil || fresh.AsString() == forward.AsString() || !strings.Contains(fresh.AsString(), "collision-1") {
 		t.Fatalf("fresh identity = (%q,%v)", fresh.AsString(), err)
 	}
+	firstKey, err := vm.Execute(`"a-then-b" "c" rewrite-decision-key`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondKey, err := vm.Execute(`"a-then-b" "c" rewrite-decision-key`)
+	if err != nil || firstKey.AsString() != secondKey.AsString() {
+		t.Fatalf("semantic decision key changed across occupied names: %q %q", firstKey.AsString(), secondKey.AsString())
+	}
 }

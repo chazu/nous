@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/credit"
 	"github.com/chazu/nous/internal/unit"
 )
 
@@ -49,13 +50,14 @@ var builtins = map[string]builtinFn{
 	"@": bFetch,
 
 	// Unit/store ops
-	"get-slot":     bGetSlot,
-	"set-slot":     bSetSlot,
-	"isa?":         bIsA,
-	"examples":     bExamples,
-	"create-unit":  bCreateUnit,
-	"kill-unit":    bKillUnit,
-	"unit-exists?": bUnitExists,
+	"get-slot":       bGetSlot,
+	"set-slot":       bSetSlot,
+	"isa?":           bIsA,
+	"examples":       bExamples,
+	"create-unit":    bCreateUnit,
+	"kill-unit":      bKillUnit,
+	"unit-exists?":   bUnitExists,
+	"context-credit": bContextCredit,
 
 	// Agenda
 	"add-task": bAddTask,
@@ -372,6 +374,17 @@ func bExamples(vm *VM) error {
 		vals[i] = StringVal(n)
 	}
 	vm.push(ListVal(vals))
+	return nil
+}
+
+// context-credit: ( context subject role -- rewardTotal )
+func bContextCredit(vm *VM) error {
+	role, subject, contextName := vm.pop().AsString(), vm.pop().AsString(), vm.pop().AsString()
+	vm.push(IntVal(credit.RewardTotal(vm.Store, credit.Tuple{
+		Context: contextName,
+		Subject: subject,
+		Role:    role,
+	})))
 	return nil
 }
 

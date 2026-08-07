@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/chazu/nous/internal/credit"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -24,22 +25,27 @@ func (e *Engine) punishCreators(unitName string, snapshot map[string]any) {
 	}
 }
 
-// rewardCreators boosts the Worth of creditors by the given amount.
-func (e *Engine) rewardCreators(unitName string, amount int) {
+// rewardCreators boosts the Worth of creditors by the given amount and
+// returns each creditor's actual post-clamp increase, aligned with creditors.
+func (e *Engine) rewardCreators(unitName string, amount int) []int {
 	u := e.Store.Get(unitName)
 	if u == nil {
-		return
+		return nil
 	}
-	for _, creditor := range u.GetStrings("creditors") {
+	creditors := u.GetStrings("creditors")
+	actual := make([]int, len(creditors))
+	for index, creditor := range creditors {
 		c := e.Store.Get(creditor)
 		if c == nil {
 			continue
 		}
 		oldWorth := c.Worth()
 		c.SetWorth(oldWorth + amount)
+		actual[index] = c.Worth() - oldWorth
 		e.log(2, "  Credit: boosted Worth of %s from %d to %d (created useful unit %s)",
 			creditor, oldWorth, c.Worth(), unitName)
 	}
+	return actual
 }
 
 // rewardForWorthGrowth rewards creditors when a unit's worth grows above its last rewarded baseline.
@@ -66,7 +72,25 @@ func (e *Engine) rewardForWorthGrowth() {
 			delta := currentWorth - lastRewarded
 			reward := delta / 2
 			if reward > 0 {
-				e.rewardCreators(name, reward)
+				contextName := u.GetString("creditContext")
+				decision := u.GetString("creditDecision")
+				roles := u.GetStrings("creditRoles")
+				contextual := contextName != "" && credit.ValidDeclaration(contextName, decision, creditors, roles)
+				actual := e.rewardCreators(name, reward)
+				if contextual {
+					provenance := credit.Provenance{SourceUnit: name, RewardTaskNum: e.TaskNum}
+					credit.Upsert(e.Store, credit.DecisionTuple(contextName, decision), delta, provenance)
+					for index, creditor := range creditors {
+						if actual[index] <= 0 {
+							continue
+						}
+						credit.Upsert(e.Store, credit.Tuple{
+							Context: contextName,
+							Subject: creditor,
+							Role:    roles[index],
+						}, actual[index], provenance)
+					}
+				}
 				u.Set("lastRewardedWorth", currentWorth)
 				e.log(2, "  Reward: %s grew %d->%d, rewarding creditors +%d",
 					name, lastRewarded, currentWorth, reward)
@@ -84,7 +108,7 @@ func (e *Engine) rewardForWorthGrowth() {
 //   - args:    input units for op applications (nil for heuristic firings)
 //   - output:  the result unit name for op applications (empty otherwise)
 //   - direct:  true if this was a direct application (vs. inherited from
-//              generalization). Defaults to true.
+//     generalization). Defaults to true.
 //
 // Older code that writes only {taskNum, target, result} keeps working —
 // the extra fields are optional.
