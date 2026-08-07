@@ -1,6 +1,9 @@
 package unit
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestStoreBasics(t *testing.T) {
 	s := NewStore()
@@ -26,6 +29,21 @@ func TestStoreBasics(t *testing.T) {
 	}
 	if got.Worth() != 500 {
 		t.Errorf("worth: got %d, want 500", got.Worth())
+	}
+}
+
+func TestStoreEnumerationIsSorted(t *testing.T) {
+	s := NewStore()
+	for _, name := range []string{"Zulu", "Alpha", "Mike"} {
+		u := New(name)
+		u.Set("isA", []string{"Anything"})
+		s.Put(u)
+	}
+	if got, want := s.All(), []string{"Alpha", "Mike", "Zulu"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("All() = %v, want %v", got, want)
+	}
+	if got, want := s.Examples("Anything"), []string{"Alpha", "Mike", "Zulu"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Examples() = %v, want %v", got, want)
 	}
 }
 

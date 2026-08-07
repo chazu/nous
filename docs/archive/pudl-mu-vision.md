@@ -1,4 +1,7 @@
-# nous: A EURISKO-Style Discovery System on pudl + mu
+# Historical design: a EURISKO-style discovery system on PUDL + Mu
+
+> Archived on the `eurisko-core` branch. This document records the integration
+> direction that followed source parity; it is not the active architecture.
 
 ## Overview
 

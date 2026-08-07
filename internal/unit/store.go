@@ -1,6 +1,9 @@
 package unit
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // Store holds all units in memory, keyed by name.
 type Store struct {
@@ -56,6 +59,7 @@ func (s *Store) All() []string {
 	for name := range s.units {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -108,6 +112,7 @@ func (s *Store) Examples(category string) []string {
 			result = append(result, name)
 		}
 	}
+	sort.Strings(result)
 	return result
 }
 

@@ -6,12 +6,14 @@ import "container/heap"
 
 // Task represents a unit of work: explore a particular slot of a particular unit.
 type Task struct {
-	Priority int
-	UnitName string
-	SlotName string
-	Reasons  []string
-	Extra    map[string]any
-	index    int // heap index
+	Priority  int
+	UnitName  string
+	SlotName  string
+	Reasons   []string
+	Extra     map[string]any
+	index     int // heap index
+	sequence  uint64
+	lookupKey string
 }
 
 func taskKey(unitName, slotName string) string {
@@ -20,8 +22,9 @@ func taskKey(unitName, slotName string) string {
 
 // Agenda is a priority queue of tasks with duplicate merging.
 type Agenda struct {
-	tasks  taskHeap
-	lookup map[string]*Task
+	tasks        taskHeap
+	lookup       map[string]*Task
+	nextSequence uint64
 }
 
 // New creates an empty agenda.
@@ -46,7 +49,7 @@ func (a *Agenda) Push(t *Task) {
 				a.mergeInto(a.lookup[key], t)
 				return
 			}
-			heap.Push(&a.tasks, t)
+			a.enqueue(key, t)
 			a.lookup[key] = t
 			return
 		}
@@ -54,11 +57,27 @@ func (a *Agenda) Push(t *Task) {
 		a.mergeInto(existing, t)
 		return
 	}
-	heap.Push(&a.tasks, t)
+	a.enqueue(key, t)
 	a.lookup[key] = t
 }
 
+func (a *Agenda) enqueue(key string, t *Task) {
+	t.sequence = a.nextSequence
+	a.nextSequence++
+	t.lookupKey = key
+	heap.Push(&a.tasks, t)
+}
+
 func (a *Agenda) mergeInto(existing, t *Task) {
+	// A bare task is a request to explore a slot; a populated task is the
+	// concrete proposal produced by that exploration. Never let merging erase
+	// the proposal merely because the bare request reached the queue first.
+	if len(existing.Extra) == 0 && len(t.Extra) > 0 {
+		existing.Extra = make(map[string]any, len(t.Extra))
+		for key, value := range t.Extra {
+			existing.Extra[key] = value
+		}
+	}
 	newPri := existing.Priority
 	if t.Priority > newPri {
 		newPri = t.Priority
@@ -91,7 +110,7 @@ func (a *Agenda) Pop() *Task {
 		return nil
 	}
 	t := heap.Pop(&a.tasks).(*Task)
-	delete(a.lookup, taskKey(t.UnitName, t.SlotName))
+	delete(a.lookup, t.lookupKey)
 	return t
 }
 
@@ -137,8 +156,13 @@ func (a *Agenda) Peek() *Task {
 // taskHeap implements heap.Interface for max-priority ordering.
 type taskHeap []*Task
 
-func (h taskHeap) Len() int           { return len(h) }
-func (h taskHeap) Less(i, j int) bool { return h[i].Priority > h[j].Priority } // max-heap
+func (h taskHeap) Len() int { return len(h) }
+func (h taskHeap) Less(i, j int) bool {
+	if h[i].Priority == h[j].Priority {
+		return h[i].sequence < h[j].sequence
+	}
+	return h[i].Priority > h[j].Priority
+}
 func (h taskHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
 	h[i].index = i

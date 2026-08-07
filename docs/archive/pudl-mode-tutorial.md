@@ -1,4 +1,7 @@
-# Tutorial: Running the Full Pipeline
+# Historical tutorial: running the PUDL observation pipeline
+
+> Archived on the `eurisko-core` branch. The commands below describe the
+> removed Mode 2 integration and are not supported by the current CLI.
 
 This walks through the complete loop: agents observe a codebase, nous reasons over the observations, and discoveries flow back to pudl for querying.
 

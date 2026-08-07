@@ -1,5 +1,25 @@
 units: [
 	{
+		name:  "MathConcept"
+		worth: 500
+		isA: ["Anything"]
+	},
+	{
+		name:  "MathObj"
+		worth: 500
+		isA: ["MathConcept", "Anything"]
+	},
+	{
+		name:  "MathOp"
+		worth: 500
+		isA: ["MathConcept", "Anything"]
+	},
+	{
+		name:  "MathPred"
+		worth: 500
+		isA: ["MathConcept", "Anything"]
+	},
+	{
 		name:  "Structure"
 		worth: 600
 		isA: ["MathObj", "Anything"]

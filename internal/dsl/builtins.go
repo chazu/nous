@@ -49,12 +49,12 @@ var builtins = map[string]builtinFn{
 	"@": bFetch,
 
 	// Unit/store ops
-	"get-slot":    bGetSlot,
-	"set-slot":    bSetSlot,
-	"isa?":        bIsA,
-	"examples":    bExamples,
-	"create-unit": bCreateUnit,
-	"kill-unit":   bKillUnit,
+	"get-slot":     bGetSlot,
+	"set-slot":     bSetSlot,
+	"isa?":         bIsA,
+	"examples":     bExamples,
+	"create-unit":  bCreateUnit,
+	"kill-unit":    bKillUnit,
 	"unit-exists?": bUnitExists,
 
 	// Agenda
@@ -66,21 +66,25 @@ var builtins = map[string]builtinFn{
 	"starts-with?": bStartsWith,
 
 	// List
-	"list-length": bListLength,
-	"list-append": bListAppend,
-	"list-contains": bListContains,
+	"list-length":    bListLength,
+	"list-append":    bListAppend,
+	"list-contains":  bListContains,
 	"to-string-list": bToStringList,
 
 	// List/Bag ops (Phase 5.5 parity)
-	"list-concat":        bListConcat,
-	"list-equal?":        bListEqual,
-	"list-remove-all":    bListRemoveAll,
-	"list-remove-one":    bListRemoveOne,
-	"list-intersect-ord": bListIntersectOrd,
-	"list-diff-ord":      bListDiffOrd,
-	"bag-equal?":         bBagEqual,
-	"bag-intersect":      bBagIntersect,
-	"bag-diff":           bBagDiff,
+	"list-concat":          bListConcat,
+	"list-equal?":          bListEqual,
+	"list-remove-all":      bListRemoveAll,
+	"list-remove-one":      bListRemoveOne,
+	"list-intersect-ord":   bListIntersectOrd,
+	"list-diff-ord":        bListDiffOrd,
+	"collection-union":     bCollectionUnion,
+	"collection-intersect": bCollectionIntersect,
+	"collection-diff":      bCollectionDiff,
+	"collection-equal?":    bCollectionEqual,
+	"bag-equal?":           bBagEqual,
+	"bag-intersect":        bBagIntersect,
+	"bag-diff":             bBagDiff,
 
 	// Output
 	"print": bPrint,
@@ -117,20 +121,20 @@ var builtins = map[string]builtinFn{
 	"random-int":    bRandomInt,
 
 	// Specialization pipeline
-	"add-spec-task":       bAddSpecTask,
-	"add-gen-task":        bAddGenTask,
-	"replace-slot-value":  bReplaceSlotValue,
-	"record-slot-change":  bRecordSlotChange,
-	"new-units":           bNewUnits,
-	"add-to-slot":         bAddToSlot,
-	"record-applic":       bRecordApplic,
-	"list-of":             bListOf,
-	"list-join":           bListJoin,
-	"applics-outputs":     bApplicsOutputs,
-	"applics-args":        bApplicsArgs,
-	"applics-direct":      bApplicsDirect,
-	"applics-bad?":        bApplicsBad,
-	"make-protoconjec":    bMakeProtoConjec,
+	"add-spec-task":      bAddSpecTask,
+	"add-gen-task":       bAddGenTask,
+	"replace-slot-value": bReplaceSlotValue,
+	"record-slot-change": bRecordSlotChange,
+	"new-units":          bNewUnits,
+	"add-to-slot":        bAddToSlot,
+	"record-applic":      bRecordApplic,
+	"list-of":            bListOf,
+	"list-join":          bListJoin,
+	"applics-outputs":    bApplicsOutputs,
+	"applics-args":       bApplicsArgs,
+	"applics-direct":     bApplicsDirect,
+	"applics-bad?":       bApplicsBad,
+	"make-protoconjec":   bMakeProtoConjec,
 	// "is-interesting?" is registered in init() to avoid an init cycle
 	// (it calls vm.Execute, which looks up builtins).
 
@@ -587,6 +591,84 @@ func bListDiffOrd(vm *VM) error {
 	return nil
 }
 
+// collection-* treats lists of any Value kind as mathematical sets. The
+// first occurrence determines output order, so results are deterministic and
+// useful to non-numeric domain vocabularies as well as the math vocabulary.
+func bCollectionUnion(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	out := append([]Value(nil), a...)
+	for _, candidate := range b {
+		if !containsValue(out, candidate) {
+			out = append(out, candidate)
+		}
+	}
+	vm.push(ListVal(deduplicateValues(out)))
+	return nil
+}
+
+func bCollectionIntersect(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	var out []Value
+	for _, candidate := range a {
+		if containsValue(b, candidate) && !containsValue(out, candidate) {
+			out = append(out, candidate)
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+func bCollectionDiff(vm *VM) error {
+	b := vm.pop().AsList()
+	a := vm.pop().AsList()
+	var out []Value
+	for _, candidate := range a {
+		if !containsValue(b, candidate) && !containsValue(out, candidate) {
+			out = append(out, candidate)
+		}
+	}
+	vm.push(ListVal(out))
+	return nil
+}
+
+func bCollectionEqual(vm *VM) error {
+	b := deduplicateValues(vm.pop().AsList())
+	a := deduplicateValues(vm.pop().AsList())
+	if len(a) != len(b) {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	for _, candidate := range a {
+		if !containsValue(b, candidate) {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+	vm.push(BoolVal(true))
+	return nil
+}
+
+func containsValue(values []Value, candidate Value) bool {
+	for _, value := range values {
+		if value.Equal(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func deduplicateValues(values []Value) []Value {
+	out := make([]Value, 0, len(values))
+	for _, value := range values {
+		if !containsValue(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 // bagCounts builds a count map keyed by v.AsString() — sufficient for seed
 // data where elements are primitives rendering to unique strings.
 func bagCounts(list []Value) map[string]int {
@@ -894,8 +976,13 @@ func bAllSlots(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	var slots []Value
+	keys := make([]string, 0, len(u.Slots))
 	for k := range u.Slots {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	slots := make([]Value, 0, len(keys))
+	for _, k := range keys {
 		slots = append(slots, StringVal(k))
 	}
 	vm.push(ListVal(slots))
@@ -909,8 +996,13 @@ func bCriterialSlots(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	var slots []Value
+	keys := make([]string, 0, len(u.Slots))
 	for k := range u.Slots {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var slots []Value
+	for _, k := range keys {
 		if vm.Store.IsA(slotDefName(k), "CriterialSlot") {
 			slots = append(slots, StringVal(k))
 		}
@@ -926,8 +1018,13 @@ func bNonCriterialSlots(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	var slots []Value
+	keys := make([]string, 0, len(u.Slots))
 	for k := range u.Slots {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var slots []Value
+	for _, k := range keys {
 		if vm.Store.IsA(slotDefName(k), "NonCriterialSlot") {
 			slots = append(slots, StringVal(k))
 		}

@@ -403,4 +403,10 @@ units: [{
 	isA:      ["Slot", "NonCriterialSlot", "Anything"]
 	dataType: "Number"
 	english:  "Times this conjecture has been re-derived (evidence strength)"
+	}, {
+	name:     "InitialTasks"
+	worth:    400
+	isA:      ["Slot", "NonCriterialSlot", "Anything"]
+	dataType: "List"
+	english:  "Vocabulary-defined agenda tasks to enqueue at startup"
 }]

@@ -3,7 +3,6 @@
 // Usage:
 //
 //	nous run [-v N] [-cycles N] [-domain NAME]
-//	nous run -domain observations -pudl ~/.pudl
 package main
 
 import (
@@ -15,7 +14,6 @@ import (
 
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/engine"
-	"github.com/chazu/nous/internal/pudlbridge"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -28,10 +26,6 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		runCmd(os.Args[2:])
-	case "init":
-		initCmd(os.Args[2:])
-	case "guide":
-		guideCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -46,7 +40,6 @@ func runCmd(args []string) {
 	maxCycles := fs.Int("cycles", 100, "maximum number of cycles")
 	domain := fs.String("domain", "math", "seed domain to load ("+seed.Available()+")")
 	noMutate := fs.Bool("no-mutate", false, "disable heuristic mutation")
-	pudlDir := fs.String("pudl", "", "pudl config directory (enables Mode 2, reads from pudl fact store)")
 	domainsDir := fs.String("domains-dir", "", "filesystem path to domains/ directory")
 	fs.Parse(args)
 
@@ -73,26 +66,6 @@ func runCmd(args []string) {
 		os.Exit(1)
 	}
 
-	// Mode 2: load facts from pudl
-	var bridge *pudlbridge.Bridge
-	if *pudlDir != "" {
-		var err error
-		bridge, err = pudlbridge.New(*pudlDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error opening pudl: %v\n", err)
-			os.Exit(1)
-		}
-		defer bridge.Close()
-
-		obsCount, err := bridge.LoadObservations(store)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading observations: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("nous: loaded %d observations from pudl\n", obsCount)
-	}
-
 	fmt.Printf("nous: loaded %d units (%d heuristics)\n",
 		store.Count(), len(store.Examples("Heuristic")))
 
@@ -117,71 +90,9 @@ func runCmd(args []string) {
 		os.Exit(1)
 	}
 
-	// Write discoveries back to pudl
-	if bridge != nil {
-		writeDiscoveries(bridge, store)
-	}
-
 	// Print final state
 	fmt.Printf("\n%s\n", eng.Stats())
 	eng.DumpWorths()
-}
-
-// writeDiscoveries records new units created during the run back to pudl.
-func writeDiscoveries(bridge *pudlbridge.Bridge, store *unit.Store) {
-	for _, name := range store.All() {
-		u := store.Get(name)
-		if u == nil {
-			continue
-		}
-		isA := u.GetStrings("isA")
-
-		// Write conjectures back as observations
-		for _, t := range isA {
-			if t == "Conjecture" {
-				desc := u.GetString("english")
-				if desc == "" {
-					desc = name
-				}
-				kind := u.GetString("kind")
-				if kind == "" {
-					kind = "pattern"
-				}
-				_, err := bridge.WriteFact("observation", map[string]interface{}{
-					"kind":        kind,
-					"description": desc,
-					"source":      "nous",
-					"status":      "raw",
-					"worth":       float64(u.GetInt("worth")) / 1000.0,
-				}, "nous")
-				if err != nil {
-					// Dedup conflict is fine — means we already wrote this
-					continue
-				}
-				fmt.Printf("nous → pudl: %s\n", desc)
-				break
-			}
-		}
-
-		// Write repo hotspots back
-		for _, t := range isA {
-			if t == "ScopeHotspot" {
-				scope := u.GetString("scope")
-				count := u.GetInt("observation_count")
-				if scope != "" {
-					_, err := bridge.WriteFact("scope_hotspot", map[string]interface{}{
-						"scope":             scope,
-						"observation_count": count,
-					}, "nous")
-					if err != nil {
-						continue
-					}
-					fmt.Printf("nous → pudl: hotspot %s (%d observations)\n", scope, count)
-				}
-				break
-			}
-		}
-	}
 }
 
 func usage() {
@@ -189,8 +100,6 @@ func usage() {
 
 Usage:
   nous run [-v N] [-cycles N] [-domain NAME]    Run the discovery engine
-  nous init                                     Install agent hooks in current project
-  nous guide [topic]                            Agent guides (observations, query, scope, overview)
   nous help                                     Show this help
 
 Flags:
@@ -199,7 +108,6 @@ Flags:
   -domain NAME    Seed domain to load (default: math)
   -domains-dir D  Filesystem path to domains/ directory
   -no-mutate      Disable heuristic mutation
-  -pudl DIR       pudl config directory (Mode 2: reason over pudl facts)
 `)
 	os.Exit(1)
 }

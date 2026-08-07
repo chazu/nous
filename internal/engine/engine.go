@@ -256,37 +256,34 @@ func (e *Engine) SeedInitialAgenda() {
 				SlotName: "examples",
 				Reasons:  []string{"Initial seed task for operator exploration"},
 			})
-			continue
 		}
-		// Phase 4.10: seed whyInt tasks for categories that already have
-		// ≥4 examples pre-populated from CUE (Set, PrimeNum, EvenNum etc).
-		// H24 can then search for shared rare predicates; without this
-		// bootstrap these categories never get a whyInt task scheduled
-		// because H-FindExamples doesn't run on them (their examples are
-		// already set) and H24-Seeder only triggers after an examples task.
-		if exs := u.GetStrings("examples"); len(exs) >= 4 {
-			e.Agenda.Push(&agenda.Task{
-				Priority: 700,
-				UnitName: name,
-				SlotName: "whyInt",
-				Reasons:  []string{"Bootstrap H24 on pre-populated category"},
-			})
-		}
-		// Phase 5.12: seed examples tasks for MultEleStruc units that already
-		// have ≥1 example pre-populated from CUE (BagOfTallies etc).
-		// H29 mutates known examples to discover new ones; without this
-		// bootstrap MultEleStruc units never appear on the agenda because
-		// SeedInitialAgenda only seeds Op units and H29-Seeder only fires
-		// after a MultEleStruc examples task is processed.
-		if e.Store.IsA(name, "MultEleStruc") && name != "MultEleStruc" {
-			if exs := u.GetStrings("examples"); len(exs) >= 1 {
-				e.Agenda.Push(&agenda.Task{
-					Priority: 700,
-					UnitName: name,
-					SlotName: "examples",
-					Reasons:  []string{"Bootstrap H29 on pre-populated MultEleStruc"},
-				})
+		// Domain-specific bootstraps are data. This keeps the kernel from
+		// naming H24, H29, mathematical structure types, or future domain
+		// heuristics while still letting a vocabulary start its experiment.
+		initialTasks, _ := u.Get("initialTasks").([]any)
+		for _, raw := range initialTasks {
+			taskDef, ok := raw.(map[string]any)
+			if !ok {
+				continue
 			}
+			slotName, _ := taskDef["slot"].(string)
+			if slotName == "" {
+				continue
+			}
+			priority, _ := taskDef["priority"].(int)
+			if priority == 0 {
+				priority = 500
+			}
+			reason, _ := taskDef["reason"].(string)
+			if reason == "" {
+				reason = "Vocabulary-defined initial task"
+			}
+			e.Agenda.Push(&agenda.Task{
+				Priority: priority,
+				UnitName: name,
+				SlotName: slotName,
+				Reasons:  []string{reason},
+			})
 		}
 	}
 }
