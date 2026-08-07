@@ -13,6 +13,7 @@ import (
 	"os/signal"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/configrepairexp"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/rewriteexp"
 	"github.com/chazu/nous/internal/seed"
@@ -29,12 +30,32 @@ func main() {
 		runCmd(os.Args[2:])
 	case "rewrite-trials":
 		rewriteTrialsCmd(os.Args[2:])
+	case "configrepair-trials":
+		configurationRepairTrialsCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
 	}
+}
+
+func configurationRepairTrialsCmd(args []string) {
+	fs := flag.NewFlagSet("configrepair-trials", flag.ExitOnError)
+	domainsDir := fs.String("domains-dir", "domains", "filesystem path to domains/ directory")
+	fs.Parse(args)
+
+	report, err := configrepairexp.Run(*domainsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	encoded, err := report.JSON()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(encoded))
 }
 
 func rewriteTrialsCmd(args []string) {
@@ -135,6 +156,7 @@ func usage() {
 Usage:
   nous run [-v N] [-cycles N] [-domain NAME]    Run the discovery engine
   nous rewrite-trials [flags]                   Run rewrite experiments
+  nous configrepair-trials [flags]              Run Kubernetes/Terraform repair trials
   nous help                                     Show this help
 
 Flags:
