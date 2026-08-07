@@ -73,6 +73,9 @@ func New(store *unit.Store, ag *agenda.Agenda) *Engine {
 // Level 1: agenda-driven (pop highest-priority task, work on it)
 // Level 2: unit-focused (when agenda empty, focus on highest-Worth unit)
 func (e *Engine) Run(ctx context.Context) error {
+	if err := e.VM.InitError(); err != nil {
+		return fmt.Errorf("initialize DSL: %w", err)
+	}
 	e.VM.Out = e.Out
 
 	for e.cycle = 0; e.cycle < e.MaxCycles; e.cycle++ {

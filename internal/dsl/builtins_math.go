@@ -106,7 +106,7 @@ func init() {
 	builtins["iota"] = bIota // ( n -- [0 1 2 ... n-1] )
 
 	// Functional
-	builtins["apply-op"] = bApplyOp // ( arg1 arg2 opUnitName -- result ) run defn slot
+	builtins["apply-op"] = bApplyOp          // ( arg1 arg2 opUnitName -- result ) run defn slot
 	builtins["apply-op-args"] = bApplyOpArgs // ( argList opName -- result )
 	builtins["apply-pred"] = bApplyPred
 	builtins["run-generator"] = bRunGenerator
@@ -115,7 +115,7 @@ func init() {
 	builtins["restrict-op"] = bRestrictOp
 	builtins["invert-op"] = bInvertOp
 	builtins["applics-redundant?"] = bApplicsRedundant
-	builtins["op-depth"] = bOpDepth         // ( name -- int )
+	builtins["op-depth"] = bOpDepth            // ( name -- int )
 	builtins["max-meta-depth"] = bMaxMetaDepth // ( -- int )
 }
 
@@ -154,7 +154,7 @@ func bRunGenerator(vm *VM) error {
 	}
 	for len(out) < count && stepProg != "" && len(out) > 0 {
 		last := out[len(out)-1]
-		sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+		sub := vm.childVM()
 		sub.Out = vm.Out
 		for k, val := range vm.env {
 			sub.env[k] = val
@@ -584,7 +584,9 @@ func bListFilterGt(vm *VM) error {
 }
 
 // apply-op: ( arg1 arg2 opUnitName -- result ) for binary ops
-//           ( arg1 opUnitName -- result ) for unary ops
+//
+//	( arg1 opUnitName -- result ) for unary ops
+//
 // Looks up the "defn" slot of opUnitName and executes it with args.
 // Checks the unit's isA to determine arity.
 //
@@ -605,7 +607,7 @@ func bApplyOp(vm *VM) error {
 		return nil
 	}
 
-	sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+	sub := vm.childVM()
 	sub.Out = vm.Out
 	for k, v := range vm.env {
 		sub.env[k] = v
@@ -628,7 +630,7 @@ func bApplyOp(vm *VM) error {
 	// Phase 5.10: if this op is a Pred, update its Rarity record
 	// [freqT, numT, numF] so H24 and interestingness heuristics can find
 	// rare predicates. Applies regardless of arity.
-	if vm.Store.IsA(opName, "Pred") {
+	if vm.Store.IsA(opName, "Pred") && !result.IsNil() {
 		updateRarity(vm.Store, opName, result.Truthy())
 	}
 	vm.push(result)
@@ -719,7 +721,7 @@ func bApplyOpArgs(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+	sub := vm.childVM()
 	sub.Out = vm.Out
 	for k, v := range vm.env {
 		sub.env[k] = v
@@ -1094,7 +1096,7 @@ func bApplicsRedundant(vm *VM) error {
 			return nil
 		}
 
-		sub := NewVM(vm.Store, vm.Ag, vm.Rng)
+		sub := vm.childVM()
 		sub.Out = vm.Out
 		for k, val := range vm.env {
 			sub.env[k] = val
@@ -1252,7 +1254,7 @@ func commutativeOnSamples(vm *VM, defn string, samples []Value) bool {
 			}
 			a, b := samples[i], samples[j]
 
-			sub1 := NewVM(vm.Store, vm.Ag, vm.Rng)
+			sub1 := vm.childVM()
 			sub1.Out = vm.Out
 			for k, val := range vm.env {
 				sub1.env[k] = val
@@ -1263,7 +1265,7 @@ func commutativeOnSamples(vm *VM, defn string, samples []Value) bool {
 				return false
 			}
 
-			sub2 := NewVM(vm.Store, vm.Ag, vm.Rng)
+			sub2 := vm.childVM()
 			sub2.Out = vm.Out
 			for k, val := range vm.env {
 				sub2.env[k] = val

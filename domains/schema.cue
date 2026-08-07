@@ -12,7 +12,7 @@ package domains
 	range?:           [...string] | string
 	arity?:           int
 	defn?:            string
-	data?:            [...int] | [...string]
+	data?:            string | [...int] | [...string]
 	examples?:        _
 	nonExamples?:     _
 	generalizations?: [...string]

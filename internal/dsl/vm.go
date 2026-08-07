@@ -5,6 +5,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"sort"
 
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/unit"
@@ -12,12 +13,14 @@ import (
 
 // VM is the stack-based interpreter for nous heuristic programs.
 type VM struct {
-	stack []Value
-	env   map[string]Value
-	Store *unit.Store
-	Ag    *agenda.Agenda
-	Out   io.Writer
-	Rng   *rand.Rand // for random-choice, random-subset
+	stack   []Value
+	env     map[string]Value
+	Store   *unit.Store
+	Ag      *agenda.Agenda
+	Out     io.Writer
+	Rng     *rand.Rand // for random-choice, random-subset
+	words   map[string]builtinFn
+	initErr error
 
 	// Set by the engine before firing rules
 	CurrentTask      *agenda.Task
@@ -32,13 +35,85 @@ func NewVM(store *unit.Store, ag *agenda.Agenda, rng *rand.Rand) *VM {
 	if rng == nil {
 		rng = rand.New(rand.NewSource(42))
 	}
-	return &VM{
+	vm := &VM{
 		env:   make(map[string]Value),
 		Store: store,
 		Ag:    ag,
 		Rng:   rng,
 		Out:   os.Stdout,
+		words: cloneWords(builtins),
 	}
+	vm.initErr = vm.enableStoreVocabularyWords()
+	return vm
+}
+
+func cloneWords(source map[string]builtinFn) map[string]builtinFn {
+	out := make(map[string]builtinFn, len(source))
+	for name, fn := range source {
+		out[name] = fn
+	}
+	return out
+}
+
+// childVM creates a sub-VM with an immutable snapshot of the parent's selected
+// word registry. It deliberately does not rescan mutable store state.
+func (vm *VM) childVM() *VM {
+	child := &VM{
+		env:     make(map[string]Value),
+		Store:   vm.Store,
+		Ag:      vm.Ag,
+		Rng:     vm.Rng,
+		Out:     vm.Out,
+		words:   cloneWords(vm.words),
+		initErr: vm.initErr,
+	}
+	return child
+}
+
+// InitError reports an invalid vocabulary-extension selection.
+func (vm *VM) InitError() error { return vm.initErr }
+
+func (vm *VM) enableStoreVocabularyWords() error {
+	if vm.Store == nil || !vm.Store.Has("Vocabulary") {
+		return nil
+	}
+	var extensions []string
+	for _, name := range vm.Store.Examples("Vocabulary") {
+		if name == "Vocabulary" {
+			continue
+		}
+		u := vm.Store.Get(name)
+		if u == nil {
+			continue
+		}
+		extension := u.GetString("dslExtension")
+		if extension == "" {
+			return fmt.Errorf("vocabulary marker %q has no dslExtension", name)
+		}
+		extensions = append(extensions, extension)
+	}
+	sort.Strings(extensions)
+	for i, extension := range extensions {
+		if i > 0 && extensions[i-1] == extension {
+			return fmt.Errorf("duplicate DSL extension %q", extension)
+		}
+		wordSet, ok := vocabularyWordSets[extension]
+		if !ok {
+			return fmt.Errorf("unknown DSL extension %q", extension)
+		}
+		wordNames := make([]string, 0, len(wordSet))
+		for name := range wordSet {
+			wordNames = append(wordNames, name)
+		}
+		sort.Strings(wordNames)
+		for _, name := range wordNames {
+			if _, exists := vm.words[name]; exists {
+				return fmt.Errorf("DSL extension %q conflicts on word %q", extension, name)
+			}
+			vm.words[name] = wordSet[name]
+		}
+	}
+	return nil
 }
 
 // SetEnv sets a variable binding visible to executing programs.
@@ -57,6 +132,9 @@ func (vm *VM) GetEnv(name string) Value {
 
 // Execute runs a DSL program string and returns the top of stack (or nil).
 func (vm *VM) Execute(program string) (Value, error) {
+	if vm.initErr != nil {
+		return Nil(), vm.initErr
+	}
 	tokens := Tokenize(program)
 	vm.stack = vm.stack[:0] // reset stack
 	err := vm.run(tokens, 0, len(tokens))
@@ -228,7 +306,7 @@ found:
 }
 
 func (vm *VM) execWord(word string) error {
-	fn, ok := builtins[word]
+	fn, ok := vm.words[word]
 	if ok {
 		return fn(vm)
 	}

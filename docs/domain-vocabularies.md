@@ -14,6 +14,12 @@ put executable stack code in `defn`. Concrete inputs are units with `data`.
 Heuristics must be reachable from `Heuristic` and supply one or more IfParts
 and ThenParts programs.
 
+A pack that needs semantic primitives outside the kernel declares one
+`Vocabulary` instance with a registered `dslExtension`. Words selected this
+way exist only in that run and its child interpreters; an unselected pack
+cannot call them. Empty, duplicate, and unknown extension identifiers fail VM
+initialization.
+
 Operations receive an `examples` task automatically. A vocabulary can enqueue
 other startup work without changing the engine by adding `initialTasks` to a
 unit, for example:
@@ -60,6 +66,43 @@ A vocabulary is credible when all of these hold:
 - two identical no-mutation runs have identical summaries; and
 - discoveries can be inspected without granting authority to change the
   represented world.
+
+## Experimental pack: protocols
+
+`domains/protocols` represents partial deterministic finite automata as
+canonical state, event, start, accept, and transition records. A pure Go layer
+implements validation, reachability, rejecting-trap analysis, trace acceptance,
+and accepted-language equivalence with shortest counterexample traces.
+
+Its control heuristic demonstrates domain integration by reporting rejecting
+traps. Its separate discovery heuristic is blinded to operation identities: it
+evaluates the Cartesian product of protocol transforms and relations over all
+training machines, materializes every observation, adjusts candidate worth
+from support and failure, and promotes fully supported schemas. Decoy operations,
+opaque-alias tests, an independent exhaustive evaluator, and a held-out corpus
+make the result stronger than a scripted named conjecture.
+
+See [the experiment plan](finite-state-protocol-vocabulary-plan.md) and
+[the five candidate vocabularies](vocabulary-experiments.md).
+
+## Experimental pack: rewrite
+
+`domains/rewrite` synthesizes executable operations by concatenating the DSL
+definitions of every ordered pair of primitive bounded rewrite rules. A second
+heuristic evaluates every constructed program against a complete input/output
+corpus, retaining linked result, observation, application, and evidence units.
+
+The experiment promotes one exact program, rejects reversed and decoy
+compositions, and lets the kernel's ordinary worth-growth mechanism credit its
+two component operations. Opaque aliases, an entirely different runtime-built
+corpus, collision tests, an independent scanner, primitive deletion, and
+held-out execution prevent the result from depending on seed names or a
+facade that delegates to the original units.
+
+See [the stabilized rewrite plan](string-rewrite-vocabulary-plan.md).
+The [follow-up trial report](rewrite-trials.md) records generated-problem
+robustness and the limits of scalar credit under related and unrelated
+curricula.
 
 The point is not to prove that EURISKO transfers after one small pack. The
 point is to make transfer an empirical question with a cheap, repeatable test.

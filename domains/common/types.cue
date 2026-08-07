@@ -10,6 +10,12 @@ units: [
 		isA: ["Anything"]
 	},
 	{
+		name:  "Vocabulary"
+		worth: 500
+		isA: ["Anything"]
+		english: "A domain vocabulary that may select a scoped DSL extension"
+	},
+	{
 		name:  "Slot"
 		worth: 300
 		isA: ["Anything"]

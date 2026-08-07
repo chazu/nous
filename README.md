@@ -13,7 +13,11 @@ interpretation, provenance, credit, and mutation.
 The reference `math` pack preserves the EURISKO-parity corpus. The
 `buildgraphs` pack is a small independent experiment: build graphs are sets of
 `consumer>dependency` edges, with graph operations and graph-specific
-heuristics.
+heuristics. The `protocols` pack is the first blinded transfer experiment: it
+tests every finite-state protocol transform against every candidate relation,
+retaining evidence for the schemas it promotes. The `rewrite` pack advances
+from selection to construction by synthesizing executable two-step string
+transformations and crediting the components of the successful program.
 
 ## Run it
 
@@ -22,6 +26,9 @@ This repository uses the toolchain pinned by `mise`:
 ```sh
 mise exec -- go run ./cmd/nous run -domain math -cycles 300
 mise exec -- go run ./cmd/nous run -domain buildgraphs -cycles 100 -no-mutate
+mise exec -- go run ./cmd/nous run -domain protocols -cycles 120 -no-mutate
+mise exec -- go run ./cmd/nous run -domain rewrite -cycles 220 -no-mutate
+mise exec -- go run ./cmd/nous rewrite-trials -problems 100 -curricula 300 -budget 4
 mise exec -- go test -race ./...
 ```
 

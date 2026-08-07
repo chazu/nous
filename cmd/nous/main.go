@@ -14,6 +14,7 @@ import (
 
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/engine"
+	"github.com/chazu/nous/internal/rewriteexp"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -26,6 +27,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		runCmd(os.Args[2:])
+	case "rewrite-trials":
+		rewriteTrialsCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -34,12 +37,35 @@ func main() {
 	}
 }
 
+func rewriteTrialsCmd(args []string) {
+	fs := flag.NewFlagSet("rewrite-trials", flag.ExitOnError)
+	domainsDir := fs.String("domains-dir", "domains", "filesystem path to domains/ directory")
+	trialSeed := fs.Int64("seed", 4242, "deterministic experiment seed")
+	problems := fs.Int("problems", 40, "generated robustness problems")
+	curricula := fs.Int("curricula", 60, "two-stage credit curricula")
+	budget := fs.Int("budget", 4, "phase-two candidate evaluation budget")
+	fs.Parse(args)
+
+	report, err := rewriteexp.Run(*domainsDir, *trialSeed, *problems, *curricula, *budget)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	encoded, err := report.JSON()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(encoded))
+}
+
 func runCmd(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	verbosity := fs.Int("v", 1, "verbosity level (0=quiet, 1=normal, 2=detailed, 3=debug)")
 	maxCycles := fs.Int("cycles", 100, "maximum number of cycles")
 	domain := fs.String("domain", "math", "seed domain to load ("+seed.Available()+")")
 	noMutate := fs.Bool("no-mutate", false, "disable heuristic mutation")
+	storeJSON := fs.Bool("store-json", false, "print canonical final-store JSON")
 	domainsDir := fs.String("domains-dir", "", "filesystem path to domains/ directory")
 	fs.Parse(args)
 
@@ -93,6 +119,14 @@ func runCmd(args []string) {
 	// Print final state
 	fmt.Printf("\n%s\n", eng.Stats())
 	eng.DumpWorths()
+	if *storeJSON {
+		snapshot, err := store.CanonicalJSON()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: snapshot store: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("\n--- Canonical Store JSON ---\n%s\n", snapshot)
+	}
 }
 
 func usage() {
@@ -100,6 +134,7 @@ func usage() {
 
 Usage:
   nous run [-v N] [-cycles N] [-domain NAME]    Run the discovery engine
+  nous rewrite-trials [flags]                   Run rewrite experiments
   nous help                                     Show this help
 
 Flags:
@@ -108,6 +143,7 @@ Flags:
   -domain NAME    Seed domain to load (default: math)
   -domains-dir D  Filesystem path to domains/ directory
   -no-mutate      Disable heuristic mutation
+  -store-json     Print canonical final-store JSON
 `)
 	os.Exit(1)
 }

@@ -1,6 +1,7 @@
 package unit
 
 import (
+	"encoding/json"
 	"sort"
 	"sync"
 )
@@ -219,4 +220,20 @@ func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.units)
+}
+
+// CanonicalJSON returns a deterministic JSON snapshot of every unit and slot.
+// encoding/json sorts string map keys, including nested slot maps.
+func (s *Store) CanonicalJSON() ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot := make(map[string]map[string]any, len(s.units))
+	for name, u := range s.units {
+		slots := make(map[string]any, len(u.Slots))
+		for slot, value := range u.Slots {
+			slots[slot] = value
+		}
+		snapshot[name] = slots
+	}
+	return json.Marshal(snapshot)
 }

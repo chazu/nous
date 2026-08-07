@@ -142,6 +142,18 @@ var builtins = map[string]builtinFn{
 	"noop": func(vm *VM) error { return nil },
 }
 
+var vocabularyWordSets = map[string]map[string]builtinFn{}
+
+func registerVocabularyWords(extension string, words map[string]builtinFn) {
+	if extension == "" {
+		panic("dsl: empty vocabulary extension")
+	}
+	if _, exists := vocabularyWordSets[extension]; exists {
+		panic("dsl: duplicate vocabulary extension " + extension)
+	}
+	vocabularyWordSets[extension] = cloneWords(words)
+}
+
 // Stack ops
 
 func bDup(vm *VM) error  { v := vm.peek(); vm.push(v); return nil }

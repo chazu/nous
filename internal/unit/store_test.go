@@ -277,3 +277,27 @@ func TestUnitSlotAccessors(t *testing.T) {
 		t.Error("Has should return false for missing slot")
 	}
 }
+
+func TestCanonicalJSONIsDeterministicAndSorted(t *testing.T) {
+	store := NewStore()
+	b := New("B")
+	b.Set("z", 2)
+	b.Set("a", 1)
+	store.Put(b)
+	a := New("A")
+	a.Set("data", "value")
+	store.Put(a)
+
+	first, err := store.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"A":{"data":"value"},"B":{"a":1,"z":2}}`
+	if string(first) != want || string(second) != want {
+		t.Fatalf("snapshots = %s and %s, want %s", first, second, want)
+	}
+}

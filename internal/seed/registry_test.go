@@ -59,7 +59,7 @@ func TestBuildGraphVocabularyIsIndependentAndExecutable(t *testing.T) {
 func TestAvailableDiscoversVocabularyDirectories(t *testing.T) {
 	DomainsDir = "../../domains"
 	got := Available()
-	for _, want := range []string{"buildgraphs", "math"} {
+	for _, want := range []string{"buildgraphs", "math", "protocols", "rewrite"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Available() = %q, missing %q", got, want)
 		}
