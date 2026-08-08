@@ -320,6 +320,12 @@ roadmap amendment.
 
 ## Phase 1: relational rule induction and predicate invention
 
+Status: complete, locked `valid-null`. The [accepted plan](relational-rule-induction-vocabulary-plan.md)
+and [locked trial report](relational-rule-induction-trials.md) show mechanically
+valid bounded Horn induction, cross-task reuse, and large search/work reductions,
+but the isolated materialized-execution effect was 3.284%, below the frozen 5%
+positive gate. Per the roadmap, this valid null advances to Phase 2.
+
 ### Research question
 
 Can Nous learn bounded relational programs from positive and negative examples,
