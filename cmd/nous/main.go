@@ -13,6 +13,7 @@ import (
 	"os/signal"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/causalexp"
 	"github.com/chazu/nous/internal/configrepairexp"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/gameexp"
@@ -38,12 +39,68 @@ func main() {
 		gameTrialsCmd(os.Args[2:])
 	case "ruleinduction-trials":
 		ruleInductionTrialsCmd(os.Args[2:])
+	case "causal-trials":
+		causalTrialsCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
 	}
+}
+
+func causalTrialsCmd(args []string) {
+	fs := flag.NewFlagSet("causal-trials", flag.ExitOnError)
+	domainsDir := fs.String("domains-dir", "domains", "filesystem path to domains/ directory")
+	panel := fs.String("panel", "development", "training, development, validation, or locked")
+	pretrainingCommit := fs.String("pretraining-commit", "", "clean pretraining executable commit (required for training)")
+	implementationCommit := fs.String("implementation-commit", "", "clean implementation candidate commit (required for locked)")
+	evidenceOut := fs.String("evidence-out", "", "training episode-bundle output path")
+	fs.Parse(args)
+	if *panel == "training" {
+		if *pretrainingCommit == "" || *evidenceOut == "" {
+			fmt.Fprintln(os.Stderr, "error: training requires -pretraining-commit and -evidence-out")
+			os.Exit(2)
+		}
+		report, bundle, err := causalexp.RunTraining(*domainsDir, *pretrainingCommit)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		bundleJSON, err := bundle.JSON()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: encode bundle: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(*evidenceOut, append(bundleJSON, '\n'), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "error: write evidence: %v\n", err)
+			os.Exit(1)
+		}
+		encoded, err := report.JSON()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(encoded))
+		return
+	}
+	var report causalexp.Report
+	var err error
+	if *panel == "locked" {
+		report, err = causalexp.RunLockedPanel(*domainsDir, *implementationCommit)
+	} else {
+		report, err = causalexp.RunPanel(*domainsDir, *panel, *implementationCommit)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	encoded, err := report.JSON()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(encoded))
 }
 
 func ruleInductionTrialsCmd(args []string) {
