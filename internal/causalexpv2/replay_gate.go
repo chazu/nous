@@ -13,7 +13,11 @@ import (
 	"github.com/chazu/nous/internal/causalv2"
 )
 
-const replayRecordVersion = "causal-replay-success/v3"
+const (
+	replayRecordVersion      = "causal-replay-success/v4"
+	ReplayRepairPlanCommit   = "0162f3eb651049958827da2a9616b0b4b79b512d"
+	failedV3ReplayRecordName = "active-causal-diagnosis-v3-replay.json"
+)
 
 type replaySuccessRecord struct {
 	ReplayVersion       string `json:"replay_version"`
@@ -29,25 +33,32 @@ type replaySuccessRecord struct {
 }
 
 func replayRecordPath(commonDirectory string) string {
-	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v3-replay.json")
+	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v4-replay.json")
 }
 
 func candidateDiffDigest(ctx context.Context, repositoryRoot, evidenceCommit string) (string, error) {
-	command := exec.CommandContext(ctx, "git", "-C", repositoryRoot, "diff", "--binary", evidenceCommit, "--")
+	if err := verifyProtectedGitEnvironment(); err != nil {
+		return "", err
+	}
+	command := exec.CommandContext(ctx, pinnedGitPath, "-C", repositoryRoot, "diff", "--binary", evidenceCommit, "--")
+	command.Env = protectedGitCommandEnvironment()
 	diff, err := command.Output()
 	if err != nil {
 		return "", err
 	}
-	return causalv2.Digest("causal-replay-candidate-diff/v3", struct {
+	return causalv2.Digest("causal-replay-candidate-diff/v4", struct {
 		EvidenceCommit string `json:"evidence_commit"`
 		Diff           []byte `json:"diff"`
 	}{evidenceCommit, diff})
 }
 
-// ExecuteReplay owns the fixed E regeneration while HEAD is R with the exact
-// uncommitted three-constant edit that will become C.
+// ExecuteReplay owns the fixed E3 regeneration while HEAD is exact X4 with the
+// one uncommitted constants edit that will become C4.
 func ExecuteReplay(ctx context.Context, repoRoot string) (returnErr error) {
 	if err := orchestrationAvailable(); err != nil {
+		return err
+	}
+	if err := verifyProtectedGitEnvironment(); err != nil {
 		return err
 	}
 	if FrozenTrainingReportCommit == "" {
@@ -57,15 +68,36 @@ func ExecuteReplay(ctx context.Context, repoRoot string) (returnErr error) {
 	if err != nil {
 		return err
 	}
-	capability, err := mintReplayCapability(ctx, state.Root, FrozenTrainingReportCommit)
+	if err := verifyPinnedProtectedRuntime(ctx, state.Root); err != nil {
+		return err
+	}
+	if err := requireReplayRetrySlotsAbsent(state); err != nil {
+		return err
+	}
+	if err := verifyCandidateConstantsState(ctx, state, FrozenTrainingReportCommit); err != nil {
+		return err
+	}
+	builder, err := pinnedReplayBuilder(ctx, state.Root)
 	if err != nil {
 		return err
 	}
-	diffDigest, err := candidateDiffDigest(ctx, state.Root, capability.evidenceCommit)
+	if err := preflightReplayBuild(ctx, state.Root, replayPretrainingCommit, builder); err != nil {
+		return err
+	}
+	state, err = resolveGitState(ctx, state.Root)
 	if err != nil {
 		return err
 	}
-	record := replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: PlanCommit, PretrainingCommit: capability.pretrainingCommit, EvidenceCommit: capability.evidenceCommit, CandidateCommit: state.Head, CandidateDiffDigest: diffDigest, TrainingDigest: capability.reportDigest, BundleDigest: capability.bundleDigest, CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "started"}
+	if err := verifyPinnedGitRepositoryState(ctx, state); err != nil {
+		return err
+	}
+	if err := requireReplayRetrySlotsAbsent(state); err != nil {
+		return err
+	}
+	record, err := structuralReplayRecord(ctx, state)
+	if err != nil {
+		return err
+	}
 	if err := createReplayRecord(state.CommonDir, record); err != nil {
 		return err
 	}
@@ -75,11 +107,70 @@ func ExecuteReplay(ctx context.Context, repoRoot string) (returnErr error) {
 			returnErr = errors.Join(returnErr, persistReplayRecord(state.CommonDir, record))
 		}
 	}()
+	capability, err := mintReplayCapability(ctx, state.Root, FrozenTrainingReportCommit)
+	if err != nil {
+		return err
+	}
+	if capability.pretrainingCommit != record.PretrainingCommit || capability.evidenceCommit != record.EvidenceCommit || capability.reportDigest != record.TrainingDigest || capability.bundleDigest != record.BundleDigest {
+		return errors.New("minted replay capability differs from started v4 receipt")
+	}
 	if _, err := capability.Replay(ctx); err != nil {
 		return err
 	}
 	record.State = "succeeded"
 	return persistReplayRecord(state.CommonDir, record)
+}
+
+func requireReplayRetrySlotsAbsent(state gitState) error {
+	paths := []string{
+		replayRecordPath(state.CommonDir),
+		attemptRecordPath(state.CommonDir, PanelValidation),
+		attemptProofRecordPath(state.CommonDir, PanelValidation),
+		attemptRecordPath(state.CommonDir, PanelLocked),
+		attemptProofRecordPath(state.CommonDir, PanelLocked),
+		resultPath(state.CommonDir, PanelValidation),
+		resultPath(state.CommonDir, PanelLocked),
+	}
+	for _, path := range paths {
+		if err := requireAbsent(path); err != nil {
+			return fmt.Errorf("v4 replay preflight collision: %w", err)
+		}
+	}
+	return nil
+}
+
+func structuralReplayRecord(ctx context.Context, state gitState) (replaySuccessRecord, error) {
+	if err := verifyCandidateConstantsState(ctx, state, replayEvidenceCommit); err != nil {
+		return replaySuccessRecord{}, err
+	}
+	if err := verifyEvidenceCommitShape(ctx, state.Root, replayPretrainingCommit, replayEvidenceCommit); err != nil {
+		return replaySuccessRecord{}, err
+	}
+	replayEvidenceReads.Add(1)
+	reportBytes, err := gitFile(ctx, state.Root, replayEvidenceCommit, filepath.ToSlash(filepath.Join(TrainingEvidenceDirectory, TrainingReportName)))
+	if err != nil {
+		return replaySuccessRecord{}, err
+	}
+	bundleBytes, err := gitFile(ctx, state.Root, replayEvidenceCommit, filepath.ToSlash(filepath.Join(TrainingEvidenceDirectory, TrainingEpisodesName)))
+	if err != nil {
+		return replaySuccessRecord{}, err
+	}
+	report, err := causalv2.StrictDecode[TrainingReport](reportBytes)
+	if err != nil || !bytes.Equal(reportBytes, mustCanonical(report)) {
+		return replaySuccessRecord{}, errors.New("R3 training report is not structurally canonical")
+	}
+	bundle, err := causalv2.StrictDecode[TrainingBundle](bundleBytes)
+	if err != nil || !bytes.Equal(bundleBytes, mustCanonical(bundle)) {
+		return replaySuccessRecord{}, errors.New("R3 training bundle is not structurally canonical")
+	}
+	if report.ReportVersion != "causal-training-report/v2" || report.PlanCommit != PlanCommit || report.PretrainingCommit != replayPretrainingCommit || report.TrainingDigest != FrozenTrainingDigest || report.EpisodeBundleDigest != bundle.BundleDigest || bundle.BundleVersion != "causal-training-episode-bundle/v2" || bundle.PlanCommit != PlanCommit || bundle.PretrainingCommit != replayPretrainingCommit {
+		return replaySuccessRecord{}, errors.New("structural R3 provenance does not match frozen identity")
+	}
+	diffDigest, err := candidateDiffDigest(ctx, state.Root, replayEvidenceCommit)
+	if err != nil {
+		return replaySuccessRecord{}, err
+	}
+	return replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: ReplayRepairPlanCommit, PretrainingCommit: replayPretrainingCommit, EvidenceCommit: replayEvidenceCommit, CandidateCommit: state.Head, CandidateDiffDigest: diffDigest, TrainingDigest: report.TrainingDigest, BundleDigest: bundle.BundleDigest, CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "started"}, nil
 }
 
 func createReplayRecord(commonDirectory string, record replaySuccessRecord) error {
@@ -136,7 +227,8 @@ func verifyReplaySuccessRecord(ctx context.Context, state gitState, report Train
 	if err != nil {
 		return err
 	}
-	if record.ReplayVersion != replayRecordVersion || record.PlanCommit != PlanCommit || record.State != "succeeded" || record.PretrainingCommit != report.PretrainingCommit || record.EvidenceCommit != evidenceCommit || record.CandidateCommit != evidenceCommit || record.CandidateDiffDigest != diffDigest || record.TrainingDigest != report.TrainingDigest || record.BundleDigest != bundle.BundleDigest {
+	parent, parentErr := gitStringOutput(ctx, state.Root, "rev-parse", state.Head+"^")
+	if parentErr != nil || verifyCandidateConstantsState(ctx, state, evidenceCommit) != nil || record.ReplayVersion != replayRecordVersion || record.PlanCommit != ReplayRepairPlanCommit || record.State != "succeeded" || record.PretrainingCommit != report.PretrainingCommit || record.EvidenceCommit != evidenceCommit || record.CandidateCommit != parent || record.CandidateDiffDigest != diffDigest || record.TrainingDigest != report.TrainingDigest || record.BundleDigest != bundle.BundleDigest {
 		return errors.New("replay success is not bound to E, R, C, and committed evidence")
 	}
 	return nil

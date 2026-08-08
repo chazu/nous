@@ -3,15 +3,23 @@ package causalexpv2
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chazu/nous/internal/causalv2"
@@ -19,6 +27,32 @@ import (
 )
 
 const FrozenConstantsPath = "internal/causalexpv2/freeze.go"
+
+const (
+	replayEvidenceCommit       = "7482d1b9712f49cb988623a87ec8bb1c34667a26"
+	replayPretrainingCommit    = "89a9221e97dd17d6ba220a22a12d4c0328417ffb"
+	pinnedGoPath               = "/Users/chazu/.local/share/mise/installs/go/1.25.12/bin/go"
+	pinnedGoSHA256             = "8612de418d551a418517845c05cebdcfed49095cd08ef0a4d682bb2a5cf4896c"
+	pinnedGoVersion            = "go version go1.25.12 darwin/arm64"
+	pinnedGOROOT               = "/Users/chazu/.local/share/mise/installs/go/1.25.12"
+	pinnedGOROOTFiles          = 14531
+	pinnedGOROOTSHA256         = "77a814b12481fa12b070a905d2d6fc1ab9671b0e2866d7ffb85c9b37861d9da9"
+	pinnedGitPath              = "/opt/homebrew/bin/git"
+	pinnedGitSHA256            = "00ad7d9b0732c80bd8971e443a7129cf09d0957ea4c1f6cf581bbffe6c2e0505"
+	pinnedGitVersion           = "git version 2.47.1"
+	pinnedGitConfigSHA256      = "58610c019ec3c32186d8dc2a9e5a18b900dafdb75047d7a56475baa84d268a15"
+	pinnedGitInfoExcludeSHA256 = "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+	resolvedGoModSHA256        = "e5875629b398cfccd32df7604196702818eb2fc5e9b605897a0207565c64866c"
+	resolvedGoSumSHA256        = "930d1ecfb0438e23115d1365f24fbddcd27fa0a97d144436eb7bafc208bbb6d4"
+)
+
+var (
+	replayBuildPreflights    atomic.Int64
+	replayEvidenceReads      atomic.Int64
+	replayCapabilityMints    atomic.Int64
+	replayInputConstructions atomic.Int64
+	replayWorkerStarts       atomic.Int64
+)
 
 type ReplayCapability struct {
 	mu                sync.Mutex
@@ -42,13 +76,18 @@ type ReplayResult struct {
 }
 
 type regenerationExecutable struct {
-	Path       string
-	PrefixArgs []string
+	Path        string
+	PrefixArgs  []string
+	Environment []string
 }
 
 // MintReplayCapability verifies the committed evidence at R and proves that
 // the candidate differs from R only by the allowlisted constants source.
 func mintReplayCapability(ctx context.Context, repoRoot, evidenceCommit string) (*ReplayCapability, error) {
+	replayCapabilityMints.Add(1)
+	if err := verifyProtectedGitEnvironment(); err != nil {
+		return nil, err
+	}
 	state, err := resolveGitState(ctx, repoRoot)
 	if err != nil {
 		return nil, err
@@ -59,6 +98,7 @@ func mintReplayCapability(ctx context.Context, repoRoot, evidenceCommit string) 
 	if err := verifyCandidateConstantsState(ctx, state, evidenceCommit); err != nil {
 		return nil, err
 	}
+	replayEvidenceReads.Add(1)
 	reportBytes, err := gitFile(ctx, state.Root, evidenceCommit, filepath.ToSlash(filepath.Join(TrainingEvidenceDirectory, TrainingReportName)))
 	if err != nil {
 		return nil, err
@@ -87,14 +127,11 @@ func mintReplayCapability(ctx context.Context, repoRoot, evidenceCommit string) 
 	if err := verifyFrozenCandidate(state.Root, report, evidenceCommit); err != nil {
 		return nil, err
 	}
-	misePath, err := exec.LookPath("mise")
-	if err != nil {
-		return nil, errors.New("fixed replay launcher mise is unavailable")
-	}
-	executable, err := validateRegenerationExecutable(regenerationExecutable{Path: misePath, PrefixArgs: []string{"exec", "--", "go"}})
+	executable, err := pinnedReplayBuilder(ctx, state.Root)
 	if err != nil {
 		return nil, err
 	}
+	replayInputConstructions.Add(1)
 	input := ReplayInput{ReplayInputVersion: ReplayInputVersion, PlanCommit: PlanCommit, PretrainingCommit: report.PretrainingCommit, EvidenceCommit: evidenceCommit, TrainingDigest: report.TrainingDigest, BundleDigest: bundle.BundleDigest, Fixtures: append([]PrivateFixture(nil), bundle.Fixtures...), CorruptionFixture: verified.CorruptionFixture}
 	inputBytes, err := finalizeReplayInput(&input)
 	if err != nil {
@@ -104,32 +141,91 @@ func mintReplayCapability(ctx context.Context, repoRoot, evidenceCommit string) 
 }
 
 func verifyCandidateConstantsState(ctx context.Context, state gitState, evidenceCommit string) error {
+	if evidenceCommit != replayEvidenceCommit {
+		return errors.New("candidate is not bound to fixed R3 evidence")
+	}
 	if state.Clean {
-		if state.Head == evidenceCommit {
-			return errors.New("clean evidence commit has no frozen constants edit")
-		}
 		parent, err := gitStringOutput(ctx, state.Root, "rev-parse", state.Head+"^")
-		if err != nil || parent != evidenceCommit {
-			return errors.New("candidate C is not the direct child of evidence commit R")
+		if err != nil || verifyReplayRepairExecutableCommit(ctx, state.Root, parent) != nil {
+			return errors.New("candidate C4 is not the direct child of exact replay-repair executable X4")
 		}
-		changed, err := gitStringOutput(ctx, state.Root, "diff", "--name-only", evidenceCommit, state.Head, "--")
-		if err != nil || strings.TrimSpace(changed) != FrozenConstantsPath {
-			return errors.New("candidate commit diff from R is not the one-file constants edit")
+		changed, err := gitStringOutput(ctx, state.Root, "diff", "--name-status", "--no-renames", parent, state.Head, "--")
+		if err != nil || strings.TrimSpace(changed) != "M\t"+FrozenConstantsPath {
+			return errors.New("candidate C4 is not the constants-only direct child of X4")
+		}
+		entry, err := gitStringOutput(ctx, state.Root, "ls-tree", state.Head, "--", FrozenConstantsPath)
+		if err != nil || !strings.HasPrefix(entry, "100644 blob ") {
+			return errors.New("candidate C4 constants are not a regular 100644 blob")
 		}
 		return nil
 	}
-	if state.Head != evidenceCommit {
-		return errors.New("dirty replay must run directly on evidence commit R")
+	if err := verifyReplayRepairExecutableCommit(ctx, state.Root, state.Head); err != nil {
+		return fmt.Errorf("dirty replay is not running from exact X4: %w", err)
 	}
 	status, err := gitStringOutput(ctx, state.Root, "status", "--porcelain", "--untracked-files=all")
 	// gitOutput trims the porcelain record's single leading index-column
 	// space; an unstaged-only edit therefore has exactly this representation.
 	if err != nil || status != "M "+FrozenConstantsPath {
-		return errors.New("dirty replay worktree is not the exact unstaged constants edit on R")
+		return errors.New("dirty replay worktree is not the exact unstaged constants edit on X4")
 	}
-	changed, err := gitStringOutput(ctx, state.Root, "diff", "--name-only", evidenceCommit, "--")
+	info, err := os.Lstat(filepath.Join(state.Root, FrozenConstantsPath))
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
+		return errors.New("dirty X4 constants are not a regular 0644 file")
+	}
+	changed, err := gitStringOutput(ctx, state.Root, "diff", "--name-only", state.Head, "--")
 	if err != nil || strings.TrimSpace(changed) != FrozenConstantsPath {
-		return errors.New("dirty replay diff from R is not the one-file constants edit")
+		return errors.New("dirty replay diff from X4 is not the one-file constants edit")
+	}
+	return nil
+}
+
+func verifyReplayRepairExecutableCommit(ctx context.Context, root, commit string) error {
+	parent, err := gitStringOutput(ctx, root, "rev-parse", commit+"^")
+	if err != nil || parent != ReplayRepairPlanCommit {
+		return errors.New("X4 is not the direct child of the accepted replay-repair plan")
+	}
+	changed, err := gitStringOutput(ctx, root, "diff", "--name-status", "--no-renames", replayEvidenceCommit, commit, "--")
+	if err != nil {
+		return err
+	}
+	got := splitNonemptyLines(changed)
+	slices.Sort(got)
+	want := []string{
+		"A\tdocs/active-causal-diagnosis-v4-replay-amendment.md",
+		"M\tgo.mod",
+		"M\tgo.sum",
+		"M\tinternal/causalexpv2/gates.go",
+		"M\tinternal/causalexpv2/provenance.go",
+		"M\tinternal/causalexpv2/provenance_test.go",
+		"M\tinternal/causalexpv2/replay_gate.go",
+	}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		return fmt.Errorf("X4 diff is outside the accepted status-sensitive allowlist: got %q", got)
+	}
+	for _, record := range want {
+		_, path, _ := strings.Cut(record, "\t")
+		entry, entryErr := gitStringOutput(ctx, root, "ls-tree", commit, "--", path)
+		if entryErr != nil || !strings.HasPrefix(entry, "100644 blob ") {
+			return fmt.Errorf("X4 path is not a regular 100644 blob: %s", path)
+		}
+	}
+	accepted, err := gitFile(ctx, root, ReplayRepairPlanCommit, "docs/active-causal-diagnosis-v4-replay-amendment.md")
+	if err != nil {
+		return err
+	}
+	candidate, err := gitFile(ctx, root, commit, "docs/active-causal-diagnosis-v4-replay-amendment.md")
+	if err != nil || !bytes.Equal(accepted, candidate) {
+		return errors.New("X4 amendment differs from accepted replay-repair plan")
+	}
+	for path, digest := range map[string]string{"go.mod": resolvedGoModSHA256, "go.sum": resolvedGoSumSHA256} {
+		content, readErr := gitFile(ctx, root, commit, path)
+		if readErr != nil || sha256Hex(content) != digest {
+			return fmt.Errorf("X4 %s does not equal the accepted resolved module metadata", path)
+		}
+	}
+	if err := verifyEmptyFreezeAt(ctx, root, commit); err != nil {
+		return err
 	}
 	return nil
 }
@@ -175,6 +271,376 @@ func validateRegenerationExecutable(executable regenerationExecutable) (regenera
 	return executable, nil
 }
 
+func pinnedReplayBuilder(ctx context.Context, repoRoot string) (regenerationExecutable, error) {
+	if err := verifyProtectedGitEnvironment(); err != nil {
+		return regenerationExecutable{}, err
+	}
+	resolved, err := filepath.EvalSymlinks(pinnedGoPath)
+	if err != nil || resolved != pinnedGoPath {
+		return regenerationExecutable{}, errors.New("pinned Go path does not resolve exactly")
+	}
+	if err := verifyRegularFileDigest(pinnedGoPath, pinnedGoSHA256); err != nil {
+		return regenerationExecutable{}, fmt.Errorf("pinned Go driver: %w", err)
+	}
+	count, digest, err := gorootManifest(pinnedGOROOT)
+	if err != nil || count != pinnedGOROOTFiles || digest != pinnedGOROOTSHA256 {
+		return regenerationExecutable{}, errors.New("pinned GOROOT manifest mismatch")
+	}
+	version := exec.CommandContext(ctx, pinnedGoPath, "version")
+	version.Env = fixedGoEnvironment("", "", "")
+	output, err := version.Output()
+	if err != nil || strings.TrimSpace(string(output)) != pinnedGoVersion {
+		return regenerationExecutable{}, errors.New("pinned Go version mismatch")
+	}
+	state, err := resolveGitState(ctx, repoRoot)
+	if err != nil {
+		return regenerationExecutable{}, err
+	}
+	if err := verifyPinnedGitRepositoryState(ctx, state); err != nil {
+		return regenerationExecutable{}, err
+	}
+	if err := verifyPinnedGitTool(ctx); err != nil {
+		return regenerationExecutable{}, err
+	}
+	return validateRegenerationExecutable(regenerationExecutable{Path: pinnedGoPath})
+}
+
+func verifyPinnedProtectedRuntime(ctx context.Context, repoRoot string) error {
+	if err := verifyProtectedGitEnvironment(); err != nil {
+		return err
+	}
+	if runtime.Version() != "go1.25.12" || runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		return errors.New("protected executable runtime is not pinned")
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return errors.New("protected executable has no Go build settings")
+	}
+	settings := map[string]string{}
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	if settings["CGO_ENABLED"] != "0" || settings["GOARM64"] != "v8.0" || settings["GOEXPERIMENT"] != "" || settings["DefaultGODEBUG"] != "" || settings["GOFIPS140"] != "" && settings["GOFIPS140"] != "off" {
+		return errors.New("protected executable build settings are not pinned")
+	}
+	if settings["-buildmode"] != "exe" || settings["-compiler"] != "gc" {
+		return errors.New("protected executable compiler mode is not pinned")
+	}
+	for key := range settings {
+		if strings.HasPrefix(key, "-") && key != "-buildmode" && key != "-compiler" {
+			return fmt.Errorf("protected executable has forbidden build setting %s", key)
+		}
+	}
+	if err := verifyProtectedRuntimeEnvironment(); err != nil {
+		return err
+	}
+	_, err := pinnedReplayBuilder(ctx, repoRoot)
+	return err
+}
+
+func verifyProtectedRuntimeEnvironment() error {
+	if os.Getenv("GODEBUG") != "" || os.Getenv("GOFIPS140") != "off" {
+		return errors.New("protected executable runtime environment is not pinned")
+	}
+	return nil
+}
+
+func gorootManifest(root string) (int, string, error) {
+	root = filepath.Clean(root)
+	paths := []string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("GOROOT contains symlink %s", path)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("GOROOT contains special entry %s", path)
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return 0, "", err
+	}
+	sort.Strings(paths)
+	hash := sha256.New()
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0, "", err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return 0, "", err
+		}
+		for _, value := range []string{filepath.ToSlash(relative), strconv.FormatUint(uint64(info.Mode().Perm()), 8), strconv.FormatInt(info.Size(), 10)} {
+			_, _ = io.WriteString(hash, value)
+			_, _ = hash.Write([]byte{0})
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return 0, "", err
+		}
+		_, copyErr := io.Copy(hash, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return 0, "", copyErr
+		}
+		if closeErr != nil {
+			return 0, "", closeErr
+		}
+		_, _ = hash.Write([]byte{0})
+	}
+	return len(paths), hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func fixedGoEnvironment(moduleCache, buildCache, temporaryDirectory string) []string {
+	goPath := "/nonexistent/nous-gopath"
+	if moduleCache != "" {
+		goPath = filepath.Join(filepath.Dir(moduleCache), "gopath")
+	}
+	return []string{
+		"GOROOT=" + pinnedGOROOT,
+		"GOTOOLCHAIN=local",
+		"GOENV=off",
+		"GOWORK=off",
+		"GOFLAGS=",
+		"GOEXPERIMENT=",
+		"CGO_ENABLED=0",
+		"GOOS=darwin",
+		"GOARCH=arm64",
+		"GOARM64=v8.0",
+		"GODEBUG=",
+		"GOFIPS140=off",
+		"GOMODCACHE=" + moduleCache,
+		"GOPATH=" + goPath,
+		"GOCACHE=" + buildCache,
+		"TMPDIR=" + temporaryDirectory,
+		"GOPROXY=https://proxy.golang.org",
+		"GOSUMDB=sum.golang.org",
+		"GOPRIVATE=",
+		"GONOPROXY=",
+		"GONOSUMDB=",
+	}
+}
+
+func verifyRegularFileDigest(path, want string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("path is not a regular file")
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil || sha256Hex(encoded) != want {
+		return errors.New("file digest mismatch")
+	}
+	return nil
+}
+
+func sha256Hex(encoded []byte) string {
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
+
+func verifyPinnedGitTool(ctx context.Context) error {
+	resolved, err := filepath.EvalSymlinks(pinnedGitPath)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return errors.New("pinned Git path does not resolve to an absolute path")
+	}
+	if err := verifyRegularFileDigest(resolved, pinnedGitSHA256); err != nil {
+		return fmt.Errorf("pinned Git executable: %w", err)
+	}
+	command := exec.CommandContext(ctx, pinnedGitPath, "--version")
+	command.Env = []string{"LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_NO_REPLACE_OBJECTS=1"}
+	output, err := command.Output()
+	if err != nil || strings.TrimSpace(string(output)) != pinnedGitVersion {
+		return errors.New("pinned Git version mismatch")
+	}
+	return nil
+}
+
+func verifyProtectedGitEnvironment() error {
+	want := map[string]string{
+		"PATH":                   "/opt/homebrew/bin",
+		"GIT_CONFIG_NOSYSTEM":    "1",
+		"GIT_CONFIG_GLOBAL":      "/dev/null",
+		"GIT_CONFIG_SYSTEM":      "/dev/null",
+		"GIT_OPTIONAL_LOCKS":     "0",
+		"GIT_NO_REPLACE_OBJECTS": "1",
+		"GIT_ATTR_NOSYSTEM":      "1",
+		"GIT_TERMINAL_PROMPT":    "0",
+	}
+	for name, expected := range want {
+		if os.Getenv(name) != expected {
+			return fmt.Errorf("protected Git environment has noncanonical %s", name)
+		}
+	}
+	for _, name := range []string{"GIT_ASKPASS", "GIT_SSH_COMMAND", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_SHALLOW_FILE", "GIT_EXEC_PATH"} {
+		if _, present := os.LookupEnv(name); present {
+			return fmt.Errorf("protected Git environment contains %s", name)
+		}
+	}
+	path, err := exec.LookPath("git")
+	if err != nil || path != pinnedGitPath {
+		return errors.New("protected Git lookup does not select the pinned path")
+	}
+	return nil
+}
+
+func protectedGitCommandEnvironment() []string {
+	return []string{
+		"PATH=/opt/homebrew/bin",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_ATTR_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"LC_ALL=C",
+		"TZ=UTC",
+	}
+}
+
+func verifyPinnedGitRepositoryState(ctx context.Context, state gitState) error {
+	if err := verifyRegularFileDigest(filepath.Join(state.CommonDir, "config"), pinnedGitConfigSHA256); err != nil {
+		return fmt.Errorf("Git common config: %w", err)
+	}
+	config, err := os.ReadFile(filepath.Join(state.CommonDir, "config"))
+	if err != nil {
+		return err
+	}
+	lower := strings.ToLower(string(config))
+	for _, denied := range []string{"include", "worktreeconfig", "fsmonitor", "hooks", "external", "filter", "showuntrackedfiles"} {
+		if strings.Contains(lower, denied) {
+			return fmt.Errorf("Git common config contains forbidden setting %q", denied)
+		}
+	}
+	if err := verifyRegularFileDigest(filepath.Join(state.CommonDir, "info", "exclude"), pinnedGitInfoExcludeSHA256); err != nil {
+		return fmt.Errorf("Git info exclude: %w", err)
+	}
+	absent := []string{
+		filepath.Join(state.CommonDir, "info", "attributes"),
+		filepath.Join(state.CommonDir, "info", "grafts"),
+		filepath.Join(state.CommonDir, "shallow"),
+		filepath.Join(state.CommonDir, "objects", "info", "alternates"),
+		filepath.Join(state.CommonDir, "objects", "info", "http-alternates"),
+		filepath.Join(state.CommonDir, "config.worktree"),
+		filepath.Join(state.CommonDir, "refs", "replace"),
+	}
+	worktreeConfigs, globErr := filepath.Glob(filepath.Join(state.CommonDir, "worktrees", "*", "config.worktree"))
+	if globErr != nil || len(worktreeConfigs) != 0 {
+		return errors.New("Git worktree config is present")
+	}
+	for _, path := range absent {
+		if err := requireAbsent(path); err != nil {
+			return fmt.Errorf("forbidden Git repository state: %w", err)
+		}
+	}
+	packed, err := os.ReadFile(filepath.Join(state.CommonDir, "packed-refs"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if bytes.Contains(packed, []byte(" refs/replace/")) {
+		return errors.New("packed replacement refs are present")
+	}
+	return nil
+}
+
+func pinnedWorkerEnvironment(ctx context.Context, base string) ([]string, error) {
+	if err := verifyPinnedGitTool(ctx); err != nil {
+		return nil, err
+	}
+	bin, home, xdg := filepath.Join(base, "worker-bin"), filepath.Join(base, "worker-home"), filepath.Join(base, "worker-xdg")
+	for _, directory := range []string{bin, home, xdg} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	link := filepath.Join(bin, "git")
+	if err := os.Symlink(pinnedGitPath, link); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(bin)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "git" || entries[0].Type()&os.ModeSymlink == 0 {
+		return nil, errors.New("worker private bin is not the exact pinned Git link")
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	pinnedResolved, pinnedErr := filepath.EvalSymlinks(pinnedGitPath)
+	if err != nil || pinnedErr != nil || resolved != pinnedResolved {
+		return nil, errors.New("worker Git link resolves incorrectly")
+	}
+	environment := []string{
+		"PATH=" + bin,
+		"HOME=" + home,
+		"XDG_CONFIG_HOME=" + xdg,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_ATTR_NOSYSTEM=1",
+		"LC_ALL=C",
+		"TZ=UTC",
+	}
+	if err := verifyPinnedWorkerEnvironment(environment); err != nil {
+		return nil, err
+	}
+	return environment, nil
+}
+
+func verifyPinnedWorkerEnvironment(environment []string) error {
+	if len(environment) != 11 {
+		return errors.New("worker environment does not have the exact allowlist")
+	}
+	values := map[string]string{}
+	for _, entry := range environment {
+		name, value, found := strings.Cut(entry, "=")
+		if !found || name == "" {
+			return errors.New("worker environment contains a malformed entry")
+		}
+		if _, duplicate := values[name]; duplicate {
+			return errors.New("worker environment contains a duplicate entry")
+		}
+		values[name] = value
+	}
+	want := map[string]string{"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_ATTR_NOSYSTEM": "1", "LC_ALL": "C", "TZ": "UTC"}
+	for name, expected := range want {
+		if values[name] != expected {
+			return fmt.Errorf("worker environment has noncanonical %s", name)
+		}
+	}
+	for _, name := range []string{"PATH", "HOME", "XDG_CONFIG_HOME"} {
+		if values[name] == "" || !filepath.IsAbs(values[name]) {
+			return fmt.Errorf("worker environment has invalid %s", name)
+		}
+	}
+	entries, err := os.ReadDir(values["PATH"])
+	if err != nil || len(entries) != 1 || entries[0].Name() != "git" || entries[0].Type()&os.ModeSymlink == 0 {
+		return errors.New("worker private bin changed")
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(values["PATH"], "git"))
+	pinnedResolved, pinnedErr := filepath.EvalSymlinks(pinnedGitPath)
+	if err != nil || pinnedErr != nil || resolved != pinnedResolved {
+		return errors.New("worker private Git changed")
+	}
+	for _, name := range []string{"HOME", "XDG_CONFIG_HOME"} {
+		contents, readErr := os.ReadDir(values[name])
+		if readErr != nil || len(contents) != 0 {
+			return fmt.Errorf("worker private %s is not empty", name)
+		}
+	}
+	return nil
+}
+
 // Replay owns the fresh detached worktree, fixed regeneration invocation,
 // byte comparison, and cleanup. It cannot publish or mutate attempt state.
 func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, returnErr error) {
@@ -196,8 +662,9 @@ func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, r
 		_ = os.RemoveAll(base)
 		return ReplayResult{}, err
 	}
+	worktrees := []string{worktree}
 	defer func() {
-		if cleanupErr := cleanupReplayWorktree(cap.repositoryRoot, worktree, base); cleanupErr != nil {
+		if cleanupErr := cleanupReplayWorktreeSet(cap.repositoryRoot, worktrees, base); cleanupErr != nil {
 			returnErr = errors.Join(returnErr, cleanupErr)
 		}
 	}()
@@ -213,9 +680,18 @@ func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, r
 		return ReplayResult{}, errors.New("replay capability input is invalid or changed")
 	}
 	worker := cap.workerExecutable
+	buildWorktree := ""
 	if worker.Path == "" {
-		worker, err = buildReplayWorker(ctx, cap.buildExecutable, worktree, filepath.Join(base, "causal-v2-replay-worker"))
+		buildWorktree = filepath.Join(base, "build-worktree")
+		if err := runGit(ctx, cap.repositoryRoot, "worktree", "add", "--detach", buildWorktree, cap.pretrainingCommit); err != nil {
+			return ReplayResult{}, err
+		}
+		worktrees = append(worktrees, buildWorktree)
+		worker, err = buildReplayWorker(ctx, cap.buildExecutable, buildWorktree, filepath.Join(base, "causal-v2-replay-worker"))
 		if err != nil {
+			return ReplayResult{}, err
+		}
+		if err := verifyResolvedReplayWorktree(ctx, cap.repositoryRoot, buildWorktree, cap.pretrainingCommit); err != nil {
 			return ReplayResult{}, err
 		}
 	}
@@ -233,22 +709,60 @@ func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, r
 	args := append([]string(nil), worker.PrefixArgs...)
 	command := exec.CommandContext(ctx, worker.Path, args...)
 	command.Dir = worktree
-	command.Env = append([]string(nil), os.Environ()...)
+	if worker.Environment != nil {
+		command.Env = append([]string(nil), worker.Environment...)
+	} else {
+		command.Env = append([]string(nil), os.Environ()...)
+	}
 	command.ExtraFiles = []*os.File{inputRead, outputHandle}
 	var workerOutput bytes.Buffer
 	command.Stdout, command.Stderr = &workerOutput, &workerOutput
+	protected := cap.buildExecutable.Path != ""
+	if protected {
+		if err := verifyPinnedWorkerEnvironment(worker.Environment); err != nil {
+			return ReplayResult{}, err
+		}
+		state, stateErr := resolveGitState(ctx, cap.repositoryRoot)
+		if stateErr != nil || verifyPinnedGitRepositoryState(ctx, state) != nil {
+			return ReplayResult{}, errors.New("repository Git state changed before worker start")
+		}
+		if err := verifyResolvedReplayWorktree(ctx, cap.repositoryRoot, buildWorktree, cap.pretrainingCommit); err != nil {
+			return ReplayResult{}, errors.New("resolved build worktree changed before worker start")
+		}
+		if err := verifyCleanReplayWorktree(ctx, worktree, cap.pretrainingCommit); err != nil {
+			return ReplayResult{}, err
+		}
+	}
+	replayWorkerStarts.Add(1)
 	if err := command.Start(); err != nil {
 		return ReplayResult{}, fmt.Errorf("start replay worker: %w", err)
 	}
 	_ = inputRead.Close()
 	writeErr := writeAllAndClose(inputWrite, cap.replayInputBytes)
 	waitErr := command.Wait()
-	if writeErr != nil || waitErr != nil {
-		return ReplayResult{}, fmt.Errorf("regeneration executable failed: %w: %s", errors.Join(writeErr, waitErr), strings.TrimSpace(workerOutput.String()))
+	var auditErr error
+	if protected {
+		if err := verifyPinnedWorkerEnvironment(worker.Environment); err != nil {
+			auditErr = errors.Join(auditErr, err)
+		}
+		if err := verifyResolvedReplayWorktree(ctx, cap.repositoryRoot, buildWorktree, cap.pretrainingCommit); err != nil {
+			auditErr = errors.Join(auditErr, errors.New("regeneration executable changed resolved detached build state"))
+		}
+		if err := verifyCleanReplayWorktree(ctx, worktree, cap.pretrainingCommit); err != nil {
+			auditErr = errors.Join(auditErr, err)
+		}
+		state, stateErr := resolveGitState(ctx, cap.repositoryRoot)
+		if stateErr != nil || verifyPinnedGitRepositoryState(ctx, state) != nil {
+			auditErr = errors.Join(auditErr, errors.New("repository Git state changed after worker exit"))
+		}
+	} else {
+		auditErr = verifyCleanReplayWorktree(ctx, worktree, cap.pretrainingCommit)
 	}
-	detached, err = resolveGitState(ctx, worktree)
-	if err != nil || detached.Head != cap.pretrainingCommit || !detached.Clean {
-		return ReplayResult{}, errors.New("regeneration executable changed the detached pretraining worktree")
+	if writeErr != nil || waitErr != nil {
+		return ReplayResult{}, errors.Join(fmt.Errorf("regeneration executable failed: %w: %s", errors.Join(writeErr, waitErr), strings.TrimSpace(workerOutput.String())), auditErr)
+	}
+	if auditErr != nil {
+		return ReplayResult{}, auditErr
 	}
 	if err := requireExactReplayOutputs(outputHandle); err != nil {
 		return ReplayResult{}, err
@@ -273,14 +787,144 @@ func buildReplayWorker(ctx context.Context, builder regenerationExecutable, work
 		return regenerationExecutable{}, errors.New("replay worker build executable is missing")
 	}
 	args := append([]string(nil), builder.PrefixArgs...)
-	args = append(args, "build", "-o", output, "./internal/causalexpv2/replayexec")
+	args = append(args, "build", "-mod=mod", "-o", output, "./internal/causalexpv2/replayexec")
+	base := filepath.Dir(output)
+	moduleCache, buildCache, temporaryDirectory := filepath.Join(base, "gomodcache"), filepath.Join(base, "gocache"), filepath.Join(base, "tmp")
+	goPath := filepath.Join(base, "gopath")
+	for _, directory := range []string{moduleCache, buildCache, temporaryDirectory, goPath} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			return regenerationExecutable{}, err
+		}
+	}
 	command := exec.CommandContext(ctx, builder.Path, args...)
 	command.Dir = worktree
-	command.Env = append([]string(nil), os.Environ()...)
+	command.Env = fixedGoEnvironment(moduleCache, buildCache, temporaryDirectory)
 	if outputBytes, err := command.CombinedOutput(); err != nil {
 		return regenerationExecutable{}, fmt.Errorf("build fixed replay worker: %w: %s", err, strings.TrimSpace(string(outputBytes)))
 	}
-	return validateRegenerationExecutable(regenerationExecutable{Path: output})
+	environment, err := pinnedWorkerEnvironment(ctx, base)
+	if err != nil {
+		return regenerationExecutable{}, err
+	}
+	executable, err := validateRegenerationExecutable(regenerationExecutable{Path: output})
+	if err != nil {
+		return regenerationExecutable{}, err
+	}
+	executable.Environment = environment
+	return executable, nil
+}
+
+func preflightReplayBuild(ctx context.Context, repositoryRoot, pretrainingCommit string, builder regenerationExecutable) (returnErr error) {
+	replayBuildPreflights.Add(1)
+	if err := verifyProtectedGitEnvironment(); err != nil {
+		return err
+	}
+	if pretrainingCommit != replayPretrainingCommit {
+		return errors.New("build-only preflight is not bound to E3")
+	}
+	state, err := resolveGitState(ctx, repositoryRoot)
+	if err != nil {
+		return err
+	}
+	if err := verifyPinnedGitRepositoryState(ctx, state); err != nil {
+		return err
+	}
+	base, err := os.MkdirTemp("", "nous-causal-v4-build-preflight-")
+	if err != nil {
+		return err
+	}
+	worktree := filepath.Join(base, "worktree")
+	if err := runGit(ctx, state.Root, "worktree", "add", "--detach", worktree, pretrainingCommit); err != nil {
+		_ = os.RemoveAll(base)
+		return err
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, cleanupResolvedReplayWorktree(state.Root, worktree, base))
+	}()
+	detached, err := resolveGitState(ctx, worktree)
+	if err != nil || detached.Head != pretrainingCommit || !detached.Clean {
+		return errors.New("build-only preflight did not start at clean E3")
+	}
+	if _, err := buildReplayWorker(ctx, builder, worktree, filepath.Join(base, "worker")); err != nil {
+		return err
+	}
+	return verifyResolvedReplayWorktree(ctx, state.Root, worktree, pretrainingCommit)
+}
+
+func verifyResolvedReplayWorktree(ctx context.Context, repositoryRoot, worktree, pretrainingCommit string) error {
+	detached, err := resolveGitState(ctx, worktree)
+	if err != nil || detached.Head != pretrainingCommit || detached.Clean {
+		return errors.New("resolved replay worktree has the wrong commit or clean state")
+	}
+	changed, err := gitStringOutput(ctx, worktree, "diff", "--name-status", "--no-renames", "HEAD", "--")
+	if err != nil || changed != "M\tgo.mod\nM\tgo.sum" {
+		return errors.New("resolved replay build did not change exactly go.mod and go.sum")
+	}
+	if command := exec.CommandContext(ctx, pinnedGitPath, "-C", worktree, "diff", "--cached", "--quiet", "HEAD", "--"); command.Run() != nil {
+		return errors.New("resolved replay build staged a change")
+	}
+	for _, args := range [][]string{{"ls-files", "--others", "--exclude-standard"}, {"ls-files", "--others", "--ignored", "--exclude-standard"}} {
+		output, err := gitStringOutput(ctx, worktree, args...)
+		if err != nil || output != "" {
+			return errors.New("resolved replay build created an untracked or ignored path")
+		}
+	}
+	rootState, err := resolveGitState(ctx, repositoryRoot)
+	if err != nil {
+		return err
+	}
+	for path, digest := range map[string]string{"go.mod": resolvedGoModSHA256, "go.sum": resolvedGoSumSHA256} {
+		got, readErr := os.ReadFile(filepath.Join(worktree, path))
+		info, statErr := os.Lstat(filepath.Join(worktree, path))
+		want, gitErr := gitFile(ctx, repositoryRoot, rootState.Head, path)
+		if readErr != nil || statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 || gitErr != nil || sha256Hex(got) != digest || !bytes.Equal(got, want) {
+			return fmt.Errorf("resolved replay %s differs from exact X4 metadata", path)
+		}
+	}
+	return verifyPinnedGitRepositoryState(ctx, rootState)
+}
+
+func verifyCleanReplayWorktree(ctx context.Context, worktree, pretrainingCommit string) error {
+	detached, err := resolveGitState(ctx, worktree)
+	if err != nil || detached.Head != pretrainingCommit || !detached.Clean {
+		return errors.New("regeneration executable changed clean detached execution worktree")
+	}
+	for _, args := range [][]string{{"ls-files", "--others", "--exclude-standard"}, {"ls-files", "--others", "--ignored", "--exclude-standard"}} {
+		output, listErr := gitStringOutput(ctx, worktree, args...)
+		if listErr != nil || output != "" {
+			return errors.New("regeneration executable created an untracked or ignored execution-worktree path")
+		}
+	}
+	return nil
+}
+
+func cleanupReplayWorktreeSet(repositoryRoot string, worktrees []string, base string) error {
+	var cleanupErr error
+	for index := len(worktrees) - 1; index >= 0; index-- {
+		if err := runGit(context.Background(), repositoryRoot, "worktree", "remove", "--force", worktrees[index]); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	cleanupErr = errors.Join(cleanupErr, makeTreeOwnerWritable(base), os.RemoveAll(base))
+	if cleanupErr != nil {
+		cleanupErr = errors.Join(cleanupErr, runGit(context.Background(), repositoryRoot, "worktree", "prune", "--expire", "now"))
+	}
+	return cleanupErr
+}
+
+func makeTreeOwnerWritable(root string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o700)
+		}
+		return os.Chmod(path, 0o600)
+	})
 }
 
 func writeAllAndClose(file *os.File, data []byte) error {
@@ -342,6 +986,17 @@ func cleanupReplayWorktree(repositoryRoot, worktree, base string) error {
 	return directoryErr
 }
 
+func cleanupResolvedReplayWorktree(repositoryRoot, worktree, base string) error {
+	removeErr := runGit(context.Background(), repositoryRoot, "worktree", "remove", "--force", worktree)
+	writableErr := makeTreeOwnerWritable(base)
+	directoryErr := os.RemoveAll(base)
+	if removeErr != nil {
+		pruneErr := runGit(context.Background(), repositoryRoot, "worktree", "prune", "--expire", "now")
+		return errors.Join(removeErr, writableErr, directoryErr, pruneErr)
+	}
+	return errors.Join(writableErr, directoryErr)
+}
+
 type FrozenTrainingIdentity struct {
 	EvidenceCommit string
 	TrainingDigest string
@@ -363,9 +1018,8 @@ func beginValidationAttempt(ctx context.Context, repoRoot string) (*attemptCapab
 	if err := requireAncestor(ctx, state.Root, FrozenTrainingReportCommit, state.Head); err != nil {
 		return nil, err
 	}
-	changed, err := gitStringOutput(ctx, state.Root, "diff", "--name-only", FrozenTrainingReportCommit, state.Head, "--")
-	if err != nil || strings.TrimSpace(changed) != FrozenConstantsPath {
-		return nil, errors.New("candidate is not the constants-only child of training evidence")
+	if err := verifyCandidateConstantsState(ctx, state, FrozenTrainingReportCommit); err != nil {
+		return nil, err
 	}
 	reportPath := filepath.Join(state.Root, TrainingEvidenceDirectory, TrainingReportName)
 	reportBytes, err := os.ReadFile(reportPath)

@@ -99,6 +99,9 @@ func NewDiagnosticDevelopmentCapability() DiagnosticDevelopmentCapability {
 // commands. The unchanged semantic executors may produce detailed internal
 // errors; none of those values cross this boundary before atomic publication.
 func ExecuteProtectedPanel(ctx context.Context, repoRoot string, panel Panel) error {
+	if err := verifyPinnedProtectedRuntime(ctx, repoRoot); err != nil {
+		return fmt.Errorf("causal %s panel failed before publication", panel)
+	}
 	return executeProtectedPanelWith(ctx, repoRoot, panel, func(ctx context.Context, repoRoot string, panel Panel) error {
 		switch panel {
 		case PanelTraining:

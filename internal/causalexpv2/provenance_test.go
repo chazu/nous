@@ -7,6 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
@@ -473,6 +477,16 @@ func TestReplayHelperProcess(t *testing.T) {
 	if os.Getenv("NOUS_TEST_REPLAY_HELPER") != "1" {
 		return
 	}
+	if os.Getenv("NOUS_TEST_REPLAY_DIRTY") == "1" {
+		if err := os.WriteFile("replay-worker-mutated", []byte("dirty\n"), 0o600); err != nil {
+			os.Exit(22)
+		}
+	}
+	if os.Getenv("NOUS_TEST_REPLAY_IGNORED") == "1" {
+		if err := os.WriteFile("go.work", []byte("go 1.25.8\n"), 0o600); err != nil {
+			os.Exit(21)
+		}
+	}
 	if os.Getenv("NOUS_TEST_REPLAY_FAIL") == "1" {
 		os.Exit(23)
 	}
@@ -708,80 +722,966 @@ func TestReplayCleansAfterSubprocessFailureAndMismatch(t *testing.T) {
 	assertOneWorktree(t, repository)
 }
 
+func TestReplayAuditsWorktreeAfterWorkerFailure(t *testing.T) {
+	repository, common, head := gitTestRepo(t)
+	if err := os.WriteFile(filepath.Join(common, "info", "exclude"), []byte("go.work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NOUS_TEST_REPLAY_HELPER", "1")
+	t.Setenv("NOUS_TEST_REPLAY_FAIL", "1")
+	t.Setenv("NOUS_TEST_REPLAY_DIRTY", "1")
+	_, err := replayCapabilityForTest(t, repository, head, []byte("report"), []byte("bundle")).Replay(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "regeneration executable failed") || !strings.Contains(err.Error(), "changed clean detached execution worktree") {
+		t.Fatalf("worker failure did not retain post-exit audit error: %v", err)
+	}
+	assertOneWorktree(t, repository)
+	t.Setenv("NOUS_TEST_REPLAY_DIRTY", "0")
+	t.Setenv("NOUS_TEST_REPLAY_IGNORED", "1")
+	_, err = replayCapabilityForTest(t, repository, head, []byte("report"), []byte("bundle")).Replay(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "untracked or ignored execution-worktree path") {
+		t.Fatalf("worker failure did not audit ignored paths: %v", err)
+	}
+	assertOneWorktree(t, repository)
+}
+
 func TestReplaySuccessRecordBindsEToRToCandidate(t *testing.T) {
-	repository, commonDirectory, _ := gitTestRepo(t)
-	freezePath := filepath.Join(repository, FrozenConstantsPath)
-	if err := os.MkdirAll(filepath.Dir(freezePath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(freezePath, expectedFreezeFile("", "", ""), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	gitCommitAll(t, repository, "E")
-	eState, err := resolveGitState(context.Background(), repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repository, "evidence"), []byte("committed evidence\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	gitCommitAll(t, repository, "R")
-	rState, _ := resolveGitState(context.Background(), repository)
-	trainingDigest, bundleDigest := strings.Repeat("a", 64), strings.Repeat("b", 64)
-	if err := os.WriteFile(freezePath, expectedFreezeFile("P=H;M=gain;S=C", rState.Head, trainingDigest), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dirtyR, err := resolveGitState(context.Background(), repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyCandidateConstantsState(context.Background(), dirtyR, rState.Head); err != nil {
-		t.Fatalf("prescribed uncommitted constants edit at R rejected: %v", err)
-	}
-	diffDigest, err := candidateDiffDigest(context.Background(), repository, rState.Head)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: PlanCommit, PretrainingCommit: eState.Head, EvidenceCommit: rState.Head, CandidateCommit: rState.Head, CandidateDiffDigest: diffDigest, TrainingDigest: trainingDigest, BundleDigest: bundleDigest, CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "succeeded"}
+	commonDirectory := t.TempDir()
+	record := replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: ReplayRepairPlanCommit, PretrainingCommit: replayPretrainingCommit, EvidenceCommit: replayEvidenceCommit, CandidateCommit: strings.Repeat("c", 40), CandidateDiffDigest: strings.Repeat("d", 64), TrainingDigest: strings.Repeat("e", 64), BundleDigest: strings.Repeat("f", 64), CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "succeeded"}
 	if err := createReplayRecord(commonDirectory, record); err != nil {
 		t.Fatal(err)
 	}
-	gitCommitAll(t, repository, "C")
-	cState, _ := resolveGitState(context.Background(), repository)
-	if err := verifyCandidateConstantsState(context.Background(), cState, rState.Head); err != nil {
-		t.Fatalf("prescribed direct constants-only child C rejected: %v", err)
+	if filepath.Base(replayRecordPath(commonDirectory)) != "active-causal-diagnosis-v4-replay.json" {
+		t.Fatal("v4 replay receipt used a non-v4 path")
 	}
-	report := TrainingReport{PretrainingCommit: eState.Head, TrainingDigest: trainingDigest}
-	bundle := TrainingBundle{BundleDigest: bundleDigest}
-	if err := verifyReplaySuccessRecord(context.Background(), cState, report, bundle, rState.Head); err != nil {
+	encoded, err := os.ReadFile(replayRecordPath(commonDirectory))
+	if err != nil {
 		t.Fatal(err)
+	}
+	decoded, err := causalv2.StrictDecode[replaySuccessRecord](encoded)
+	if err != nil || decoded.ReplayVersion != "causal-replay-success/v4" || decoded.PlanCommit != ReplayRepairPlanCommit {
+		t.Fatalf("decode v4 receipt: %+v, %v", decoded, err)
 	}
 	legacy := record
-	legacy.ReplayVersion = "causal-replay-success/v2"
-	if err := persistReplayRecord(commonDirectory, legacy); err != nil {
+	legacy.ReplayVersion = "causal-replay-success/v3"
+	if legacy.ReplayVersion == replayRecordVersion {
+		t.Fatal("v4 replay decoder identity aliases v3")
+	}
+	if filepath.Base(replayRecordPath(commonDirectory)) == failedV3ReplayRecordName {
+		t.Fatal("v4 replay path aliases the consumed v3 receipt")
+	}
+}
+
+func TestV4PinnedToolsMetadataAndEnvironment(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyReplaySuccessRecord(context.Background(), cState, report, bundle, rState.Head); err == nil {
-		t.Fatal("v3 accepted a v2 replay success record")
-	}
-	if err := persistReplayRecord(commonDirectory, record); err != nil {
+	state, err := resolveGitState(context.Background(), root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	forged := record
-	forged.CandidateCommit = cState.Head
-	if err := persistReplayRecord(commonDirectory, forged); err != nil {
+	if err := verifyPinnedGitTool(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyReplaySuccessRecord(context.Background(), cState, report, bundle, rState.Head); err == nil {
-		t.Fatal("accepted receipt forged as a replay performed after candidate commit")
-	}
-	if err := persistReplayRecord(commonDirectory, record); err != nil {
+	if err := verifyPinnedGitRepositoryState(context.Background(), state); err != nil {
 		t.Fatal(err)
 	}
-	report.TrainingDigest = strings.Repeat("c", 64)
-	if err := verifyReplaySuccessRecord(context.Background(), cState, report, bundle, rState.Head); err == nil {
-		t.Fatal("replay record accepted different committed evidence")
+	if err := verifyRegularFileDigest(filepath.Join(root, "go.mod"), resolvedGoModSHA256); err != nil {
+		t.Fatal(err)
 	}
+	if err := verifyRegularFileDigest(filepath.Join(root, "go.sum"), resolvedGoSumSHA256); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"GOROOT=" + pinnedGOROOT, "GOTOOLCHAIN=local", "GOENV=off", "GOWORK=off", "GOFLAGS=", "GOEXPERIMENT=", "CGO_ENABLED=0", "GOOS=darwin", "GOARCH=arm64", "GOARM64=v8.0", "GODEBUG=", "GOFIPS140=off",
+		"GOMODCACHE=/private/mod", "GOPATH=/private/gopath", "GOCACHE=/private/build", "TMPDIR=/private/tmp", "GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org", "GOPRIVATE=", "GONOPROXY=", "GONOSUMDB=",
+	}
+	if got := fixedGoEnvironment("/private/mod", "/private/build", "/private/tmp"); !slices.Equal(got, want) {
+		t.Fatalf("fixed Go environment = %q", got)
+	}
+	for _, hostile := range []string{"HOME=hostile", "PATH=hostile", "GOFLAGS=-mod=vendor", "GIT_CONFIG_COUNT=1"} {
+		if slices.Contains(want, hostile) {
+			t.Fatalf("fixed environment inherited %q", hostile)
+		}
+	}
+	wrong := filepath.Join(t.TempDir(), "tool")
+	if err := os.WriteFile(wrong, []byte("wrong tool\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyRegularFileDigest(wrong, pinnedGoSHA256); err == nil {
+		t.Fatal("tool verifier accepted wrong executable bytes")
+	}
+	link := filepath.Join(t.TempDir(), "tool-link")
+	if err := os.Symlink(wrong, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyRegularFileDigest(link, sha256Hex([]byte("wrong tool\n"))); err == nil {
+		t.Fatal("tool verifier accepted a symlink")
+	}
+}
+
+func setProtectedGitEnvironmentForTest(t *testing.T) {
+	t.Helper()
+	required := map[string]string{"PATH": "/opt/homebrew/bin", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_ATTR_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
+	for name, value := range required {
+		t.Setenv(name, value)
+	}
+	for _, name := range []string{"GIT_ASKPASS", "GIT_SSH_COMMAND", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_SHALLOW_FILE", "GIT_EXEC_PATH"} {
+		value, present := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if present {
+				_ = os.Setenv(name, value)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
+	}
+}
+
+func TestV4ProtectedGitEnvironmentRejectsHostileInputs(t *testing.T) {
+	setProtectedGitEnvironmentForTest(t)
+	if err := verifyProtectedGitEnvironment(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"GIT_EXTERNAL_DIFF", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.Setenv(name, "hostile"); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyProtectedGitEnvironment(); err == nil {
+				t.Fatalf("protected Git environment accepted %s", name)
+			}
+			if err := os.Unsetenv(name); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestV4CandidateDigestUsesPinnedGitAndV4Domain(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setProtectedGitEnvironmentForTest(t)
+	command := exec.CommandContext(context.Background(), pinnedGitPath, "-C", root, "diff", "--binary", replayEvidenceCommit, "--")
+	command.Env = protectedGitCommandEnvironment()
+	diff, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := struct {
+		EvidenceCommit string `json:"evidence_commit"`
+		Diff           []byte `json:"diff"`
+	}{replayEvidenceCommit, diff}
+	want, err := causalv2.Digest("causal-replay-candidate-diff/v4", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := causalv2.Digest("causal-replay-candidate-diff/v3", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := candidateDiffDigest(context.Background(), root, replayEvidenceCommit)
+	if err != nil || got != want || got == legacy {
+		t.Fatalf("candidate digest = %s, want v4 %s, legacy %s, err=%v", got, want, legacy, err)
+	}
+}
+
+func TestV4ProtectedRuntimeEnvironmentRejectsHostileInputs(t *testing.T) {
+	t.Setenv("GODEBUG", "")
+	t.Setenv("GOFIPS140", "off")
+	if err := verifyProtectedRuntimeEnvironment(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GODEBUG", "gctrace=1")
+	if err := verifyProtectedRuntimeEnvironment(); err == nil {
+		t.Fatal("protected runtime accepted hostile GODEBUG")
+	}
+	t.Setenv("GODEBUG", "")
+	t.Setenv("GOFIPS140", "on")
+	if err := verifyProtectedRuntimeEnvironment(); err == nil {
+		t.Fatal("protected runtime accepted hostile GOFIPS140")
+	}
+}
+
+func TestV4PinnedGOROOTManifest(t *testing.T) {
+	count, digest, err := gorootManifest(pinnedGOROOT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != pinnedGOROOTFiles || digest != pinnedGOROOTSHA256 {
+		t.Fatalf("GOROOT manifest = (%d, %s)", count, digest)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "compiler"), []byte("bytes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wrongCount, wrongDigest, err := gorootManifest(root)
+	if err != nil || wrongCount == pinnedGOROOTFiles || wrongDigest == pinnedGOROOTSHA256 {
+		t.Fatal("GOROOT manifest accepted a different tree")
+	}
+	if err := os.Symlink(filepath.Join(root, "compiler"), filepath.Join(root, "symlink")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := gorootManifest(root); err == nil {
+		t.Fatal("GOROOT manifest accepted a symlink")
+	}
+}
+
+func TestV4PinnedGitRepositoryStateRejectsLocalInfluence(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := resolveGitState(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := os.ReadFile(filepath.Join(actual.CommonDir, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exclude, err := os.ReadFile(filepath.Join(actual.CommonDir, "info", "exclude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeState := func(t *testing.T) gitState {
+		t.Helper()
+		common := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(common, "info"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(common, "config"), config, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(common, "info", "exclude"), exclude, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return gitState{CommonDir: common}
+	}
+	for _, test := range []struct {
+		name string
+		path string
+		data []byte
+	}{
+		{"include", "config", append(append([]byte(nil), config...), []byte("\n[include]\npath = /tmp/hostile\n")...)},
+		{"exclude", "info/exclude", append(append([]byte(nil), exclude...), []byte("\ninternal/\n")...)},
+		{"attributes", "info/attributes", []byte("* diff=hostile\n")},
+		{"graft", "info/grafts", []byte(strings.Repeat("a", 40) + " " + strings.Repeat("b", 40) + "\n")},
+		{"shallow", "shallow", []byte(strings.Repeat("a", 40) + "\n")},
+		{"alternate", "objects/info/alternates", []byte("/tmp/objects\n")},
+		{"worktree config", "config.worktree", []byte("[core]\nworktree=/tmp\n")},
+		{"replacement ref", "refs/replace/" + strings.Repeat("a", 40), []byte(strings.Repeat("b", 40) + "\n")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := makeState(t)
+			path := filepath.Join(state.CommonDir, filepath.FromSlash(test.path))
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, test.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyPinnedGitRepositoryState(context.Background(), state); err == nil {
+				t.Fatal("hostile repository-local Git state was accepted")
+			}
+		})
+	}
+}
+
+func TestV4WorkerEnvironmentIsExactAndPrivate(t *testing.T) {
+	environment, err := pinnedWorkerEnvironment(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(environment) != 11 {
+		t.Fatalf("worker environment has %d entries", len(environment))
+	}
+	for _, denied := range []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS"} {
+		for _, entry := range environment {
+			if strings.HasPrefix(entry, denied+"=") {
+				t.Fatalf("worker environment inherited %s", denied)
+			}
+		}
+	}
+	bin := strings.TrimPrefix(environment[0], "PATH=")
+	entries, err := os.ReadDir(bin)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "git" {
+		t.Fatalf("worker private bin = %v, %v", entries, err)
+	}
+	if err := os.Remove(filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin/git", filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPinnedWorkerEnvironment(environment); err == nil {
+		t.Fatal("worker environment accepted a substituted private Git link")
+	}
+}
+
+func TestV4RetryCollisionsPrecedeAllActivityAndIgnoreV3Failure(t *testing.T) {
+	common := t.TempDir()
+	state := gitState{CommonDir: common}
+	failedV3 := filepath.Join(common, "nous-attempts", failedV3ReplayRecordName)
+	if err := os.MkdirAll(filepath.Dir(failedV3), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := []byte("failed-v3-must-remain-opaque")
+	if err := os.WriteFile(failedV3, sentinel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireReplayRetrySlotsAbsent(state); err != nil {
+		t.Fatalf("v4 treated failed v3 receipt as a collision: %v", err)
+	}
+	paths := []string{replayRecordPath(common), attemptRecordPath(common, PanelValidation), attemptProofRecordPath(common, PanelValidation), attemptRecordPath(common, PanelLocked), attemptProofRecordPath(common, PanelLocked), resultPath(common, PanelValidation), resultPath(common, PanelLocked)}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("occupied"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			replayBuildPreflights.Store(0)
+			replayEvidenceReads.Store(0)
+			replayCapabilityMints.Store(0)
+			replayInputConstructions.Store(0)
+			replayWorkerStarts.Store(0)
+			if err := requireReplayRetrySlotsAbsent(state); err == nil {
+				t.Fatal("occupied retry slot was accepted")
+			}
+			if replayBuildPreflights.Load()+replayEvidenceReads.Load()+replayCapabilityMints.Load()+replayInputConstructions.Load()+replayWorkerStarts.Load() != 0 {
+				t.Fatal("retry collision permitted protected activity")
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	got, err := os.ReadFile(failedV3)
+	if err != nil || !bytes.Equal(got, sentinel) {
+		t.Fatal("v4 read or changed the failed v3 receipt")
+	}
+}
+
+func TestV4R3AnchoredFunctionBodyFloors(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{
+		"gates.go:mintReplayCapability": true, "gates.go:verifyCandidateConstantsState": true, "gates.go:Replay": true, "gates.go:buildReplayWorker": true, "gates.go:beginValidationAttempt": true,
+		"provenance.go:ExecuteProtectedPanel": true,
+		"replay_gate.go:replayRecordPath":     true, "replay_gate.go:candidateDiffDigest": true, "replay_gate.go:ExecuteReplay": true, "replay_gate.go:createReplayRecord": true, "replay_gate.go:persistReplayRecord": true, "replay_gate.go:verifyReplaySuccessRecord": true,
+		"provenance_test.go:TestReplayHelperProcess": true, "provenance_test.go:TestReplaySuccessRecordBindsEToRToCandidate": true,
+	}
+	allowedNew := map[string]bool{
+		"gates.go:verifyReplayRepairExecutableCommit": true, "gates.go:pinnedReplayBuilder": true, "gates.go:verifyPinnedProtectedRuntime": true, "gates.go:verifyProtectedRuntimeEnvironment": true, "gates.go:gorootManifest": true, "gates.go:fixedGoEnvironment": true, "gates.go:verifyRegularFileDigest": true, "gates.go:sha256Hex": true, "gates.go:verifyPinnedGitTool": true, "gates.go:verifyProtectedGitEnvironment": true, "gates.go:protectedGitCommandEnvironment": true, "gates.go:verifyPinnedGitRepositoryState": true, "gates.go:pinnedWorkerEnvironment": true, "gates.go:verifyPinnedWorkerEnvironment": true, "gates.go:preflightReplayBuild": true, "gates.go:verifyResolvedReplayWorktree": true, "gates.go:verifyCleanReplayWorktree": true, "gates.go:cleanupReplayWorktreeSet": true, "gates.go:makeTreeOwnerWritable": true, "gates.go:cleanupResolvedReplayWorktree": true,
+		"replay_gate.go:requireReplayRetrySlotsAbsent": true, "replay_gate.go:structuralReplayRecord": true,
+		"provenance_test.go:TestReplayAuditsWorktreeAfterWorkerFailure": true, "provenance_test.go:TestV4PinnedToolsMetadataAndEnvironment": true, "provenance_test.go:setProtectedGitEnvironmentForTest": true, "provenance_test.go:TestV4ProtectedGitEnvironmentRejectsHostileInputs": true, "provenance_test.go:TestV4CandidateDigestUsesPinnedGitAndV4Domain": true, "provenance_test.go:TestV4ProtectedRuntimeEnvironmentRejectsHostileInputs": true, "provenance_test.go:TestV4PinnedGOROOTManifest": true, "provenance_test.go:TestV4PinnedGitRepositoryStateRejectsLocalInfluence": true, "provenance_test.go:TestV4WorkerEnvironmentIsExactAndPrivate": true, "provenance_test.go:TestV4RetryCollisionsPrecedeAllActivityAndIgnoreV3Failure": true, "provenance_test.go:TestV4R3AnchoredFunctionBodyFloors": true, "provenance_test.go:functionFloorsForTest": true, "provenance_test.go:topLevelDeclarationsForTest": true, "provenance_test.go:locateV4ExecutableCommitForTest": true, "provenance_test.go:TestV4DetachedE3BuildRegressionAndBuildOnlyPreflight": true, "provenance_test.go:TestV4ExecutableConfinementAndCandidateTopology": true, "provenance_test.go:TestV4ReplaySuccessRecordBindsR3X4C4AndDigests": true, "provenance_test.go:reconstructX4ForTest": true,
+	}
+	allowedChangedDeclaration := map[string]bool{"gates.go:type:regenerationExecutable": true, "replay_gate.go:const:replayRecordVersion": true}
+	allowedNewDeclaration := map[string]bool{}
+	for _, key := range []string{
+		"gates.go:import:\"crypto/sha256\"", "gates.go:import:\"encoding/hex\"", "gates.go:import:\"io/fs\"", "gates.go:import:\"runtime\"", "gates.go:import:\"runtime/debug\"", "gates.go:import:\"sort\"", "gates.go:import:\"strconv\"", "gates.go:import:\"sync/atomic\"",
+		"gates.go:const:replayEvidenceCommit", "gates.go:const:replayPretrainingCommit", "gates.go:const:pinnedGoPath", "gates.go:const:pinnedGoSHA256", "gates.go:const:pinnedGoVersion", "gates.go:const:pinnedGOROOT", "gates.go:const:pinnedGOROOTFiles", "gates.go:const:pinnedGOROOTSHA256", "gates.go:const:pinnedGitPath", "gates.go:const:pinnedGitSHA256", "gates.go:const:pinnedGitVersion", "gates.go:const:pinnedGitConfigSHA256", "gates.go:const:pinnedGitInfoExcludeSHA256", "gates.go:const:resolvedGoModSHA256", "gates.go:const:resolvedGoSumSHA256",
+		"gates.go:var:replayBuildPreflights", "gates.go:var:replayEvidenceReads", "gates.go:var:replayCapabilityMints", "gates.go:var:replayInputConstructions", "gates.go:var:replayWorkerStarts",
+		"provenance_test.go:import:\"go/ast\"", "provenance_test.go:import:\"go/format\"", "provenance_test.go:import:\"go/parser\"", "provenance_test.go:import:\"go/token\"", "provenance_test.go:type:functionFloorForTest",
+		"replay_gate.go:const:ReplayRepairPlanCommit", "replay_gate.go:const:failedV3ReplayRecordName",
+	} {
+		allowedNewDeclaration[key] = true
+	}
+	for _, name := range []string{"gates.go", "provenance.go", "provenance_test.go", "replay_gate.go"} {
+		path := "internal/causalexpv2/" + name
+		baseline, err := gitFile(context.Background(), root, replayEvidenceCommit, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := functionFloorsForTest(t, path+"@R3", baseline)
+		after := functionFloorsForTest(t, path+"@X4", current)
+		beforeDeclarations := topLevelDeclarationsForTest(t, path+"@R3", baseline)
+		afterDeclarations := topLevelDeclarationsForTest(t, path+"@X4", current)
+		for key, declaration := range beforeDeclarations {
+			currentDeclaration, present := afterDeclarations[key]
+			if !present {
+				t.Fatalf("R3 top-level declaration was deleted: %s:%s", name, key)
+			}
+			if !bytes.Equal(declaration, currentDeclaration) && !allowedChangedDeclaration[name+":"+key] {
+				t.Fatalf("unlisted top-level declaration changed: %s:%s", name, key)
+			}
+		}
+		for key := range afterDeclarations {
+			if _, existed := beforeDeclarations[key]; !existed && !allowedNewDeclaration[name+":"+key] {
+				t.Fatalf("unlisted top-level declaration added: %s:%s", name, key)
+			}
+		}
+		for function, floor := range before {
+			currentFloor, present := after[function]
+			if !present {
+				t.Fatalf("R3 function was deleted: %s:%s", name, function)
+			}
+			if !bytes.Equal(floor.Signature, currentFloor.Signature) {
+				t.Fatalf("R3 function signature changed: %s:%s", name, function)
+			}
+			if allowed[name+":"+function] {
+				if name == "provenance_test.go" {
+					continue
+				}
+				if !slices.Equal(floor.EmpiricalStatements, currentFloor.EmpiricalStatements) {
+					t.Fatalf("allowed function changed empirical statements or control flow: %s:%s", name, function)
+				}
+				continue
+			}
+			if !bytes.Equal(floor.Body, currentFloor.Body) {
+				t.Fatalf("unlisted R3 function body changed: %s:%s", name, function)
+			}
+		}
+		for function, floor := range after {
+			if _, existed := before[function]; existed {
+				continue
+			}
+			if !allowedNew[name+":"+function] {
+				t.Fatalf("unlisted function added at X4: %s:%s", name, function)
+			}
+			if name != "provenance_test.go" && len(floor.EmpiricalStatements) != 0 {
+				t.Fatalf("new helper reads empirical fields: %s:%s: %q", name, function, floor.EmpiricalStatements)
+			}
+		}
+	}
+	replayGate, err := os.ReadFile(filepath.Join(root, "internal/causalexpv2/replay_gate.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	structuralBody := functionFloorsForTest(t, "replay_gate.go", replayGate)["structuralReplayRecord"].Body
+	for _, forbidden := range []string{"VerifyTrainingReportBytes", "VerifyTrainingBundleBytes", "contextuallyVerifyTrainingEvidence", "requireUsableTrainingReport", "regenerateTrainingEvidence", "SelectedRule", ".Fixtures", ".Episodes", ".Actions", ".Score", ".Status"} {
+		if bytes.Contains(structuralBody, []byte(forbidden)) {
+			t.Fatalf("pre-receipt structural helper performs empirical work through %s", forbidden)
+		}
+	}
+}
+
+type functionFloorForTest struct {
+	Signature           []byte
+	Body                []byte
+	EmpiricalStatements []string
+}
+
+func functionFloorsForTest(t *testing.T, filename string, source []byte) map[string]functionFloorForTest {
+	t.Helper()
+	set := token.NewFileSet()
+	parsed, err := parser.ParseFile(set, filename, source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	floors := map[string]functionFloorForTest{}
+	for _, declaration := range parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil {
+			continue
+		}
+		var signature, body bytes.Buffer
+		if err := format.Node(&signature, set, function.Type); err != nil {
+			t.Fatal(err)
+		}
+		if err := format.Node(&body, set, function.Body); err != nil {
+			t.Fatal(err)
+		}
+		statements := []string{}
+		forbidden := map[string]bool{"SelectedRule": true, "Rules": true, "WinnerTies": true, "Applications": true, "Fixtures": true, "Episodes": true, "Actions": true, "TeacherOutcomes": true, "Terminal": true, "Status": true, "RuleCode": true, "Score": true, "Cost": true, "FinalPosterior": true, "MeterItems": true, "Mechanical": true, "Controls": true, "Contrasts": true, "Cohorts": true, "Aggregates": true, "ControlBundle": true, "ControlEvidence": true, "CorruptionFixture": true, "OracleAgreements": true, "OracleDisagreements": true, "Gates": true, "DynamicBenchmark": true, "AllCapsValid": true, "Passed": true, "Valid": true}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			statement, ok := node.(ast.Stmt)
+			if !ok {
+				return true
+			}
+			if _, block := statement.(*ast.BlockStmt); block {
+				return true
+			}
+			hasEmpirical := false
+			ast.Inspect(statement, func(child ast.Node) bool {
+				selector, ok := child.(*ast.SelectorExpr)
+				if ok && forbidden[selector.Sel.Name] {
+					hasEmpirical = true
+				}
+				return true
+			})
+			if hasEmpirical {
+				var encoded bytes.Buffer
+				if err := format.Node(&encoded, set, statement); err != nil {
+					t.Fatal(err)
+				}
+				statements = append(statements, encoded.String())
+			}
+			return true
+		})
+		slices.Sort(statements)
+		floors[function.Name.Name] = functionFloorForTest{Signature: signature.Bytes(), Body: body.Bytes(), EmpiricalStatements: statements}
+	}
+	return floors
+}
+
+func topLevelDeclarationsForTest(t *testing.T, filename string, source []byte) map[string][]byte {
+	t.Helper()
+	set := token.NewFileSet()
+	parsed, err := parser.ParseFile(set, filename, source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declarations := map[string][]byte{}
+	for _, declaration := range parsed.Decls {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, specification := range general.Specs {
+			key := ""
+			switch value := specification.(type) {
+			case *ast.ImportSpec:
+				key = "import:" + value.Path.Value
+			case *ast.TypeSpec:
+				key = "type:" + value.Name.Name
+			case *ast.ValueSpec:
+				names := make([]string, len(value.Names))
+				for index := range value.Names {
+					names[index] = value.Names[index].Name
+				}
+				key = strings.ToLower(general.Tok.String()) + ":" + strings.Join(names, ",")
+			}
+			if key == "" {
+				continue
+			}
+			var encoded bytes.Buffer
+			if err := format.Node(&encoded, set, specification); err != nil {
+				t.Fatal(err)
+			}
+			declarations[key] = encoded.Bytes()
+		}
+	}
+	return declarations
+}
+
+func locateV4ExecutableCommitForTest(t *testing.T, repository string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", repository, "rev-list", "--reverse", replayEvidenceCommit+"..HEAD")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range strings.Fields(string(output)) {
+		if verifyReplayRepairExecutableCommit(context.Background(), repository, candidate) == nil {
+			return candidate
+		}
+	}
+	state, err := resolveGitState(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Head == ReplayRepairPlanCommit {
+		t.Skip("v4 replay-repair executable commit has not been created yet")
+	}
+	t.Fatal("history after the accepted v4 plan has no conforming X4 commit")
+	return ""
+}
+
+func TestV4DetachedE3BuildRegressionAndBuildOnlyPreflight(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	x4 := locateV4ExecutableCommitForTest(t, root)
+	state, err := resolveGitState(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Head != x4 {
+		t.Skip("build-only preflight is exercised at clean X4 before the v4 receipt")
+	}
+	if !state.Clean {
+		t.Skip("build-only preflight waits for the amended clean X4 commit")
+	}
+	setProtectedGitEnvironmentForTest(t)
+	builder, err := pinnedReplayBuilder(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := t.TempDir()
+	worktree := filepath.Join(base, "original-e3")
+	if err := runGit(context.Background(), root, "worktree", "add", "--detach", worktree, replayPretrainingCommit); err != nil {
+		t.Fatal(err)
+	}
+	worktrees := []string{worktree}
+	t.Cleanup(func() { _ = cleanupReplayWorktreeSet(root, worktrees, base) })
+	gitWorktree := filepath.Join(base, "git-e3")
+	if err := runGit(context.Background(), root, "worktree", "add", "--detach", gitWorktree, replayPretrainingCommit); err != nil {
+		t.Fatal(err)
+	}
+	worktrees = append(worktrees, gitWorktree)
+	workerEnvironment, err := pinnedWorkerEnvironment(context.Background(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range [][]string{{"rev-parse", "HEAD"}, {"rev-parse", "--show-toplevel"}, {"rev-parse", "--git-common-dir"}, {"status", "--porcelain"}, {"merge-base", "--is-ancestor", replayPretrainingCommit, replayEvidenceCommit}, {"diff-tree", "--no-commit-id", "--name-status", "-r", replayEvidenceCommit}} {
+		gitCommand := exec.CommandContext(context.Background(), "git", operation...)
+		gitCommand.Dir = gitWorktree
+		gitCommand.Env = workerEnvironment
+		gitOutput, err := gitCommand.Output()
+		if err != nil {
+			t.Fatalf("fixed worker Git environment cannot execute %v: %s, %v", operation, gitOutput, err)
+		}
+		if slices.Equal(operation, []string{"rev-parse", "HEAD"}) && strings.TrimSpace(string(gitOutput)) != replayPretrainingCommit {
+			t.Fatalf("fixed worker Git environment resolved wrong E3: %s", gitOutput)
+		}
+	}
+	for _, evidencePath := range []string{TrainingEvidenceDirectory + "/" + TrainingEpisodesName, TrainingEvidenceDirectory + "/" + TrainingReportName} {
+		gitCommand := exec.CommandContext(context.Background(), "git", "cat-file", "-e", replayPretrainingCommit+":"+evidencePath)
+		gitCommand.Dir = gitWorktree
+		gitCommand.Env = workerEnvironment
+		if err := gitCommand.Run(); err == nil {
+			t.Fatalf("E3 unexpectedly contains canonical evidence path %s", evidencePath)
+		}
+	}
+	detachedCommand := exec.CommandContext(context.Background(), "git", "symbolic-ref", "-q", "HEAD")
+	detachedCommand.Dir = gitWorktree
+	detachedCommand.Env = workerEnvironment
+	if err := detachedCommand.Run(); err == nil {
+		t.Fatal("fixed worker Git environment did not observe detached E3")
+	}
+	moduleCache, buildCache, temporaryDirectory := filepath.Join(base, "original-mod"), filepath.Join(base, "original-cache"), filepath.Join(base, "original-tmp")
+	for _, directory := range []string{moduleCache, buildCache, temporaryDirectory} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	worker := filepath.Join(base, "original-worker")
+	command := exec.CommandContext(context.Background(), builder.Path, "build", "-o", worker, "./internal/causalexpv2/replayexec")
+	command.Dir = worktree
+	command.Env = fixedGoEnvironment(moduleCache, buildCache, temporaryDirectory)
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("original detached E3 build unexpectedly succeeded without -mod=mod: %s", output)
+	}
+	if _, err := os.Lstat(worker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed original E3 build produced a worker")
+	}
+	for _, name := range []string{"go.mod", "go.sum"} {
+		encoded, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(worktree, name), encoded, 0o644); err != nil {
+			t.Fatalf("prepare resolved E3 %s: %v", name, err)
+		}
+	}
+	if err := verifyResolvedReplayWorktree(context.Background(), root, worktree, replayPretrainingCommit); err != nil {
+		t.Fatalf("exact resolved E3 state rejected: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(worktree, "go.mod"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyResolvedReplayWorktree(context.Background(), root, worktree, replayPretrainingCommit); err == nil {
+		t.Fatal("resolved E3 audit accepted wrong module-file mode")
+	}
+	resolvedWorktree := func(t *testing.T) string {
+		t.Helper()
+		candidate := filepath.Join(base, fmt.Sprintf("resolved-e3-%d", len(worktrees)))
+		if err := runGit(context.Background(), root, "worktree", "add", "--detach", candidate, replayPretrainingCommit); err != nil {
+			t.Fatal(err)
+		}
+		worktrees = append(worktrees, candidate)
+		for _, name := range []string{"go.mod", "go.sum"} {
+			encoded, err := os.ReadFile(filepath.Join(root, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(candidate, name), encoded, 0o644); err != nil {
+				t.Fatalf("prepare %s: %v", name, err)
+			}
+		}
+		return candidate
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{"source", func(t *testing.T, candidate string) {
+			path := filepath.Join(candidate, "internal/causalexpv2/generator.go")
+			encoded, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(encoded, []byte("\n// changed\n")...), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"untracked", func(t *testing.T, candidate string) {
+			if err := os.WriteFile(filepath.Join(candidate, "extra"), []byte("extra\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"ignored", func(t *testing.T, candidate string) {
+			if err := os.WriteFile(filepath.Join(candidate, "go.work"), []byte("go 1.25.8\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"wrong hash", func(t *testing.T, candidate string) {
+			if err := os.WriteFile(filepath.Join(candidate, "go.mod"), []byte("wrong\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"staged", func(t *testing.T, candidate string) {
+			if err := runGit(context.Background(), candidate, "add", "go.mod"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run("resolved mutation "+test.name, func(t *testing.T) {
+			candidate := resolvedWorktree(t)
+			test.mutate(t, candidate)
+			if err := verifyResolvedReplayWorktree(context.Background(), root, candidate, replayPretrainingCommit); err == nil {
+				t.Fatal("resolved E3 audit accepted forbidden mutation")
+			}
+		})
+	}
+
+	failedV3 := filepath.Join(state.CommonDir, "nous-attempts", failedV3ReplayRecordName)
+	failedBefore, err := os.ReadFile(failedV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(replayRecordPath(state.CommonDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("v4 receipt existed before build-only preflight")
+	}
+	replayBuildPreflights.Store(0)
+	replayEvidenceReads.Store(0)
+	replayCapabilityMints.Store(0)
+	replayInputConstructions.Store(0)
+	replayWorkerStarts.Store(0)
+	if err := preflightReplayBuild(context.Background(), root, replayPretrainingCommit, builder); err != nil {
+		t.Fatal(err)
+	}
+	if replayBuildPreflights.Load() != 1 || replayEvidenceReads.Load() != 0 || replayCapabilityMints.Load() != 0 || replayInputConstructions.Load() != 0 || replayWorkerStarts.Load() != 0 {
+		t.Fatalf("build-only preflight activity = build:%d evidence:%d mint:%d input:%d worker:%d", replayBuildPreflights.Load(), replayEvidenceReads.Load(), replayCapabilityMints.Load(), replayInputConstructions.Load(), replayWorkerStarts.Load())
+	}
+	if _, err := os.Lstat(replayRecordPath(state.CommonDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("build-only preflight created a v4 receipt")
+	}
+	failedAfter, err := os.ReadFile(failedV3)
+	if err != nil || !bytes.Equal(failedBefore, failedAfter) {
+		t.Fatal("build-only preflight changed the failed v3 receipt")
+	}
+}
+
+func TestV4ExecutableConfinementAndCandidateTopology(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	x4 := locateV4ExecutableCommitForTest(t, root)
+	repository := cloneAtCommitForTest(t, root, x4)
+	state, err := resolveGitState(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyReplayRepairExecutableCommit(context.Background(), repository, state.Head); err != nil {
+		t.Fatalf("accepted X4 rejected: %v", err)
+	}
+	freeze := filepath.Join(repository, FrozenConstantsPath)
+	if err := os.WriteFile(freeze, expectedFreezeFile("P=E;M=gain;S=C", replayEvidenceCommit, "96b1cdf7579c0a186e5cd9aeb7aaa42f0c224ffe19989bf78b5b3aa320b17fa0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err := resolveGitState(context.Background(), repository)
+	if err != nil || verifyCandidateConstantsState(context.Background(), dirty, replayEvidenceCommit) != nil {
+		t.Fatalf("exact dirty X4 candidate rejected: %v", err)
+	}
+	if err := os.Chmod(freeze, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dirtyMode, err := resolveGitState(context.Background(), repository)
+	if err != nil || verifyCandidateConstantsState(context.Background(), dirtyMode, replayEvidenceCommit) == nil {
+		t.Fatal("dirty X4 accepted executable constants file")
+	}
+	if err := os.Chmod(freeze, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitAll(t, repository, "C4")
+	clean, err := resolveGitState(context.Background(), repository)
+	if err != nil || verifyCandidateConstantsState(context.Background(), clean, replayEvidenceCommit) != nil {
+		t.Fatalf("exact clean C4 candidate rejected: %v", err)
+	}
+	badC4 := cloneAtCommitForTest(t, root, x4)
+	badFreeze := filepath.Join(badC4, FrozenConstantsPath)
+	if err := os.WriteFile(badFreeze, expectedFreezeFile("P=E;M=gain;S=C", replayEvidenceCommit, "96b1cdf7579c0a186e5cd9aeb7aaa42f0c224ffe19989bf78b5b3aa320b17fa0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(badFreeze, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitAll(t, badC4, "bad mode C4")
+	badC4State, err := resolveGitState(context.Background(), badC4)
+	if err != nil || verifyCandidateConstantsState(context.Background(), badC4State, replayEvidenceCommit) == nil {
+		t.Fatal("clean C4 accepted executable constants blob")
+	}
+
+	for _, test := range []struct {
+		name string
+		path string
+		kind string
+	}{
+		{"protected causal source", "internal/causalexpv2/generator.go", "edit"},
+		{"domain source", "internal/causalv2/domains.go", "edit"},
+		{"amendment", "docs/active-causal-diagnosis-v4-replay-amendment.md", "edit"},
+		{"module hash", "go.mod", "edit"},
+		{"mode", "internal/causalexpv2/gates.go", "mode"},
+		{"missing", "go.sum", "missing"},
+		{"additional", "README.md", "edit"},
+		{"removed", "internal/causalexpv2/gates.go", "remove"},
+		{"renamed", "internal/causalexpv2/gates.go", "rename"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clone := reconstructX4ForTest(t, root, x4, test.path == "go.sum" && test.kind == "missing")
+			path := filepath.Join(clone, filepath.FromSlash(test.path))
+			switch test.kind {
+			case "mode":
+				if err := os.Chmod(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			case "edit":
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(content, []byte("\n// v4 confinement violation\n")...), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "remove":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			case "rename":
+				if err := os.Rename(path, path+".renamed"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gitCommitAll(t, clone, "inject v4 confinement violation")
+			bad, err := resolveGitState(context.Background(), clone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyReplayRepairExecutableCommit(context.Background(), clone, bad.Head); err == nil {
+				t.Fatal("injected X4 confinement violation was accepted")
+			}
+		})
+	}
+}
+
+func TestV4ReplaySuccessRecordBindsR3X4C4AndDigests(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = locateV4ExecutableCommitForTest(t, root)
+	state, err := resolveGitState(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifyCandidateConstantsState(context.Background(), state, replayEvidenceCommit) != nil {
+		t.Skip("v4 receipt binding is exercised at clean C4")
+	}
+	setProtectedGitEnvironmentForTest(t)
+	receiptBytes, err := os.ReadFile(replayRecordPath(state.CommonDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := causalv2.StrictDecode[replaySuccessRecord](receiptBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportBytes, err := gitFile(context.Background(), root, replayEvidenceCommit, filepath.ToSlash(filepath.Join(TrainingEvidenceDirectory, TrainingReportName)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundleBytes, err := gitFile(context.Background(), root, replayEvidenceCommit, filepath.ToSlash(filepath.Join(TrainingEvidenceDirectory, TrainingEpisodesName)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := causalv2.StrictDecode[TrainingReport](reportBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := causalv2.StrictDecode[TrainingBundle](bundleBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	common := t.TempDir()
+	state.CommonDir = common
+	write := func(t *testing.T, record replaySuccessRecord) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(replayRecordPath(common)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(replayRecordPath(common), mustCanonical(record), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, receipt)
+	if err := verifyReplaySuccessRecord(context.Background(), state, report, bundle, replayEvidenceCommit); err != nil {
+		t.Fatalf("valid v4 receipt rejected: %v", err)
+	}
+	for _, mutate := range []func(*replaySuccessRecord){
+		func(value *replaySuccessRecord) { value.ReplayVersion = "causal-replay-success/v3" },
+		func(value *replaySuccessRecord) { value.PlanCommit = PlanCommit },
+		func(value *replaySuccessRecord) { value.PretrainingCommit = strings.Repeat("1", 40) },
+		func(value *replaySuccessRecord) { value.EvidenceCommit = strings.Repeat("2", 40) },
+		func(value *replaySuccessRecord) { value.CandidateCommit = state.Head },
+		func(value *replaySuccessRecord) { value.CandidateDiffDigest = strings.Repeat("3", 64) },
+		func(value *replaySuccessRecord) { value.TrainingDigest = strings.Repeat("4", 64) },
+		func(value *replaySuccessRecord) { value.BundleDigest = strings.Repeat("5", 64) },
+		func(value *replaySuccessRecord) { value.State = "failed" },
+	} {
+		forged := receipt
+		mutate(&forged)
+		write(t, forged)
+		if err := verifyReplaySuccessRecord(context.Background(), state, report, bundle, replayEvidenceCommit); err == nil {
+			t.Fatal("forged v4 replay receipt was accepted")
+		}
+	}
+	write(t, receipt)
+	wrongTopology := state
+	wrongTopology.Head = receipt.CandidateCommit
+	if err := verifyReplaySuccessRecord(context.Background(), wrongTopology, report, bundle, replayEvidenceCommit); err == nil {
+		t.Fatal("v4 replay receipt accepted wrong C4 topology")
+	}
+}
+
+func reconstructX4ForTest(t *testing.T, root, x4 string, omitGoSum bool) string {
+	t.Helper()
+	repository := cloneAtCommitForTest(t, root, ReplayRepairPlanCommit)
+	paths := []string{"go.mod", "go.sum", "internal/causalexpv2/gates.go", "internal/causalexpv2/provenance.go", "internal/causalexpv2/provenance_test.go", "internal/causalexpv2/replay_gate.go"}
+	for _, path := range paths {
+		if omitGoSum && path == "go.sum" {
+			continue
+		}
+		content, err := gitFile(context.Background(), root, x4, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(repository, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repository
 }
 
 func TestAttemptRecordRejectsCompanionProofFields(t *testing.T) {

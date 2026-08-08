@@ -2,7 +2,10 @@ module github.com/chazu/nous
 
 go 1.25.8
 
-require cuelang.org/go v0.16.0
+require (
+	cuelang.org/go v0.16.0
+	golang.org/x/sys v0.41.0
+)
 
 require (
 	github.com/cockroachdb/apd/v3 v3.2.1 // indirect
