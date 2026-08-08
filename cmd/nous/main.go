@@ -10,10 +10,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 
 	"github.com/chazu/nous/internal/agenda"
-	"github.com/chazu/nous/internal/causalexp"
+	"github.com/chazu/nous/internal/causaldpproof"
+	"github.com/chazu/nous/internal/causalexpv2"
+	"github.com/chazu/nous/internal/causalrun"
+	"github.com/chazu/nous/internal/causalv2"
 	"github.com/chazu/nous/internal/configrepairexp"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/gameexp"
@@ -21,6 +27,7 @@ import (
 	"github.com/chazu/nous/internal/ruleinductionexp"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
+	causal "github.com/chazu/nous/internal/vocab/causal"
 )
 
 func main() {
@@ -51,56 +58,89 @@ func main() {
 
 func causalTrialsCmd(args []string) {
 	fs := flag.NewFlagSet("causal-trials", flag.ExitOnError)
-	domainsDir := fs.String("domains-dir", "domains", "filesystem path to domains/ directory")
-	panel := fs.String("panel", "development", "training, development, validation, or locked")
-	pretrainingCommit := fs.String("pretraining-commit", "", "clean pretraining executable commit (required for training)")
-	implementationCommit := fs.String("implementation-commit", "", "clean implementation candidate commit (required for locked)")
-	evidenceOut := fs.String("evidence-out", "", "training episode-bundle output path")
+	repoRoot := fs.String("repo-root", ".", "repository root")
+	panel := fs.String("panel", "development", "proof, training, replay, development, validation, or locked")
 	fs.Parse(args)
-	if *panel == "training" {
-		if *pretrainingCommit == "" || *evidenceOut == "" {
-			fmt.Fprintln(os.Stderr, "error: training requires -pretraining-commit and -evidence-out")
-			os.Exit(2)
+	root, err := filepath.Abs(*repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: resolve repository root: %v\n", err)
+		os.Exit(1)
+	}
+	ctx := context.Background()
+	switch *panel {
+	case "proof":
+		proof, runErr := causaldpproof.Run()
+		if runErr != nil {
+			err = runErr
+			break
 		}
-		report, bundle, err := causalexp.RunTraining(*domainsDir, *pretrainingCommit)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		bundleJSON, err := bundle.JSON()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: encode bundle: %v\n", err)
-			os.Exit(1)
-		}
-		if err := os.WriteFile(*evidenceOut, append(bundleJSON, '\n'), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "error: write evidence: %v\n", err)
-			os.Exit(1)
-		}
-		encoded, err := report.JSON()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
-			os.Exit(1)
+		encoded, encodeErr := causalv2.CanonicalJSON(proof)
+		if encodeErr != nil {
+			err = encodeErr
+			break
 		}
 		fmt.Println(string(encoded))
 		return
-	}
-	var report causalexp.Report
-	var err error
-	if *panel == "locked" {
-		report, err = causalexp.RunLockedPanel(*domainsDir, *implementationCommit)
-	} else {
-		report, err = causalexp.RunPanel(*domainsDir, *panel, *implementationCommit)
+	case "development":
+		diagnostics, runErr := causalexpv2.RunDevelopment(ctx, root)
+		if runErr != nil {
+			err = runErr
+			break
+		}
+		encoded, encodeErr := causalv2.CanonicalJSON(diagnostics)
+		if encodeErr != nil {
+			err = encodeErr
+			break
+		}
+		fmt.Println(string(encoded))
+		return
+	case "training":
+		err = causalexpv2.ExecuteTraining(ctx, root)
+	case "replay":
+		err = causalexpv2.ExecuteReplay(ctx, root)
+		if err == nil {
+			fmt.Println(`{"status":"replay-succeeded"}`)
+			return
+		}
+	case "validation":
+		err = causalexpv2.ExecuteValidation(ctx, root)
+	case "locked":
+		err = causalexpv2.ExecuteLocked(ctx, root)
+	default:
+		err = fmt.Errorf("unknown causal panel %q", *panel)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	encoded, err := report.JSON()
+	reportPath, err := causalReportPath(root, *panel)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: locate report: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(encoded))
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: read report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(report))
+}
+
+func causalReportPath(repoRoot, panel string) (string, error) {
+	if panel == "training" {
+		return filepath.Join(repoRoot, causalexpv2.TrainingEvidenceDirectory, causalexpv2.TrainingReportName), nil
+	}
+	command := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-common-dir")
+	output, err := command.Output()
+	if err != nil {
+		return "", err
+	}
+	common := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(repoRoot, common)
+	}
+	return filepath.Join(filepath.Clean(common), causalexpv2.ResultsDirectoryName,
+		"active-causal-diagnosis-v2-"+panel+".json"), nil
 }
 
 func ruleInductionTrialsCmd(args []string) {
@@ -215,6 +255,10 @@ func runCmd(args []string) {
 			os.Exit(1)
 		}
 	}
+	if *domain == "causal" {
+		runCausalDevelopmentBoundary()
+		return
+	}
 
 	// Build the system
 	store := unit.NewStore()
@@ -263,6 +307,65 @@ func runCmd(args []string) {
 	}
 }
 
+type externalCausalTeacher struct{}
+
+func (externalCausalTeacher) Respond(_, _ string) (string, error) {
+	return "", fmt.Errorf("standalone causal run stops before the external teacher call")
+}
+
+func runCausalDevelopmentBoundary() {
+	manifest := causalv2.PreregisteredManifest()
+	fixture, err := causalexpv2.NewDiagnosticDevelopmentCapability().GenerateDevelopment(manifest.DevelopmentSeeds.Start, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: generate causal development fixture: %v\n", err)
+		os.Exit(1)
+	}
+	publicBytes, err := causalv2.CanonicalJSON(fixture.PublicFixture)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode causal fixture: %v\n", err)
+		os.Exit(1)
+	}
+	rules := causal.Rules()
+	if len(rules) == 0 {
+		fmt.Fprintln(os.Stderr, "error: causal acquisition grammar is empty")
+		os.Exit(1)
+	}
+	profile := causalv2.Profile{
+		ProfileVersion:  causalv2.ProfileDomain,
+		Manifest:        manifest,
+		Panel:           "development",
+		Seed:            fixture.PublicFixture.Seed,
+		AcquisitionCode: rules[0].Code(),
+		FixtureDigest:   fixture.PublicFixture.FixtureDigest,
+	}
+	if err := causalv2.SignProfile(&profile); err != nil {
+		fmt.Fprintf(os.Stderr, "error: sign causal profile: %v\n", err)
+		os.Exit(1)
+	}
+	profileBytes, err := causalv2.CanonicalJSON(profile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode causal profile: %v\n", err)
+		os.Exit(1)
+	}
+	runner, err := causalrun.NewEpisode(publicBytes, profileBytes, externalCausalTeacher{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: start causal episode: %v\n", err)
+		os.Exit(1)
+	}
+	defer runner.Close()
+	boundary, err := runner.AdvanceToTeacher(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: reach causal teacher boundary: %v\n", err)
+		os.Exit(1)
+	}
+	encoded, err := causalv2.CanonicalJSON(boundary)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode causal boundary: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("nous: causal development seed %d reached verified external-teacher boundary\n%s\n", fixture.PublicFixture.Seed, encoded)
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `nous: a EURISKO-style discovery engine
 
@@ -272,6 +375,7 @@ Usage:
   nous configrepair-trials [flags]              Run Kubernetes/Terraform repair trials
   nous game-trials [flags]                      Run iterated-game strategy trials
   nous ruleinduction-trials [flags]             Run relational rule-induction development trials
+  nous causal-trials -panel NAME                Run v2 causal development/training/replay/validation/locked panel
   nous help                                     Show this help
 
 Flags:

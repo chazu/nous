@@ -2,6 +2,100 @@ package domains
 
 units: [
 	{
+		name: "H-Causal-V2-Propose"
+		worth: 900
+		isA: ["Heuristic", "Anything"]
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "causalV2Propose" =
+			"CurUnit" @ "CurSlot" @ causal-v2-task-valid? and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "CurSlot" @ causal-v2-begin-task drop
+			"CurUnit" @ causal-v2-prepare-proposal drop
+			"CurUnit" @ causal-v2-actions "actions" !
+			"actions" @ each "CurUnit" @ it causal-v2-materialize-cache drop end
+			"actions" @ each "CurUnit" @ it causal-v2-materialize-proposal drop end
+			"actions" @ each "CurUnit" @ it causal-v2-materialize-partition drop end
+			"actions" @ each "CurUnit" @ it causal-v2-materialize-score drop end
+			"" "best" !
+			"actions" @
+			each
+				it "action" !
+				"best" @ "" =
+				if
+					"action" @ "best" !
+				else
+					"action" @ "best" @ "CurUnit" @ causal-v2-better?
+					if "action" @ "best" ! then
+				then
+			end
+			"actions" @
+			each
+				it "action" !
+				"action" @ "best" @ "CurUnit" @ causal-v2-equal-score?
+				if "CurUnit" @ "action" @ causal-v2-materialize-tie drop then
+			end
+			"CurUnit" @ "best" @ causal-v2-materialize-selection drop
+			"CurUnit" @ "CurSlot" @ causal-v2-end-task drop
+			"""#
+	},
+	{
+		name: "H-Causal-V2-Authorize"
+		worth: 900
+		isA: ["Heuristic", "Anything"]
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "causalV2Authorize" =
+			"CurUnit" @ "CurSlot" @ causal-v2-task-valid? and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "CurSlot" @ causal-v2-begin-task drop
+			"CurUnit" @ causal-v2-materialize-authorization drop
+			"CurUnit" @ causal-v2-materialize-awaiting-snapshot drop
+			"CurUnit" @ "CurSlot" @ causal-v2-end-task drop
+			"""#
+	},
+	{
+		name: "H-Causal-V2-Update"
+		worth: 900
+		isA: ["Heuristic", "Anything"]
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "causalV2Update" =
+			"CurUnit" @ "CurSlot" @ causal-v2-task-valid? and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "CurSlot" @ causal-v2-begin-task drop
+			"CurUnit" @ causal-v2-prepare-update drop
+			"CurUnit" @ causal-v2-eliminated
+			each "CurUnit" @ it causal-v2-materialize-elimination drop end
+			"CurUnit" @ causal-v2-materialize-posterior drop
+			"CurUnit" @ causal-v2-materialize-consumption drop
+			"CurUnit" @ causal-v2-materialize-transcript drop
+			"CurUnit" @ causal-v2-materialize-next-snapshot drop
+			"CurUnit" @ causal-v2-terminal?
+			if "CurUnit" @ causal-v2-materialize-terminal drop then
+			"CurUnit" @ causal-v2-finish-update drop
+			"CurUnit" @ "CurSlot" @ causal-v2-end-task drop
+			"""#
+	},
+	{
+		name: "H-Causal-V2-Finalize"
+		worth: 900
+		isA: ["Heuristic", "Anything"]
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "causalV2Finalize" =
+			"CurUnit" @ "CurSlot" @ causal-v2-task-valid? and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "CurSlot" @ causal-v2-begin-task drop
+			"CurUnit" @ causal-v2-finalize-zero drop
+			"CurUnit" @ "CurSlot" @ causal-v2-end-task drop
+			"""#
+	},
+	{
 		name: "H-Causal-Propose"
 		worth: 800
 		isA: ["Heuristic", "Anything"]

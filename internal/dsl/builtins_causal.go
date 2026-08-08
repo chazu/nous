@@ -7,28 +7,286 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	causal "github.com/chazu/nous/internal/vocab/causal"
 )
 
+// CausalTaskScope is the narrow hidden-free task capability used by the v2
+// causal builtins. The adapter registry is keyed by the exact top-level VM
+// pointer, so copied stores and nested child VMs do not inherit authority.
+type CausalTaskScope interface {
+	Valid(name, slot string) bool
+	Begin(name, slot string) error
+	Operation(name, operation string, arguments ...string) (any, error)
+	End(name, slot string) error
+}
+
+type causalTaskRegistration struct {
+	id    uint64
+	scope CausalTaskScope
+}
+
+var causalTaskScopes = struct {
+	sync.RWMutex
+	byVM map[*VM]causalTaskRegistration
+}{byVM: make(map[*VM]causalTaskRegistration)}
+
+var causalTaskRegistrationSequence atomic.Uint64
+
+// RegisterCausalTaskScope binds scope to one exact VM and returns an
+// idempotent revoker. A live binding cannot be replaced.
+func RegisterCausalTaskScope(vm *VM, scope CausalTaskScope) (func(), error) {
+	if vm == nil || scope == nil {
+		return nil, fmt.Errorf("nil causal VM or task scope")
+	}
+	id := causalTaskRegistrationSequence.Add(1)
+	causalTaskScopes.Lock()
+	if _, exists := causalTaskScopes.byVM[vm]; exists {
+		causalTaskScopes.Unlock()
+		return nil, fmt.Errorf("causal task scope already registered")
+	}
+	causalTaskScopes.byVM[vm] = causalTaskRegistration{id: id, scope: scope}
+	causalTaskScopes.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			causalTaskScopes.Lock()
+			if current, exists := causalTaskScopes.byVM[vm]; exists && current.id == id {
+				delete(causalTaskScopes.byVM, vm)
+			}
+			causalTaskScopes.Unlock()
+		})
+	}, nil
+}
+
+func causalTaskScopeFor(vm *VM) (CausalTaskScope, error) {
+	causalTaskScopes.RLock()
+	registration, ok := causalTaskScopes.byVM[vm]
+	causalTaskScopes.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("child-vm-unauthorized: causal VM has no task capability scope")
+	}
+	return registration.scope, nil
+}
+
+// ProbeCausalChildTaskDenial executes the exact task-valid operation in a real
+// nested VM. It is a fixed denial probe; callers cannot supply a program.
+func ProbeCausalChildTaskDenial(vm *VM, name, slot string) error {
+	if vm == nil || name == "" || slot == "" {
+		return fmt.Errorf("invalid causal child denial probe")
+	}
+	child := vm.childVM()
+	_, err := child.Execute(fmt.Sprintf("%q %q causal-v2-task-valid?", name, slot))
+	return err
+}
+
 func init() {
 	registerVocabularyWords("causal", map[string]builtinFn{
-		"causal-actions":           bCausalActions,
-		"causal-profile-valid?":    bCausalProfileValid,
-		"causal-task-valid?":       bCausalTaskValid,
-		"causal-partition-json":    bCausalPartitionJSON,
-		"causal-feature-json":      bCausalFeatureJSON,
-		"causal-better?":           bCausalBetter,
-		"causal-equal-score?":      bCausalEqualScore,
-		"causal-artifact-name":     bCausalArtifactName,
-		"causal-response-outcome":  bCausalResponseOutcome,
-		"causal-filter":            bCausalFilter,
-		"causal-action-cost":       bCausalActionCost,
-		"causal-terminal":          bCausalTerminal,
-		"causal-set-digest":        bCausalSetDigest,
-		"causal-transcript-digest": bCausalTranscriptDigest,
-		"causal-code-less?":        bCausalCodeLess,
+		"causal-actions":                          bCausalActions,
+		"causal-profile-valid?":                   bCausalProfileValid,
+		"causal-task-valid?":                      bCausalTaskValid,
+		"causal-partition-json":                   bCausalPartitionJSON,
+		"causal-feature-json":                     bCausalFeatureJSON,
+		"causal-better?":                          bCausalBetter,
+		"causal-equal-score?":                     bCausalEqualScore,
+		"causal-artifact-name":                    bCausalArtifactName,
+		"causal-response-outcome":                 bCausalResponseOutcome,
+		"causal-filter":                           bCausalFilter,
+		"causal-action-cost":                      bCausalActionCost,
+		"causal-terminal":                         bCausalTerminal,
+		"causal-set-digest":                       bCausalSetDigest,
+		"causal-transcript-digest":                bCausalTranscriptDigest,
+		"causal-code-less?":                       bCausalCodeLess,
+		"causal-v2-task-valid?":                   bCausalV2TaskValid,
+		"causal-v2-begin-task":                    bCausalV2BeginTask,
+		"causal-v2-end-task":                      bCausalV2EndTask,
+		"causal-v2-actions":                       bCausalV2Actions,
+		"causal-v2-prepare-proposal":              bCausalV2PrepareProposal,
+		"causal-v2-materialize-cache":             bCausalV2MaterializeCache,
+		"causal-v2-materialize-proposal":          bCausalV2MaterializeProposal,
+		"causal-v2-materialize-partition":         bCausalV2MaterializePartition,
+		"causal-v2-materialize-score":             bCausalV2MaterializeScore,
+		"causal-v2-better?":                       bCausalV2Better,
+		"causal-v2-equal-score?":                  bCausalV2EqualScore,
+		"causal-v2-materialize-tie":               bCausalV2MaterializeTie,
+		"causal-v2-materialize-selection":         bCausalV2MaterializeSelection,
+		"causal-v2-materialize-authorization":     bCausalV2MaterializeAuthorization,
+		"causal-v2-materialize-awaiting-snapshot": bCausalV2MaterializeAwaitingSnapshot,
+		"causal-v2-prepare-update":                bCausalV2PrepareUpdate,
+		"causal-v2-eliminated":                    bCausalV2Eliminated,
+		"causal-v2-materialize-elimination":       bCausalV2MaterializeElimination,
+		"causal-v2-materialize-posterior":         bCausalV2MaterializePosterior,
+		"causal-v2-materialize-consumption":       bCausalV2MaterializeConsumption,
+		"causal-v2-materialize-transcript":        bCausalV2MaterializeTranscript,
+		"causal-v2-materialize-next-snapshot":     bCausalV2MaterializeNextSnapshot,
+		"causal-v2-terminal?":                     bCausalV2Terminal,
+		"causal-v2-materialize-terminal":          bCausalV2MaterializeTerminal,
+		"causal-v2-finish-update":                 bCausalV2FinishUpdate,
+		"causal-v2-finalize-zero":                 bCausalV2FinalizeZero,
 	})
+}
+
+func bCausalV2TaskValid(vm *VM) error {
+	slot := vm.pop().AsString()
+	name := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	vm.push(BoolVal(scope.Valid(name, slot)))
+	return nil
+}
+
+func bCausalV2BeginTask(vm *VM) error {
+	slot := vm.pop().AsString()
+	name := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	if err := scope.Begin(name, slot); err != nil {
+		return err
+	}
+	vm.push(BoolVal(true))
+	return nil
+}
+
+func bCausalV2EndTask(vm *VM) error {
+	slot := vm.pop().AsString()
+	name := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	if err := scope.End(name, slot); err != nil {
+		return err
+	}
+	vm.push(BoolVal(true))
+	return nil
+}
+
+func causalV2NoArg(vm *VM, operation string) error {
+	name := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	value, err := scope.Operation(name, operation)
+	if err != nil {
+		return err
+	}
+	if boolean, ok := value.(bool); ok {
+		vm.push(BoolVal(boolean))
+	} else {
+		vm.push(BoolVal(true))
+	}
+	return nil
+}
+
+func causalV2OneArg(vm *VM, operation string) error {
+	argument := vm.pop().AsString()
+	name := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	_, err = scope.Operation(name, operation, argument)
+	if err != nil {
+		return err
+	}
+	vm.push(BoolVal(true))
+	return nil
+}
+
+func bCausalV2PrepareProposal(vm *VM) error { return causalV2NoArg(vm, "prepare-proposal") }
+
+func bCausalV2Actions(vm *VM) error {
+	name := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	value, err := scope.Operation(name, "actions")
+	if err != nil {
+		return err
+	}
+	items, ok := value.([]string)
+	if !ok {
+		return fmt.Errorf("causal actions returned non-list")
+	}
+	vm.push(stringValues(items))
+	return nil
+}
+
+func bCausalV2MaterializeCache(vm *VM) error     { return causalV2OneArg(vm, "materialize-cache") }
+func bCausalV2MaterializeProposal(vm *VM) error  { return causalV2OneArg(vm, "materialize-proposal") }
+func bCausalV2MaterializePartition(vm *VM) error { return causalV2OneArg(vm, "materialize-partition") }
+func bCausalV2MaterializeScore(vm *VM) error     { return causalV2OneArg(vm, "materialize-score") }
+func bCausalV2MaterializeTie(vm *VM) error       { return causalV2OneArg(vm, "materialize-tie") }
+func bCausalV2MaterializeSelection(vm *VM) error { return causalV2OneArg(vm, "materialize-selection") }
+func bCausalV2MaterializeElimination(vm *VM) error {
+	return causalV2OneArg(vm, "materialize-elimination")
+}
+
+func causalV2Compare(vm *VM, operation string) error {
+	name := vm.pop().AsString()
+	right := vm.pop().AsString()
+	left := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	value, err := scope.Operation(name, operation, left, right)
+	if err != nil {
+		return err
+	}
+	boolean, ok := value.(bool)
+	if !ok {
+		return fmt.Errorf("%s returned non-bool", operation)
+	}
+	vm.push(BoolVal(boolean))
+	return nil
+}
+func bCausalV2Better(vm *VM) error     { return causalV2Compare(vm, "better") }
+func bCausalV2EqualScore(vm *VM) error { return causalV2Compare(vm, "equal-score") }
+
+func bCausalV2MaterializeAuthorization(vm *VM) error {
+	return causalV2NoArg(vm, "materialize-authorization")
+}
+func bCausalV2MaterializeAwaitingSnapshot(vm *VM) error {
+	return causalV2NoArg(vm, "materialize-awaiting-snapshot")
+}
+func bCausalV2PrepareUpdate(vm *VM) error        { return causalV2NoArg(vm, "prepare-update") }
+func bCausalV2MaterializePosterior(vm *VM) error { return causalV2NoArg(vm, "materialize-posterior") }
+func bCausalV2MaterializeConsumption(vm *VM) error {
+	return causalV2NoArg(vm, "materialize-consumption")
+}
+func bCausalV2MaterializeTranscript(vm *VM) error { return causalV2NoArg(vm, "materialize-transcript") }
+func bCausalV2MaterializeNextSnapshot(vm *VM) error {
+	return causalV2NoArg(vm, "materialize-next-snapshot")
+}
+func bCausalV2Terminal(vm *VM) error            { return causalV2NoArg(vm, "terminal") }
+func bCausalV2MaterializeTerminal(vm *VM) error { return causalV2NoArg(vm, "materialize-terminal") }
+func bCausalV2FinishUpdate(vm *VM) error        { return causalV2NoArg(vm, "finish-update") }
+func bCausalV2FinalizeZero(vm *VM) error        { return causalV2NoArg(vm, "finalize-zero") }
+func bCausalV2Eliminated(vm *VM) error {
+	name := vm.pop().AsString()
+	scope, err := causalTaskScopeFor(vm)
+	if err != nil {
+		return err
+	}
+	value, err := scope.Operation(name, "eliminated")
+	if err != nil {
+		return err
+	}
+	items, ok := value.([]string)
+	if !ok {
+		return fmt.Errorf("eliminated returned non-list")
+	}
+	vm.push(stringValues(items))
+	return nil
 }
 func bCausalCodeLess(vm *VM) error {
 	b, a := vm.pop().AsString(), vm.pop().AsString()

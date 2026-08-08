@@ -3,6 +3,8 @@ package domains
 units: [
 	{name: "CausalVocabulary", worth: 700, isA: ["Vocabulary", "Anything"], dslExtension: "causal"},
 	{name: "CausalExperiment", worth: 700, isA: ["Anything"]},
+	{name: "CausalRuntimeCursor", worth: 700, isA: ["Anything"]},
+	{name: "CausalArtifact", worth: 700, isA: ["Anything"]},
 	{name: "CausalProposal", worth: 500, isA: ["Anything"]},
 	{name: "CausalPartition", worth: 500, isA: ["Anything"]},
 	{name: "CausalScore", worth: 500, isA: ["Anything"]},
