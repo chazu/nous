@@ -2,7 +2,9 @@
 
 ## Status and decision
 
-Accepted Phase 1 implementation plan, revision 5.
+Accepted Phase 1 implementation plan, revision 8. Revision 5 was accepted
+before implementation; revision 6 exposed the first implementation candidate
+to review.
 
 Adversarial review record, 2026-08-07:
 
@@ -10,10 +12,52 @@ Adversarial review record, 2026-08-07:
 - Lovelace, Horn semantics, search, and feasibility: `ACCEPT`; and
 - Harvey, experimental validity and leakage resistance: `ACCEPT`.
 
-Five revisions resolved temporal causality, the factored conventional baseline,
+First implementation-candidate review record, 2026-08-07:
+
+- Chandrasekhar: `BLOCK` on boundary, budgets, oracle coverage, artifact
+  completeness, profile identity, controls, and task-local contrast;
+- Lovelace: `BLOCK` on oracle coverage, boundary immutability, conserved
+  transcripts, and valid alternate-profile controls; and
+- Harvey: `BLOCK` on the same mechanical evidence gaps, manifest-cap/report
+  coverage, and the bypassable locked-run barrier.
+
+Revision 7 remained provisional through its second implementation review.
+
+Second implementation-candidate review record, 2026-08-07:
+
+- Chandrasekhar: `BLOCK` on authoritative-slot reuse, all-cap conservation,
+  descriptor accounting, policy validation, fallback conservation, per-atom
+  held-out comparison, and fixture field order;
+- Lovelace: `BLOCK` on nullable empty tie sets and unsupported lower-cap
+  profiles; and
+- Harvey: `BLOCK` on those issues plus causal-gate equality preconditions and
+  the omitted task-local positive criterion.
+
+Revision 8 implementation review record, 2026-08-07:
+
+- Chandrasekhar: `ACCEPT`; the authoritative allocator, fixed-cap contract,
+  descriptor accounting, fallback audit, prediction signatures, and schema
+  order close every prior architecture blocker;
+- Lovelace: `ACCEPT`; non-null ties, fixed canonical ceilings, and finite Horn
+  semantics close every prior theory blocker; and
+- Harvey: `ACCEPT`; the regenerated artifact, equality gates, task-local gate,
+  and provenance sequence close every prior experimental blocker.
+
+The accepted revision is this document's committed version. The development
+artifact remains sensitivity evidence; no locked-panel seed has been executed.
+
+Five pre-implementation revisions resolved temporal causality, the factored conventional baseline,
 stage/profile identity, queue rights, generator degrees of freedom, exact work
 and artifact bounds, transcript accounting, and inference gates. The accepted
-revision is the version contained in the plan commit.
+revision is the version contained in the plan commit. Revision 6 reconciled the
+ledger with the implemented first-class refinement edges, selection/terminal
+barriers, and task-local projection records. All three reviewers blocked that
+candidate because several reported integrity properties were assertions rather
+than measurements. Revision 7 requires independently audited oracle claims,
+cryptographic stage-boundary immutability, artifact-linked conserved budgets,
+complete exact-tie/cap reporting, the task-local primary contrast, stronger
+alternate-profile controls, and a clean exact-commit locked-run barrier. No
+locked-panel seed has been executed.
 
 This phase tests one narrow capability: whether Nous can construct a normalized
 invented Horn predicate from examples, execute it as a first-class shared
@@ -85,9 +129,8 @@ the emitted report must reproduce it byte for byte.
   "bootstrap_replicates": 10000,
   "randomization_replicates": 10000,
   "bootstrap_indices_zero_based": [249, 9749],
-  "contrast_seed_rule": "rule-induction/v1|locked|<direct|recomputed|inlined|beneficial-candidates>|<randomization|bootstrap>",
+  "contrast_seed_rule": "rule-induction/v1|locked|<direct|task-local|recomputed|inlined|beneficial-candidates>|<randomization|bootstrap>",
   "tie_policy": "first-exact-frozen-queue-report-evaluated-exact-ties",
-  "budget_exhaustion_score": 500001,
   "audit_work_in_primary": false,
   "mutation_enabled": false
 }
@@ -98,6 +141,12 @@ The seed notation denotes the exact finite arithmetic sequence
 not executed until the implementation-candidate commit exists. Any subsequent
 change to code, fixture filtering, grammar, costs, metrics, or thresholds creates
 `v2` and preserves the v1 report.
+
+The public non-locked runner rejects `locked`. The locked runner resolves the
+supplied commit as an existing Git commit, requires it to equal `HEAD`, requires
+an entirely clean tracked and untracked checkout, and writes that resolved hash
+into the report before any locked fixture is generated. A nonempty arbitrary
+label is not sufficient authorization.
 
 ## Logical language and exact grammar
 
@@ -362,24 +411,29 @@ Ordinary CUE heuristics implement these lanes:
    fallback;
 7. close the search ledger at a proposed terminal and call
    `ri-ready-to-select?` from the CUE finalization guard;
-8. select the first exact queue candidate or record `no-solution`/exhaustion;
+8. select the first exact queue candidate or record `no-solution`;
    and
 9. call `ri-experiment-complete?` to validate selection and promotion.
 
 The descriptor owns every category name, task slot, priority, cap, predicate
-binding, metarule binding, and policy mode. Tests replace all of them and reorder
-every case. Heuristics contain no fixture identity, predicate name, fact,
+binding, metarule binding, and policy mode. Alternate-descriptor tests replace
+all opaque names and priorities while retaining the canonical v1 resource
+ceilings; separate policy tests exercise every canonical behavior enum and
+reject unknown enum strings. The behavior enum strings themselves are
+canonical protocol values rather than opaque aliases. Heuristics contain no fixture identity, predicate name, fact,
 example, target clause, theory code, or expected count beyond descriptor caps.
 The descriptor validator requires every declared category to exist, be pairwise
 inheritance-disjoint, and be addressed by exact direct membership scans.
 
 The trial uses two ordinary `Engine.Run` invocations and no new engine hook.
-Stage 1 sets `MaxCycles=500`, seeds the descriptor's one `initialTasks` entry,
+Stage 1 receives one quarter of the descriptor's 1,000-cycle cap (250), seeds the descriptor's one `initialTasks` entry,
 and runs with mutation disabled. Its agenda work is bounded below 154 total
 phase tasks; after the `awaiting-stage-2` terminal, any remaining cycles are
 inert unit focus. The driver requires an empty agenda, a valid stage-1 barrier,
 and the frozen store digest. It then inserts the stage-2 corpus unit and one
-continuation task and calls `Run` again with `MaxCycles=500`. `Run` resetting its
+continuation task and calls `Run` again with the remaining 750 cycles. This
+asymmetric split leaves the exhaustive no-solution lane enough cycles to drain
+its agenda after the much smaller stage-1 search. `Run` resetting its
 private cycle counter is expected; the driver reports and caps the sum at 1,000.
 Credit, deletion, and mutation are unused, so no lifecycle is bypassed. A plain
 `nous run -domain ruleinduction` never has the external corpus; it terminates
@@ -402,28 +456,42 @@ that stage's profile key.
 
 ## Artifact and transcript contract
 
-Every artifact has `experimentProfileKey`, `stage`, `stageProfileKey`,
+Every stage artifact has `experimentProfileKey`, `stage`, `stageProfileKey`,
 `artifactKind`, and a
 collision-safe semantic key. Allocation reuses exactly one existing artifact
 only when category, experiment, stage profile, semantic key, and every authoritative
-slot match. Unrelated occupancy receives a deterministic `-collision-N` suffix.
+slot match its sealed `authoritativeDigest`. The experiment-level descriptor is
+the sole stage-envelope exception; it is self-attributed, profile-keyed, and
+charged once, but its operational stage fields may advance. Unrelated occupancy receives a deterministic `-collision-N` suffix.
 Partial/conflicting or multiple attributed matches fail closed. Repeated tasks
 cannot append transcript actions, consume budget, change worth, or duplicate
 evidence.
 
 The gap-free transcript records refinement,
-evaluation, prune, fallback, promotion, and termination actions with sequence
-number, prefix digest, charged work, remaining budgets, and artifact identities.
+evaluation, prune, fallback, promotion, decision, and termination actions with
+per-stage sequence, global charge index, prefix digest, domain charge, the
+sorted newly charged artifact set and digest, work before/after, and remaining
+semantic, evaluation, fixed-point, and attributed-unit budgets.
 Transcript actions are individual attributed units. The search ledger freezes
 before the pre-selection audit. Both verifiers are idempotent, read-only, and
 charge their recomputation only to a separate `audit_work` report field excluded
 from policy cost and selection.
 
+Every artifact, including the descriptor, is assigned exactly one materialization charge index; candidate
+evaluation and comparison work additionally bind to their semantic charge
+index. The verifier rebuilds every work prefix from artifacts rather than
+trusting stored totals. V1 fixes evaluation, fixed-point, semantic-work,
+engine-cycle, attributed-unit, and report-byte ceilings at the manifest values;
+a profile that lowers or raises one is invalid. The proven finite bounds are
+below every ceiling. Any observed overrun therefore indicates implementation
+drift and mechanically invalidates the run; `budget-exhausted` is diagnostic,
+never a valid scored v1 outcome.
+
 `ri-ready-to-select?` validates descriptor/profile/category boundaries, exact
 direct membership, the gap-free digest chain, every refinement/evaluation/
 constraint/prune/fallback charge, budget conservation, candidate dispositions,
 stage-boundary immutability, absence of missing/extra/stale artifacts, and the
-eligibility of the proposed `identified`, `no-solution`, or `budget-exhausted`
+eligibility of the proposed `identified` or `no-solution`
 terminal. Selection is forbidden until it returns true.
 `ri-experiment-complete?` independently recomputes the selected first exact
 queue candidate, frozen library definition, fallback status, promotions,
@@ -442,16 +510,16 @@ The maximum single run materializes:
 | aggregate evidence | 31 |
 | failure constraints (`31 * 2`) | 62 |
 | constraint comparisons (`2 * 2 * sum(0..14)`) | 420 |
-| transcript actions | 633 |
+| transcript actions | 637 |
 | descriptor, stage-1 corpus, boundary, stage-2 corpus | 4 |
-| library/schema/selection/terminal records | 8 |
-| total attributed units | 2,904 |
+| library/provenance/projection/selection/terminal records | 10 |
+| total attributed units | 2,910 |
 
 Facts and examples are bounded encoded lists on the two corpus units, not
 individual units: stage 1 stores at most 54 background facts and 24 examples;
 stage 2 stores only its at-most-24 examples and references the immutable fact
 digest. The boundary unit stores the prior terminal, frozen library, corpus
-digest, and canonical store digest. The descriptor and all four input/boundary
+digest, and canonical store digest. The descriptor and all three input/boundary
 units participate in exact-member and profile scans.
 
 `semantic-work/v1` has one authoritative counter table:
@@ -468,13 +536,14 @@ units participate in exact-member and profile scans.
 | theta substitution, clause match, literal match, or term match attempted | 1 each |
 | cache lookup | 1 each |
 | artifact allocation or collision-name probe | 1 each |
-| artifact envelope write or idempotence comparison | 32 each |
+| first artifact envelope materialization | 32 each |
 | transcript field incorporated into the prefix digest | 1 each |
 | selection/terminal comparison | 1 each |
 
 No other operation changes the primary counter. An artifact may contain at most
 32 authoritative slots; the fixed envelope tariff deliberately overcharges
-smaller artifacts. Audit, oracle, report encoding, fixture generation, inert
+smaller artifacts. An idempotent replay performs no second primary charge.
+Audit, oracle, report encoding, fixture generation, inert
 focus, and held-out prediction are excluded and separately counted.
 
 For one two-clause definition, the exact worst-case rows are 128 identity plus
@@ -487,10 +556,9 @@ only the image of `Z` remains, so at most three substitutions are attempted for
 each of four clause pairs. At most eight clause/literal/term match operations
 follow, for 96 operations per constraint comparison and `420 * 96 = 40,320`
 total. The other maxima are 1,000 partial-AST operations, 100 cache lookups,
-10,128 transcript digest fields, 185,856 artifact envelope work
-(`2,904 * 32 * 2`, allowing one idempotence comparison), 2,968 allocation probes
-(one per artifact plus at most 64 collisions), and 64 selection operations.
-The total is 350,796, below 500,000.
+10,192 transcript digest fields, 93,120 artifact envelope work
+(`2,910 * 32`), 2,974 allocation probes (one per artifact plus at most 64
+collisions), and 64 selection operations. The total is 258,130, below 500,000.
 
 At most 64 unrelated base names may be preoccupied, never more than one for the
 same semantic base. Allocation probes the base then `-collision-1`; a second
@@ -508,10 +576,9 @@ The deterministic report contains aggregates, selected
 theories, complete transcript digests, all constraint/prune counts, and oracle
 disagreements rather than embedding every unit, and must remain below 8 MiB.
 
-Budget exhaustion terminates at semantic score 500,001 and is a valid scored
-outcome if all integrity checks pass. A missing result for a consumed evaluation,
+Budget exhaustion is not a conforming v1 outcome. A missing result for a consumed evaluation,
 an uncharged refinement/prune, an unsound constraint, an incorrect exact claim,
-or any artifact beyond a cap is mechanically invalid.
+any artifact beyond a cap, or any changed resource ceiling is mechanically invalid.
 
 ## Independent oracle and leakage boundary
 
@@ -545,7 +612,7 @@ the stage-1 root through the frozen stage-2 selection, including candidate
 construction, hypothesis execution, materialization, and allowed cache reuse.
 Candidate/refinement counts and hypothesis-execution work are separately
 reported so cached execution is never called search. Held-out prediction work
-and accuracy are also separate. Exhaustion scores 500,001. The locked
+and accuracy are also separate. The locked
 primary statistic is the ratio of paired arithmetic means,
 `1 - mean(shared-library)/mean(lff-direct)`, over all 64 fixtures.
 
@@ -553,13 +620,13 @@ A `valid-positive` result requires:
 
 - all mechanical gates pass;
 - shared-library held-out accuracy is exactly 1.0 overall and in every cohort;
-- the primary relative reduction is at least 15% against both
-  `lff-direct` and `shared-recomputed`;
+- the primary relative reduction is at least 15% independently against
+  `lff-direct`, `lff-task-local-invention`, and `shared-recomputed`;
 - relative reduction against `shared-inlined` is at least 5%, with identical
   accuracy and candidate schedule, and its paired bootstrap interval excludes
   zero and paired randomization has `p < 0.05`, isolating execution of the
   materialized relation from mere equal expressivity;
-- direct and recomputed work contrasts each have paired-randomization
+- direct, task-local, and recomputed work contrasts each have paired-randomization
   `p < 0.05` and a 95% paired bootstrap interval excluding zero;
 - on beneficial fixtures, mean stage-2 candidate dispositions are at least 25%
   lower than `lff-direct`, with paired-randomization `p < 0.05` and a 95%
@@ -611,7 +678,7 @@ The deterministic report schema is:
     "fixtures": [{
       "seed": "integer",
       "cohort": "beneficial|neutral|harmful|no-solution",
-      "terminal": "identified|no-solution|budget-exhausted",
+      "terminal": "identified|no-solution|budget-exhausted-invalid-only",
       "stage1_definition": "canonical-code-or-empty",
       "stage2_definition": "canonical-code-or-empty",
       "used_frozen_library": "bool",
@@ -619,7 +686,17 @@ The deterministic report schema is:
       "candidates_consumed": "integer",
       "candidates_executed": "integer",
       "candidates_pruned": "integer",
+      "constraints": "integer",
+      "comparisons": "integer",
+      "stage1_exact_ties": ["canonical-code"],
+      "stage2_exact_ties": ["canonical-code"],
       "fixed_point_steps": "integer",
+      "engine_cycles": "integer",
+      "attributed_units": "integer",
+      "experiment_complete": "bool",
+      "agenda_drained": "bool",
+      "stage_boundary_immutable": "bool",
+      "heldout_store_unchanged": "bool",
       "work": {
         "partial_ast": "integer",
         "fixed_point": "integer",
@@ -637,6 +714,7 @@ The deterministic report schema is:
       "terminal_digest": "string"
     }],
     "overall": {
+      "name": "",
       "fixtures": "integer",
       "identified": "integer",
       "no_solution": "integer",
@@ -688,9 +766,14 @@ The deterministic report schema is:
     "direct_reduction": "bool",
     "direct_p_value": "bool",
     "direct_ci": "bool",
+    "task_local_reduction": "bool",
+    "task_local_p_value": "bool",
+    "task_local_ci": "bool",
     "recomputed_reduction": "bool",
     "recomputed_p_value": "bool",
     "recomputed_ci": "bool",
+    "inlined_accuracy_equal": "bool",
+    "inlined_candidate_schedule_equal": "bool",
     "inlined_reduction": "bool",
     "inlined_p_value": "bool",
     "inlined_ci": "bool",
@@ -707,9 +790,11 @@ The deterministic report schema is:
     "candidate_insert_corruption": "bool",
     "candidate_delete_corruption": "bool",
     "candidate_duplicate_corruption": "bool",
+    "category_injection": "bool",
     "alternate_queue_omit": "bool",
     "evidence_positive_flip": "bool",
     "evidence_negative_flip": "bool",
+    "wrong_context": "bool",
     "mutation_inert": "bool",
     "heldout_store_immutable": "bool",
     "deterministic_json": "bool"
@@ -722,7 +807,7 @@ No nullable or omitted fields are permitted; empty values use their declared
 zero representation. Object keys are emitted in struct order and fixture/policy
 arrays in preregistered order. Cohort arrays always use beneficial, neutral,
 harmful, then no-solution order, including zero-count entries. Contrast order is
-direct, recomputed, inlined, then beneficial-candidates.
+direct, task-local, recomputed, inlined, then beneficial-candidates.
 
 ## Required tests before locked evaluation
 
@@ -827,23 +912,25 @@ With the fixed artifact envelope and four examples, the preregistered ledger is:
 
 | Component | Direct LFF | Shared library |
 | --- | ---: | ---: |
-| stage-1 refinement, first execution, evidence, selection | 7,642 | 7,642 |
-| invented-library freeze and provenance `L` | 0 | 115 |
-| failed stage-2 frozen projection `E` | 0 | 484 |
-| stage-2 local refinement, first execution, evidence, selection | 7,642 | 7,642 |
-| total | 15,284 | 15,883 |
+| partial-AST refinement and explicit edges | 298 | 298 |
+| fixed-point and example evaluation | 838 | 842 |
+| cache lookups | 2 | 3 |
+| allocation probes | 406 | 420 |
+| artifact envelopes | 12,992 | 13,440 |
+| transcript digest fields | 1,984 | 2,016 |
+| selection/terminal comparisons | 4 | 5 |
+| total | 16,524 | 17,024 |
 
-Each 7,642 stage expands as partial AST 326, fixed-point/example 419,
-allocation probes 181, artifact envelopes 5,792, transcript fields 920, and
-selection 4. `L` has three individual artifacts—library definition,
-provenance/schema, and freeze transcript action—so `L = 3 probes + 3*32
-envelopes + 16 transcript fields = 115`. `E` has ten evidence artifacts
-(signature, four results, four observations, aggregate), three transcript
-actions (evaluation, failure, fallback), one cache lookup, four example lookups,
-and two comparisons: `E = 13 probes + 13*32 envelopes + 3*16 transcript fields
-+ 1 + 4 + 2 = 484`. The implementation test must reproduce every component,
-not merely the total.
-The ratio is `1.03919`, below 2.0. More generally, `L+E` is bounded by 2,305:
+The direct run performs two identical 149-operation refinement trees and two
+419-operation definition/example evaluations. The shared run adds one failed
+four-example projection: four evaluation operations, one cache lookup, fourteen
+artifact/transcript allocations, fourteen envelopes, two transcript digests,
+and one terminal comparison, for exactly 500 additional units. Four explicit
+decision-charge actions add 196 units to both policies. The
+implementation test must reproduce every component, not merely the total.
+The descriptor adds one allocation probe and one envelope to both policies.
+The ratio is `1.03026`, below 2.0. More generally, the library-plus-projection
+overhead is bounded by 2,305:
 one library/provenance pair plus one no-fixed-point projection with 24 examples.
 Each two-stage direct run materializes two full refinement trees and is at least
 7,232 before hypothesis execution, so the preregistered 2.0 gate is feasible.
