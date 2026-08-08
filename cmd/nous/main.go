@@ -17,6 +17,7 @@ import (
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/gameexp"
 	"github.com/chazu/nous/internal/rewriteexp"
+	"github.com/chazu/nous/internal/ruleinductionexp"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -35,12 +36,46 @@ func main() {
 		configurationRepairTrialsCmd(os.Args[2:])
 	case "game-trials":
 		gameTrialsCmd(os.Args[2:])
+	case "ruleinduction-trials":
+		ruleInductionTrialsCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
 	}
+}
+
+func ruleInductionTrialsCmd(args []string) {
+	fs := flag.NewFlagSet("ruleinduction-trials", flag.ExitOnError)
+	domainsDir := fs.String("domains-dir", "domains", "filesystem path to domains/ directory")
+	panel := fs.String("panel", "development", "development, training, validation, or locked")
+	implementationCommit := fs.String("implementation-commit", "", "immutable implementation commit (required for locked panel)")
+	fs.Parse(args)
+	if *panel == "locked" && *implementationCommit == "" {
+		fmt.Fprintln(os.Stderr, "error: -implementation-commit is required for the locked panel")
+		os.Exit(2)
+	}
+	var report ruleinductionexp.Report
+	var err error
+	if *panel == "locked" {
+		report, err = ruleinductionexp.RunLockedPanel(*domainsDir, *implementationCommit)
+	} else {
+		report, err = ruleinductionexp.RunPanel(*domainsDir, *panel)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if *panel != "locked" {
+		report.ImplementationCommit = *implementationCommit
+	}
+	encoded, err := report.JSON()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(encoded))
 }
 
 func gameTrialsCmd(args []string) {
@@ -179,6 +214,7 @@ Usage:
   nous rewrite-trials [flags]                   Run rewrite experiments
   nous configrepair-trials [flags]              Run Kubernetes/Terraform repair trials
   nous game-trials [flags]                      Run iterated-game strategy trials
+  nous ruleinduction-trials [flags]             Run relational rule-induction development trials
   nous help                                     Show this help
 
 Flags:
