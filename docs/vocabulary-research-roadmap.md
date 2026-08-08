@@ -6,6 +6,12 @@ Accepted roadmap, revision 3. This document freezes the intended six-phase
 sequence and the shared experimental standard. Each phase still requires its
 own stabilized implementation plan before code is written.
 
+The accepted [v2 research program](vocabulary-research-program-v2.md) extends
+this roadmap with the required Phase 2 recovery gate and Phases 7 through 10.
+This document remains authoritative for the original program invariants and
+Phases 1 through 6; the v2 program is the accepted amendment for execution
+order and later phases.
+
 Adversarial review record, 2026-08-07:
 
 - Chandrasekhar, architecture and integration boundary: `ACCEPT`;
