@@ -15,11 +15,15 @@ func TestTrainingCasesHaveUniqueOneEditSolutions(t *testing.T) {
 		t.Fatalf("training cases = %d", len(cases))
 	}
 	for _, caseData := range cases {
-		result, err := kuberepairoracle.Solve(caseData.Public, caseData.Edits, kuberepairoracle.Intent{DesiredPods: caseData.Intent.DesiredPods, BackendPort: caseData.Intent.BackendPort, ReadinessPorts: caseData.Intent.ReadinessPorts, ProtectedDigest: caseData.Intent.ProtectedDigest}, 3)
+		analysis, err := kuberepairoracle.Analyze(caseData.Public, kuberepairoracle.Intent{DesiredPods: caseData.Intent.DesiredPods, BackendPort: caseData.Intent.BackendPort, ReadinessPorts: caseData.Intent.ReadinessPorts, ProtectedDigest: caseData.Intent.ProtectedDigest}, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
+		result := analysis.Result
 		if result.Terminal != "solution" || result.MinimumLength != 1 || len(result.Plans) != 1 {
+			for index, edit := range caseData.Edits {
+				t.Logf("edit[%d]=%s", index, edit)
+			}
 			t.Fatalf("case %s oracle = %#v", caseData.ID, result)
 		}
 	}
@@ -31,10 +35,11 @@ func TestRecompositionCasesUseTwoOrThreeEdits(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := kuberepairoracle.Solve(caseData.Public, caseData.Edits, kuberepairoracle.Intent{DesiredPods: caseData.Intent.DesiredPods, BackendPort: caseData.Intent.BackendPort, ReadinessPorts: caseData.Intent.ReadinessPorts, ProtectedDigest: caseData.Intent.ProtectedDigest}, 3)
+		analysis, err := kuberepairoracle.Analyze(caseData.Public, kuberepairoracle.Intent{DesiredPods: caseData.Intent.DesiredPods, BackendPort: caseData.Intent.BackendPort, ReadinessPorts: caseData.Intent.ReadinessPorts, ProtectedDigest: caseData.Intent.ProtectedDigest}, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
+		result := analysis.Result
 		want := 2
 		if mask == FaultTemplate|FaultService|FaultExtraSelector {
 			want = 3
@@ -59,10 +64,11 @@ func TestControlCasesHavePinnedOracleClasses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := kuberepairoracle.Solve(caseData.Public, caseData.Edits, kuberepairoracle.Intent{DesiredPods: caseData.Intent.DesiredPods, BackendPort: caseData.Intent.BackendPort, ReadinessPorts: caseData.Intent.ReadinessPorts, ProtectedDigest: caseData.Intent.ProtectedDigest}, 3)
+		analysis, err := kuberepairoracle.Analyze(caseData.Public, kuberepairoracle.Intent{DesiredPods: caseData.Intent.DesiredPods, BackendPort: caseData.Intent.BackendPort, ReadinessPorts: caseData.Intent.ReadinessPorts, ProtectedDigest: caseData.Intent.ProtectedDigest}, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
+		result := analysis.Result
 		if result.Terminal != testCase.terminal || result.MinimumLength != testCase.minimum {
 			t.Fatalf("case %s = %#v", caseData.ID, result)
 		}

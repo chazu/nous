@@ -141,6 +141,12 @@ func labelCase(seed int64, mask int) (Case, error) {
 		path(kuberepair.Path{Kind: "service-target", Resource: serviceName}),
 		path(kuberepair.Path{Kind: "template-label", Resource: deploymentName, Key: tierKey}),
 	}
+	if mask&FaultExtraSelector != 0 {
+		// Protect the absent template zone leaf so the one-edit curriculum has a
+		// unique removal repair rather than an equivalent selector-expansion edit.
+		bundle.Protected = append(bundle.Protected,
+			path(kuberepair.Path{Kind: "template-label", Resource: deploymentName, Key: zoneKey}))
+	}
 	if mask == FaultService {
 		bundle.Protected = append(bundle.Protected,
 			path(kuberepair.Path{Kind: "template-label", Resource: deploymentName, Key: appKey}))

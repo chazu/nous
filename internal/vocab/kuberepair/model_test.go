@@ -153,6 +153,105 @@ func TestStrictCanonicalAndFeatureIdentity(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsForgedResourceAliases(t *testing.T) {
+	bundle := seedBundle()
+	public, err := EncodeBundle(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []Edit{
+		{Version: EditVersion, Kind: "put-label", Destination: Path{Kind: "template-label", Resource: "forged", Key: "app"}, Source: &Path{Kind: "deployment-label", Resource: bundle.Deployment.Name, Key: "app"}},
+		{Version: EditVersion, Kind: "put-label", Destination: Path{Kind: "service-label", Resource: "forged", Key: "app"}, Source: &Path{Kind: "deployment-label", Resource: bundle.Deployment.Name, Key: "app"}},
+		{Version: EditVersion, Kind: "set-port-number", Destination: Path{Kind: "service-target", Resource: "forged"}, Source: &Path{Kind: "declared-port", Resource: bundle.Deployment.Name, Container: "server", Port: "web"}},
+	}
+	for _, edit := range tests {
+		encoded := mustEdit(t, edit)
+		if _, err := Apply(public, encoded); err == nil {
+			t.Fatalf("forged edit was accepted: %s", encoded)
+		}
+	}
+}
+
+func TestProtectedAliasCannotBeRewritten(t *testing.T) {
+	bundle := seedBundle()
+	bundle.Protected = []string{pathID(Path{Kind: "template-label", Resource: bundle.Deployment.Name, Key: "app"})}
+	public, err := EncodeBundle(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := Edit{Version: EditVersion, Kind: "put-label", Destination: Path{Kind: "template-label", Resource: "forged", Key: "app"}, Source: &Path{Kind: "deployment-label", Resource: bundle.Deployment.Name, Key: "app"}}
+	if _, err := Apply(public, mustEdit(t, edit)); err == nil {
+		t.Fatal("forged alias bypassed protected destination")
+	}
+}
+
+func TestPinnedSubsetRejectsInvalidNamesAndPodWideDuplicatePorts(t *testing.T) {
+	bundle := seedBundle()
+	bundle.Deployment.Template.Labels[0].Value = "not valid"
+	if _, err := EncodeBundle(bundle); err == nil {
+		t.Fatal("invalid synthetic label atom was accepted")
+	}
+	bundle = seedBundle()
+	bundle.Deployment.Template.Containers = append(bundle.Deployment.Template.Containers, Container{Name: "sidecar", Ports: []NamedPort{{Name: "web", Number: 8081}}})
+	if _, err := EncodeBundle(bundle); err == nil {
+		t.Fatal("pod-wide duplicate port name was accepted")
+	}
+}
+
+func TestLabelEnumerationCoversEveryPublicSourceKey(t *testing.T) {
+	bundle := seedBundle()
+	bundle.Pods[0].Labels = append(bundle.Pods[0].Labels, Label{Key: "zone", Value: "east"})
+	encoded, err := EncodeBundle(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edits, err := EnumerateEdits(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundTemplate, foundService := false, false
+	for _, value := range edits {
+		edit, _ := DecodeEdit(value)
+		if edit.Kind == "put-label" && edit.Source != nil && edit.Source.Kind == "pod-label" && edit.Source.Key == "zone" {
+			foundTemplate = foundTemplate || edit.Destination.Kind == "template-label"
+			foundService = foundService || edit.Destination.Kind == "service-label"
+		}
+	}
+	if !foundTemplate || !foundService {
+		t.Fatalf("source-only key destinations missing: template=%v service=%v", foundTemplate, foundService)
+	}
+}
+
+func TestTerminalEvaluationLogCountsActualCapabilityCalls(t *testing.T) {
+	bundle := seedBundle()
+	public, _ := EncodeBundle(bundle)
+	hash := sha256.Sum256([]byte("logged-intent"))
+	handle := hex.EncodeToString(hash[:])
+	cleanup, err := RegisterIntent(handle, Intent{DesiredPods: []string{"deployment/orbit"}, BackendPort: 8080, ReadinessPorts: map[string]int{"server": 8080}, ProtectedDigest: ProtectedDigest(bundle)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	handleValue, _ := EncodeHandle(handle)
+	EqualOrSatisfies(public, handleValue)
+	EqualOrSatisfies(public, handleValue)
+	log := EvaluationLog(handle)
+	if len(log) != 2 || log[0] != log[1] {
+		t.Fatalf("evaluation log = %#v", log)
+	}
+}
+
+func TestRemovingLastServiceSelectorRemainsStructurallyValid(t *testing.T) {
+	bundle := seedBundle()
+	bundle.Protected = nil
+	public, _ := EncodeBundle(bundle)
+	edit := mustEdit(t, Edit{Version: EditVersion, Kind: "remove-label", Destination: Path{Kind: "service-label", Resource: bundle.Service.Name, Key: "app"}})
+	result, err := Apply(public, edit)
+	if err != nil || !ValidBundle(result) {
+		t.Fatalf("last-selector removal = (%q, %v)", result, err)
+	}
+}
+
 func mustEdit(t *testing.T, edit Edit) string {
 	t.Helper()
 	value, err := EncodeEdit(edit)

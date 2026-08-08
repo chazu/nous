@@ -123,6 +123,34 @@ contextual credit to the synthesis heuristic and its three repair components.
 
 See [the stabilized configuration-repair plan](configuration-repair-vocabulary-plan.md).
 
+## Experimental pack: Kubernetes selector and reference repair
+
+`domains/kuberepair` represents a deliberately small Kubernetes-shaped repair
+space: Deployment selectors and template labels, Service selectors and target
+ports, declared container ports, readiness references, unrelated Pods, and
+protected paths. It enumerates concrete resource-bound atomic edits and uses
+the unchanged generic bounded-program heuristics to synthesize every ordered
+repair of length one through three.
+
+An independent standard-library-only oracle reconstructs the public edit
+universe and checks terminal state, complete minimum sequence sets, and
+deduplicated semantic outcomes. Phase A passed unique, co-minimal two- and
+three-edit, already-correct, no-solution, and reference-repair cases. The v2
+development trial then tested whether structural credit learned from three
+one-edit tasks could reduce terminal evaluations on renamed and recombined
+tasks.
+
+The result was informative but null under its preregistered utility criterion.
+Post-training contextual ordering beat blind ordering by 28.16% on the matched
+component cohort, demonstrating alias-independent transfer, but improved only
+3.22% over the conventional constraint baseline. Once the 375 observed
+training calls were amortized over the fixed horizon, contextual loss was
+worse than both baselines and simulated power was zero. The validation and
+locked panels therefore remained unopened.
+
+See the [v2 preregistration](kubernetes-selector-reference-research-program-v2.md)
+and [result record](kubernetes-selector-reference-results.md).
+
 ## Experimental pack: tiny stack programs
 
 `domains/tinystack` is the first descriptor-driven bounded program-synthesis

@@ -24,7 +24,7 @@ const (
 	MaxValueBytes = 32768
 )
 
-var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var namePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 type Label struct {
 	Key   string `json:"key"`
@@ -119,10 +119,15 @@ type Intent struct {
 	ProtectedDigest string         `json:"protectedDigest"`
 }
 
+type intentRecord struct {
+	intent Intent
+	calls  []string
+}
+
 var intentTable = struct {
 	sync.RWMutex
-	values map[string]Intent
-}{values: map[string]Intent{}}
+	values map[string]*intentRecord
+}{values: map[string]*intentRecord{}}
 
 // RegisterIntent installs a driver-owned opaque capability for evaluation and
 // returns a cleanup function. Handles must be unique and 64 lowercase hex
@@ -136,7 +141,7 @@ func RegisterIntent(handle string, intent Intent) (func(), error) {
 	if _, exists := intentTable.values[handle]; exists {
 		return nil, errors.New("intent handle already registered")
 	}
-	intentTable.values[handle] = cloneIntent(intent)
+	intentTable.values[handle] = &intentRecord{intent: cloneIntent(intent)}
 	return func() {
 		intentTable.Lock()
 		delete(intentTable.values, handle)
@@ -154,11 +159,29 @@ func cloneIntent(in Intent) Intent {
 	return out
 }
 
-func lookupIntent(handle string) (Intent, bool) {
+// EvaluationLog returns the canonical state digests for Boolean terminal
+// invocations made through one registered intent capability. It is driver-only
+// instrumentation and is not exposed as a DSL word.
+func EvaluationLog(handle string) []string {
 	intentTable.RLock()
 	defer intentTable.RUnlock()
-	value, ok := intentTable.values[handle]
-	return cloneIntent(value), ok
+	record := intentTable.values[handle]
+	if record == nil {
+		return nil
+	}
+	return append([]string(nil), record.calls...)
+}
+
+func lookupAndRecordIntent(handle, encodedBundle string) (Intent, bool) {
+	intentTable.Lock()
+	defer intentTable.Unlock()
+	record, ok := intentTable.values[handle]
+	if !ok {
+		return Intent{}, false
+	}
+	digest := sha256.Sum256([]byte(encodedBundle))
+	record.calls = append(record.calls, hex.EncodeToString(digest[:]))
+	return cloneIntent(record.intent), true
 }
 
 func validHandle(value string) bool {
@@ -314,7 +337,7 @@ func validateBundle(bundle Bundle) error {
 	if err := validateLabels(bundle.Deployment.Template.Labels, false); err != nil {
 		return fmt.Errorf("template labels: %w", err)
 	}
-	if err := validateLabels(bundle.Service.Selector, true); err != nil {
+	if err := validateLabels(bundle.Service.Selector, false); err != nil {
 		return fmt.Errorf("service selector: %w", err)
 	}
 	if err := validateContainers(bundle.Deployment.Template.Containers); err != nil {
@@ -339,9 +362,20 @@ func validateBundle(bundle Bundle) error {
 	if !sortedUnique(bundle.Protected) || !sortedUnique(bundle.Writes) {
 		return errors.New("invalid path sets")
 	}
-	for _, path := range append(append([]string(nil), bundle.Protected...), bundle.Writes...) {
-		if path == "" || len(path) > 512 {
+	for _, encodedPath := range append(append([]string(nil), bundle.Protected...), bundle.Writes...) {
+		if encodedPath == "" || len(encodedPath) > 512 {
 			return errors.New("invalid path identity")
+		}
+		var path Path
+		if strictDecode(encodedPath, &path) != nil || !validPath(path, false) || pathID(path) != encodedPath || !pathExists(bundle, path) {
+			return errors.New("unresolved path identity")
+		}
+	}
+	for _, encodedPath := range bundle.Writes {
+		var path Path
+		_ = json.Unmarshal([]byte(encodedPath), &path)
+		if !writablePath(path) || contains(bundle.Protected, encodedPath) {
+			return errors.New("invalid write history")
 		}
 	}
 	return nil
@@ -366,6 +400,7 @@ func validateContainers(containers []Container) error {
 		return errors.New("invalid container count")
 	}
 	previous := ""
+	seenPortNames := map[string]bool{}
 	for _, container := range containers {
 		if !validName(container.Name) || container.Name <= previous || len(container.Ports) > 4 {
 			return errors.New("invalid containers")
@@ -373,12 +408,13 @@ func validateContainers(containers []Container) error {
 		previous = container.Name
 		portPrevious := ""
 		for _, port := range container.Ports {
-			if !validName(port.Name) || port.Name <= portPrevious || !validPort(port.Number) {
+			if !validName(port.Name) || port.Name <= portPrevious || !validPort(port.Number) || seenPortNames[port.Name] {
 				return errors.New("invalid ports")
 			}
+			seenPortNames[port.Name] = true
 			portPrevious = port.Name
 		}
-		if container.Readiness != nil && (container.Readiness.Path == "" || len(container.Readiness.Path) > 256 || !validPortRef(container.Readiness.Port)) {
+		if container.Readiness != nil && (container.Readiness.Path == "" || len(container.Readiness.Path) > 256 || !validPortRef(container.Readiness.Port) || container.Readiness.Port.Kind == "default") {
 			return errors.New("invalid readiness")
 		}
 	}
@@ -386,10 +422,8 @@ func validateContainers(containers []Container) error {
 }
 
 func validName(value string) bool { return namePattern.MatchString(value) }
-func validAtom(value string) bool {
-	return value != "" && len(value) <= 63 && !strings.ContainsAny(value, "\x00\n\r")
-}
-func validPort(value int) bool { return value >= 1 && value <= 65535 }
+func validAtom(value string) bool { return validName(value) }
+func validPort(value int) bool    { return value >= 1 && value <= 65535 }
 
 func validPortRef(ref PortRef) bool {
 	switch ref.Kind {
@@ -455,7 +489,7 @@ func validateEdit(edit Edit) error {
 	return nil
 }
 
-func validPath(path Path, destination bool) bool {
+func validPath(path Path, _ bool) bool {
 	if !validName(path.Resource) {
 		return false
 	}
@@ -468,9 +502,72 @@ func validPath(path Path, destination bool) bool {
 		return validName(path.Container) && path.Port == "" && path.Key == ""
 	case "service-target":
 		return path.Container == "" && path.Port == "" && path.Key == ""
+	case "service-port":
+		return path.Container == "" && path.Port == "" && path.Key == ""
+	case "readiness-path", "readiness-presence":
+		return validName(path.Container) && path.Port == "" && path.Key == ""
 	default:
 		return false
 	}
+}
+
+func writablePath(path Path) bool {
+	switch path.Kind {
+	case "template-label", "service-label", "service-target", "readiness-port":
+		return true
+	default:
+		return false
+	}
+}
+
+func pathExists(bundle Bundle, path Path) bool {
+	switch path.Kind {
+	case "deployment-label":
+		_, ok := labelValue(bundle.Deployment.Selector, path.Key)
+		return path.Resource == bundle.Deployment.Name && ok
+	case "template-label":
+		// Missing label leaves are valid destinations when their key exists at a
+		// public source; source reads still require presence.
+		return path.Resource == bundle.Deployment.Name
+	case "service-label":
+		return path.Resource == bundle.Service.Name
+	case "pod-label":
+		for _, pod := range bundle.Pods {
+			if pod.Name == path.Resource {
+				_, ok := labelValue(pod.Labels, path.Key)
+				return ok
+			}
+		}
+		return false
+	case "declared-port":
+		_, ok := getDeclaredPort(bundle, path)
+		return ok
+	case "service-target", "service-port":
+		return path.Resource == bundle.Service.Name
+	case "readiness-port", "readiness-path", "readiness-presence":
+		if path.Resource != bundle.Deployment.Name {
+			return false
+		}
+		for _, container := range bundle.Deployment.Template.Containers {
+			if container.Name == path.Container {
+				return container.Readiness != nil
+			}
+		}
+	}
+	return false
+}
+
+func validateBoundEdit(bundle Bundle, edit Edit) error {
+	if !pathExists(bundle, edit.Destination) || !writablePath(edit.Destination) {
+		return errors.New("unresolved edit destination")
+	}
+	if edit.Source != nil && !pathExists(bundle, *edit.Source) {
+		return errors.New("unresolved edit source")
+	}
+	if edit.Destination.Kind == "readiness-port" && edit.Source != nil && edit.Source.Container != edit.Destination.Container {
+		return errors.New("readiness source is not owned by destination container")
+	}
+	return nil
 }
 
 func pathID(path Path) string {
@@ -485,7 +582,17 @@ func EnumerateEdits(encoded string) ([]string, error) {
 	}
 	var edits []Edit
 	labelSources := labelPaths(bundle)
-	labelDestinations := append(templateLabelPaths(bundle), serviceLabelPaths(bundle)...)
+	keys := map[string]bool{}
+	for _, source := range labelSources {
+		keys[source.Key] = true
+	}
+	var labelDestinations []Path
+	for key := range keys {
+		labelDestinations = append(labelDestinations,
+			Path{Kind: "template-label", Resource: bundle.Deployment.Name, Key: key},
+			Path{Kind: "service-label", Resource: bundle.Service.Name, Key: key})
+	}
+	sort.Slice(labelDestinations, func(i, j int) bool { return pathID(labelDestinations[i]) < pathID(labelDestinations[j]) })
 	for _, destination := range labelDestinations {
 		for _, source := range labelSources {
 			if source.Key != destination.Key || pathID(source) == pathID(destination) {
@@ -530,6 +637,9 @@ func addIfChanges(bundle Bundle, edit Edit, edits *[]Edit) {
 	if contains(bundle.Protected, pathID(edit.Destination)) || contains(bundle.Writes, pathID(edit.Destination)) {
 		return
 	}
+	if validateBoundEdit(bundle, edit) != nil {
+		return
+	}
 	copyBundle := cloneBundle(bundle)
 	if _, changed, err := applyDecoded(&copyBundle, edit); err == nil && changed {
 		*edits = append(*edits, edit)
@@ -554,6 +664,9 @@ func Apply(encodedBundle, encodedEdit string) (string, error) {
 	}
 	if contains(bundle.Protected, pathID(edit.Destination)) || contains(bundle.Writes, pathID(edit.Destination)) {
 		return "", errors.New("illegal destination")
+	}
+	if err := validateBoundEdit(bundle, edit); err != nil {
+		return "", err
 	}
 	if _, changed, err := applyDecoded(&bundle, edit); err != nil || !changed {
 		if err == nil {
@@ -659,10 +772,19 @@ func declaredPortPaths(resource string, containers []Container) []Path {
 func getLabel(bundle Bundle, path Path) (string, bool) {
 	switch path.Kind {
 	case "deployment-label":
+		if path.Resource != bundle.Deployment.Name {
+			return "", false
+		}
 		return labelValue(bundle.Deployment.Selector, path.Key)
 	case "template-label":
+		if path.Resource != bundle.Deployment.Name {
+			return "", false
+		}
 		return labelValue(bundle.Deployment.Template.Labels, path.Key)
 	case "service-label":
+		if path.Resource != bundle.Service.Name {
+			return "", false
+		}
 		return labelValue(bundle.Service.Selector, path.Key)
 	case "pod-label":
 		for _, pod := range bundle.Pods {
@@ -685,8 +807,14 @@ func setLabel(bundle *Bundle, path Path, value string) (any, bool, error) {
 	var labels *[]Label
 	switch path.Kind {
 	case "template-label":
+		if path.Resource != bundle.Deployment.Name {
+			return nil, false, errors.New("wrong deployment")
+		}
 		labels = &bundle.Deployment.Template.Labels
 	case "service-label":
+		if path.Resource != bundle.Service.Name {
+			return nil, false, errors.New("wrong service")
+		}
 		labels = &bundle.Service.Selector
 	default:
 		return nil, false, errors.New("illegal label destination")
@@ -718,6 +846,9 @@ func removeLabel(labels *[]Label, key string) bool {
 }
 
 func getDeclaredPort(bundle Bundle, path Path) (NamedPort, bool) {
+	if path.Resource != bundle.Deployment.Name {
+		return NamedPort{}, false
+	}
 	containers := bundle.Deployment.Template.Containers
 	for _, c := range containers {
 		if c.Name == path.Container {
@@ -733,6 +864,9 @@ func getDeclaredPort(bundle Bundle, path Path) (NamedPort, bool) {
 func setPortRef(bundle *Bundle, path Path, ref PortRef) (any, bool, error) {
 	switch path.Kind {
 	case "service-target":
+		if path.Resource != bundle.Service.Name {
+			return nil, false, errors.New("wrong service")
+		}
 		old := bundle.Service.Port.TargetPort
 		if old == ref {
 			return ref, false, nil
@@ -740,6 +874,9 @@ func setPortRef(bundle *Bundle, path Path, ref PortRef) (any, bool, error) {
 		bundle.Service.Port.TargetPort = ref
 		return ref, true, nil
 	case "readiness-port":
+		if path.Resource != bundle.Deployment.Name {
+			return nil, false, errors.New("wrong deployment")
+		}
 		for i := range bundle.Deployment.Template.Containers {
 			c := &bundle.Deployment.Template.Containers[i]
 			if c.Name == path.Container && c.Readiness != nil {
@@ -769,7 +906,7 @@ func EqualOrSatisfies(left, right string) bool {
 	if leftKind != BundleVersion || rightKind != HandleVersion {
 		return false
 	}
-	intent, ok := lookupIntent(rightEnvelope.Handle)
+	intent, ok := lookupAndRecordIntent(rightEnvelope.Handle, left)
 	return ok && satisfies(*leftEnvelope.Bundle, intent)
 }
 
@@ -792,9 +929,10 @@ func PublicViolationVector(encoded string) ([]int, error) {
 		emptyService = 1
 	}
 	selected := selectedPods(bundle)
+	noSelected := 0
 	serviceUnresolved := 0
 	if len(selected) == 0 {
-		serviceUnresolved = 1
+		noSelected = 1
 	} else if _, ok := serviceBackend(bundle, selected); !ok {
 		serviceUnresolved = 1
 	}
@@ -806,7 +944,7 @@ func PublicViolationVector(encoded string) ([]int, error) {
 			}
 		}
 	}
-	return []int{0, deploymentMismatches, emptyService, serviceUnresolved, readinessUnresolved, len(bundle.Writes)}, nil
+	return []int{deploymentMismatches, emptyService, noSelected, serviceUnresolved, readinessUnresolved, len(bundle.Writes)}, nil
 }
 
 func satisfies(bundle Bundle, intent Intent) bool {
@@ -963,13 +1101,39 @@ func protectedValue(bundle Bundle, id string) string {
 		}
 		return "<absent>"
 	case "service-target":
+		if path.Resource != bundle.Service.Name {
+			return "<invalid>"
+		}
 		encoded, _ := json.Marshal(bundle.Service.Port.TargetPort)
 		return string(encoded)
+	case "service-port":
+		if path.Resource != bundle.Service.Name {
+			return "<invalid>"
+		}
+		return fmt.Sprintf("%d", bundle.Service.Port.Port)
 	case "readiness-port":
+		if path.Resource != bundle.Deployment.Name {
+			return "<invalid>"
+		}
 		for _, c := range bundle.Deployment.Template.Containers {
 			if c.Name == path.Container && c.Readiness != nil {
 				encoded, _ := json.Marshal(c.Readiness.Port)
 				return string(encoded)
+			}
+		}
+	case "readiness-path", "readiness-presence":
+		if path.Resource != bundle.Deployment.Name {
+			return "<invalid>"
+		}
+		for _, c := range bundle.Deployment.Template.Containers {
+			if c.Name == path.Container {
+				if c.Readiness == nil {
+					return "absent"
+				}
+				if path.Kind == "readiness-presence" {
+					return "present"
+				}
+				return c.Readiness.Path
 			}
 		}
 	}

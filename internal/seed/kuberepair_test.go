@@ -89,12 +89,16 @@ func TestKubeRepairSeedDiscoversCompleteMinimumSet(t *testing.T) {
 		}
 	}
 	caseData, _ := kuberepairfixture.Seed()
-	oracleResult, err := kuberepairoracle.Solve(caseData.Public, caseData.Edits, kuberepairoracle.Intent{
+	oracleAnalysis, err := kuberepairoracle.Analyze(caseData.Public, kuberepairoracle.Intent{
 		DesiredPods: caseData.Intent.DesiredPods, BackendPort: caseData.Intent.BackendPort,
 		ReadinessPorts: caseData.Intent.ReadinessPorts, ProtectedDigest: caseData.Intent.ProtectedDigest,
 	}, 3)
 	if err != nil {
 		t.Fatal(err)
+	}
+	oracleResult := oracleAnalysis.Result
+	if !reflect.DeepEqual(caseData.Edits, oracleAnalysis.Edits) {
+		t.Fatalf("edit universe disagreement\nproduction=%v\noracle=%v", caseData.Edits, oracleAnalysis.Edits)
 	}
 	var oracleSequences []string
 	for _, plan := range oracleResult.Plans {

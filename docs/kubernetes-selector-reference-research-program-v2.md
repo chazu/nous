@@ -155,8 +155,9 @@ the complete bounded eligible list. Oracle results are consulted only after
 policy termination to audit safety, terminal class, and minimum identity.
 
 The primary loss is Boolean terminal calls to first minimum solution, plus
-`training calls / 32` for contextual. Failure loss is `401`, one above the
-maximum eight-edit eligible list. Construction, scoring-key, stable-sort
+`training calls / 32` for contextual. The initial unchanged-state call plus at
+most 400 eligible plans yields 401 calls; failure loss is `402`. Construction,
+scoring-key, stable-sort
 comparator, and oracle-audit calls are reported as separate exact event counts;
 they do not enter the primary claim. This avoids assigning arbitrary exchange
 rates to unlike computations.
@@ -203,7 +204,7 @@ a mismatch invalidates the panel.
 This deliberately matched curriculum does not establish broad transfer.
 Misleading credited-feature decoys occur in the eligible list. Cross-role and
 unrelated cohorts report negative transfer. The unrelated gate excludes
-training, assigns 401 to failure, and requires `(mean contextual Phase-B calls -
+training, assigns 402 to failure, and requires `(mean contextual Phase-B calls -
 mean no-credit calls) / mean no-credit calls <= 0.10`; otherwise the run is
 `valid-null`.
 
