@@ -95,7 +95,7 @@ func causalTrialsCmd(args []string) {
 		fmt.Println(string(encoded))
 		return
 	case "training":
-		err = causalexpv2.ExecuteTraining(ctx, root)
+		err = causalexpv2.ExecuteProtectedPanel(ctx, root, causalexpv2.PanelTraining)
 	case "replay":
 		err = causalexpv2.ExecuteReplay(ctx, root)
 		if err == nil {
@@ -103,9 +103,9 @@ func causalTrialsCmd(args []string) {
 			return
 		}
 	case "validation":
-		err = causalexpv2.ExecuteValidation(ctx, root)
+		err = causalexpv2.ExecuteProtectedPanel(ctx, root, causalexpv2.PanelValidation)
 	case "locked":
-		err = causalexpv2.ExecuteLocked(ctx, root)
+		err = causalexpv2.ExecuteProtectedPanel(ctx, root, causalexpv2.PanelLocked)
 	default:
 		err = fmt.Errorf("unknown causal panel %q", *panel)
 	}
@@ -140,7 +140,7 @@ func causalReportPath(repoRoot, panel string) (string, error) {
 		common = filepath.Join(repoRoot, common)
 	}
 	return filepath.Join(filepath.Clean(common), causalexpv2.ResultsDirectoryName,
-		"active-causal-diagnosis-v2-"+panel+".json"), nil
+		"active-causal-diagnosis-v3-"+panel+".json"), nil
 }
 
 func ruleInductionTrialsCmd(args []string) {

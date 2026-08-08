@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	ReplayInputVersion = "causal-replay-input/v2"
+	ReplayInputVersion = "causal-replay-input/v3"
 	replayInputFD      = 3
 	replayOutputFD     = 4
 )
@@ -225,7 +225,7 @@ func replayAttemptCapability(input ReplayInput, state gitState) *attemptCapabili
 	manifest := causalv2.PreregisteredManifest()
 	return &attemptCapability{
 		record: AttemptRecord{
-			AttemptVersion:    "causal-replay/v2",
+			AttemptVersion:    ReplayCapabilityVersion,
 			PlanCommit:        PlanCommit,
 			PretrainingCommit: input.PretrainingCommit,
 			Panel:             PanelTraining,

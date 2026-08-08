@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -38,12 +39,94 @@ func rootedDependencyProof(repoRoot string, summary causalrun.DependencyEvidence
 	return rootedDependencyProofAt(repoRoot, strings.TrimSpace(string(headBytes)), summary)
 }
 
+// preflightDependencyProof reconstructs and validates the complete
+// commit-rooted proof before any protected attempt record is created.
+func preflightDependencyProof(repoRoot, head string) error {
+	summary, err := causalrun.AuditDependencyBoundary(repoRoot)
+	if err != nil {
+		return fmt.Errorf("audit dependency boundary: %w", err)
+	}
+	first, err := rootedDependencyProofAt(repoRoot, head, summary)
+	if err != nil {
+		return fmt.Errorf("construct dependency proof: %w", err)
+	}
+	second, err := rootedDependencyProofAt(repoRoot, head, summary)
+	if err != nil {
+		return fmt.Errorf("reconstruct dependency proof: %w", err)
+	}
+	if err := causalv2.VerifyDependencyProof(first); err != nil {
+		return fmt.Errorf("verify dependency proof: %w", err)
+	}
+	if err := causalv2.VerifyDependencyProof(second); err != nil {
+		return fmt.Errorf("verify reconstructed dependency proof: %w", err)
+	}
+	firstBytes, err := causalv2.CanonicalJSON(first)
+	if err != nil {
+		return err
+	}
+	secondBytes, err := causalv2.CanonicalJSON(second)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(firstBytes, secondBytes) {
+		return errors.New("dependency proof reconstruction is not byte-identical")
+	}
+	wantPaths, err := completeTrackedDependencyPaths(repoRoot, head)
+	if err != nil {
+		return err
+	}
+	gotPaths := make([]string, len(first.Files))
+	for index, file := range first.Files {
+		gotPaths[index] = file.Path
+	}
+	if !slices.Equal(gotPaths, wantPaths) {
+		return errors.New("dependency proof does not cover the complete tracked Go and causal CUE tree")
+	}
+	return nil
+}
+
+func completeTrackedDependencyPaths(repoRoot, head string) ([]string, error) {
+	listing, err := gitOutput(repoRoot, "ls-tree", "-rz", "--full-tree", head)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	for _, raw := range bytes.Split(listing, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		meta, nameBytes, ok := bytes.Cut(raw, []byte{'\t'})
+		if !ok {
+			return nil, errors.New("invalid git ls-tree record")
+		}
+		parts := strings.Fields(string(meta))
+		if len(parts) != 3 {
+			return nil, errors.New("invalid git ls-tree metadata")
+		}
+		mode, kind, name := parts[0], parts[1], string(nameBytes)
+		regular := kind == "blob" && (mode == "100644" || mode == "100755")
+		inScope := strings.HasSuffix(name, ".go") || strings.HasPrefix(name, "domains/causal/") && strings.HasSuffix(name, ".cue")
+		if regular && inScope {
+			paths = append(paths, name)
+		}
+	}
+	if !sort.StringsAreSorted(paths) {
+		return nil, errors.New("tracked dependency paths are not globally sorted")
+	}
+	for index := 1; index < len(paths); index++ {
+		if paths[index-1] == paths[index] {
+			return nil, fmt.Errorf("tracked dependency path is duplicated at index %d: %q", index, paths[index])
+		}
+	}
+	return paths, nil
+}
+
 func rootedDependencyProofAt(repoRoot, head string, summary causalrun.DependencyEvidence) (causalv2.DependencyProof, error) {
 	listing, err := gitOutput(repoRoot, "ls-tree", "-rz", "--full-tree", head)
 	if err != nil {
 		return causalv2.DependencyProof{}, err
 	}
-	proof := causalv2.DependencyProof{AuditedCommit: head, AuditedRoots: []string{"."}, Files: []causalv2.DependencyFile{}, RunnerMethods: []string{}, RunnerFields: []causalv2.RunnerField{}, TeacherMethods: []string{}, Forbidden: append([]string(nil), summary.Forbidden...)}
+	proof := causalv2.DependencyProof{AuditedCommit: head, AuditedRoots: []string{"."}, Files: []causalv2.DependencyFile{}, RunnerMethods: []string{}, RunnerFields: []causalv2.RunnerField{}, TeacherMethods: []string{}, Forbidden: append([]string{}, summary.Forbidden...)}
 	goSources := map[string][]byte{}
 	for _, raw := range bytes.Split(listing, []byte{0}) {
 		if len(raw) == 0 {

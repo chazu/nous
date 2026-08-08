@@ -1,9 +1,71 @@
 package causalexpv2
 
 import (
+	"bytes"
+	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/chazu/nous/internal/causalrun"
+	"github.com/chazu/nous/internal/causalv2"
 )
+
+func TestDependencyProofPreflightCoversCurrentTrackedTree(t *testing.T) {
+	repository := filepath.Join("..", "..")
+	headBytes, err := gitOutput(repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headBytes))
+	summary, err := causalrun.AuditDependencyBoundary(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := rootedDependencyProofAt(repository, head, summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := rootedDependencyProofAt(repository, head, summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := causalv2.VerifyDependencyProof(first); err != nil {
+		t.Fatalf("actual validator rejected current proof: %v", err)
+	}
+	firstBytes, _ := causalv2.CanonicalJSON(first)
+	secondBytes, _ := causalv2.CanonicalJSON(second)
+	if !bytes.Equal(firstBytes, secondBytes) {
+		t.Fatal("dependency reconstruction changed canonical bytes")
+	}
+	want, err := completeTrackedDependencyPaths(repository, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(first.Files))
+	for index, file := range first.Files {
+		got[index] = file.Path
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("proof coverage differs: got %d paths, want %d", len(got), len(want))
+	}
+	if err := preflightDependencyProof(repository, head); err != nil {
+		t.Fatalf("whole-tree preflight: %v", err)
+	}
+}
+
+func TestDependencyProofRegressionPreservesEmptyArray(t *testing.T) {
+	summary := causalrun.DependencyEvidence{RunnerMethods: []string{}, TeacherMethods: []string{}, Forbidden: []string{}}
+	broken := append([]string(nil), summary.Forbidden...)
+	if broken != nil {
+		t.Fatal("v2 regression setup did not reproduce nil append result")
+	}
+	fixed := append([]string{}, summary.Forbidden...)
+	if fixed == nil {
+		t.Fatal("non-nil empty destination did not preserve an array")
+	}
+}
 
 func TestSourceDependencyMetadataUsesQualifiedGoTypes(t *testing.T) {
 	t.Parallel()

@@ -11,7 +11,7 @@ import (
 const ResultsDirectoryName = "nous-results"
 
 func resultPath(commonDirectory string, panel Panel) string {
-	return filepath.Join(commonDirectory, ResultsDirectoryName, "active-causal-diagnosis-v2-"+string(panel)+".json")
+	return filepath.Join(commonDirectory, ResultsDirectoryName, "active-causal-diagnosis-v3-"+string(panel)+".json")
 }
 
 // PublishEvaluationReport publishes validation or locked output with

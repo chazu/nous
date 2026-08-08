@@ -4,6 +4,7 @@
 package causalexpv2
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +21,13 @@ import (
 )
 
 const (
-	PlanCommit = "6a3ac6d6debb7ab4f85e6c2a12842076d6392936"
+	PlanCommit              = "b4183595a9769882ad4673c606e9a35560cfb95c"
+	BaselineCommit          = "44f19d2823307906a8a0393e13a995d00d33f639"
+	AttemptVersion          = "causal-attempt/v3"
+	AttemptProofVersion     = "causal-attempt-proof/v3"
+	ReplayCapabilityVersion = "causal-replay/v3"
 
-	TrainingEvidenceDirectory = "docs/evidence/active-causal-diagnosis-v2"
+	TrainingEvidenceDirectory = "docs/evidence/active-causal-diagnosis-v3"
 	TrainingReportName        = "training.json"
 	TrainingEpisodesName      = "training-episodes.json"
 )
@@ -87,6 +93,34 @@ type DiagnosticDevelopmentCapability struct{ marker struct{} }
 
 func NewDiagnosticDevelopmentCapability() DiagnosticDevelopmentCapability {
 	return DiagnosticDevelopmentCapability{}
+}
+
+// ExecuteProtectedPanel is the sole operational boundary for protected v3
+// commands. The unchanged semantic executors may produce detailed internal
+// errors; none of those values cross this boundary before atomic publication.
+func ExecuteProtectedPanel(ctx context.Context, repoRoot string, panel Panel) error {
+	return executeProtectedPanelWith(ctx, repoRoot, panel, func(ctx context.Context, repoRoot string, panel Panel) error {
+		switch panel {
+		case PanelTraining:
+			return ExecuteTraining(ctx, repoRoot)
+		case PanelValidation:
+			return ExecuteValidation(ctx, repoRoot)
+		case PanelLocked:
+			return ExecuteLocked(ctx, repoRoot)
+		default:
+			return fmt.Errorf("panel %q is not protected", panel)
+		}
+	})
+}
+
+func executeProtectedPanelWith(ctx context.Context, repoRoot string, panel Panel, run func(context.Context, string, Panel) error) error {
+	if !panel.protected() || run == nil {
+		return errors.New("invalid protected panel invocation")
+	}
+	if err := run(ctx, repoRoot, panel); err != nil {
+		return fmt.Errorf("causal %s panel failed before publication", panel)
+	}
+	return nil
 }
 
 type gitState struct {
@@ -174,7 +208,7 @@ func beginAttempt(opts beginAttemptOptions) (*attemptCapability, error) {
 	}
 	path := attemptRecordPath(opts.Git.CommonDir, opts.Panel)
 	record := AttemptRecord{
-		AttemptVersion:    "causal-attempt/v2",
+		AttemptVersion:    AttemptVersion,
 		PlanCommit:        PlanCommit,
 		PretrainingCommit: opts.PretrainingCommit,
 		Panel:             opts.Panel,
@@ -183,7 +217,7 @@ func beginAttempt(opts beginAttemptOptions) (*attemptCapability, error) {
 		CreatedUTC:        opts.Now.UTC().Format(time.RFC3339),
 		State:             "started",
 	}
-	proof := AttemptProofRecord{ProofVersion: "causal-attempt-proof/v2", Panel: opts.Panel, GeneratedFixtures: map[string]string{}}
+	proof := AttemptProofRecord{ProofVersion: AttemptProofVersion, Panel: opts.Panel, GeneratedFixtures: map[string]string{}}
 	data, err := canonicalJSON(record)
 	if err != nil {
 		return nil, err
@@ -237,11 +271,11 @@ func beginAttempt(opts beginAttemptOptions) (*attemptCapability, error) {
 }
 
 func attemptRecordPath(commonDirectory string, panel Panel) string {
-	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v2-"+string(panel)+".json")
+	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v3-"+string(panel)+".json")
 }
 
 func attemptProofRecordPath(commonDirectory string, panel Panel) string {
-	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v2-"+string(panel)+"-proof.json")
+	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v3-"+string(panel)+"-proof.json")
 }
 
 func panelSeedRange(panel Panel) (SeedRange, error) {
@@ -404,6 +438,15 @@ func beginTrainingAttempt(ctx context.Context, repoRoot string) (*attemptCapabil
 	if err := requireAncestor(ctx, state.Root, PlanCommit, state.Head); err != nil {
 		return nil, err
 	}
+	if err := verifyV3ExecutableConfinement(ctx, state); err != nil {
+		return nil, err
+	}
+	if err := verifyV3CollisionAbsence(state); err != nil {
+		return nil, err
+	}
+	if err := preflightDependencyProof(state.Root, state.Head); err != nil {
+		return nil, err
+	}
 	return beginAttempt(beginAttemptOptions{
 		Now:               time.Now(),
 		Git:               state,
@@ -412,6 +455,128 @@ func beginTrainingAttempt(ctx context.Context, repoRoot string) (*attemptCapabil
 		PretrainingCommit: state.Head,
 		EvidenceDirectory: filepath.Join(state.Root, TrainingEvidenceDirectory),
 	})
+}
+
+var v3ExecutableChanges = []string{
+	"A\tdocs/active-causal-diagnosis-v3-amendment.md",
+	"A\tinternal/causalv2/dependency_verify.go",
+	"A\tinternal/causalv2/dependency_verify_test.go",
+	"M\tcmd/nous/main.go",
+	"M\tinternal/causalexpv2/dependency_evidence.go",
+	"M\tinternal/causalexpv2/dependency_evidence_test.go",
+	"M\tinternal/causalexpv2/gates.go",
+	"M\tinternal/causalexpv2/provenance.go",
+	"M\tinternal/causalexpv2/provenance_test.go",
+	"M\tinternal/causalexpv2/publication.go",
+	"M\tinternal/causalexpv2/replay_gate.go",
+	"M\tinternal/causalexpv2/replay_hook.go",
+	"M\tinternal/causalexpv2/result.go",
+}
+
+func verifyV3ExecutableConfinement(ctx context.Context, state gitState) error {
+	if !state.Clean {
+		return errors.New("v3 executable confinement requires a clean worktree")
+	}
+	changed, err := gitStringOutput(ctx, state.Root, "diff", "--name-status", "--no-renames", BaselineCommit, state.Head, "--")
+	if err != nil {
+		return err
+	}
+	got := splitNonemptyLines(changed)
+	slices.Sort(got)
+	want := append([]string{}, v3ExecutableChanges...)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		return fmt.Errorf("v3 executable diff is outside the accepted status-sensitive allowlist: got %q", got)
+	}
+	for _, record := range want {
+		status, path, ok := strings.Cut(record, "\t")
+		if !ok {
+			return errors.New("invalid internal v3 executable allowlist")
+		}
+		headEntry, err := gitStringOutput(ctx, state.Root, "ls-tree", state.Head, "--", path)
+		if err != nil || !strings.HasPrefix(headEntry, "100644 blob ") {
+			return fmt.Errorf("v3 executable path is not a regular 100644 blob: %s", path)
+		}
+		baselineEntry, baselineErr := gitStringOutput(ctx, state.Root, "ls-tree", BaselineCommit, "--", path)
+		switch status {
+		case "A":
+			if baselineErr != nil || baselineEntry != "" {
+				return fmt.Errorf("v3 added path existed at the baseline: %s", path)
+			}
+		case "M":
+			if baselineErr != nil || !strings.HasPrefix(baselineEntry, "100644 blob ") {
+				return fmt.Errorf("v3 modified path was not an existing regular 100644 blob: %s", path)
+			}
+		default:
+			return fmt.Errorf("invalid v3 executable status %q", status)
+		}
+	}
+	acceptedAmendment, err := gitFile(ctx, state.Root, PlanCommit, "docs/active-causal-diagnosis-v3-amendment.md")
+	if err != nil {
+		return err
+	}
+	executableAmendment, err := gitFile(ctx, state.Root, state.Head, "docs/active-causal-diagnosis-v3-amendment.md")
+	if err != nil || !bytes.Equal(acceptedAmendment, executableAmendment) {
+		return errors.New("v3 amendment differs from the accepted plan-commit blob")
+	}
+	protected := []string{
+		"domains/causal", "internal/causalrun", "internal/causalcurriculum", "internal/causaldpproof",
+		"internal/causalexpv2/contextual.go", "internal/causalexpv2/control_adapter.go", "internal/causalexpv2/control_verify.go",
+		"internal/causalexpv2/curriculum_adapter.go", "internal/causalexpv2/evaluation_executor.go", "internal/causalexpv2/evidence.go",
+		"internal/causalexpv2/executor.go", "internal/causalexpv2/freeze.go", "internal/causalexpv2/freeze_verify.go",
+		"internal/causalexpv2/generator.go", "internal/causalexpv2/meter.go", "internal/causalexpv2/report.go",
+		"internal/causalexpv2/statistics.go", "internal/causalexpv2/training_executor.go", "internal/causalexpv2/verify.go",
+	}
+	args := append([]string{"diff", "--quiet", BaselineCommit, state.Head, "--"}, protected...)
+	command := exec.CommandContext(ctx, "git", append([]string{"-C", state.Root}, args...)...)
+	if err := command.Run(); err != nil {
+		return errors.New("v3 executable changed a protected empirical or runtime path")
+	}
+	if err := verifyEmptyFreezeAt(ctx, state.Root, state.Head); err != nil {
+		return fmt.Errorf("v3 executable freeze constants: %w", err)
+	}
+	return nil
+}
+
+func splitNonemptyLines(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+	lines := strings.Split(value, "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	return result
+}
+
+func verifyV3CollisionAbsence(state gitState) error {
+	paths := []string{
+		filepath.Join(state.Root, TrainingEvidenceDirectory),
+		filepath.Join(state.Root, filepath.Dir(TrainingEvidenceDirectory), ".active-causal-diagnosis-v3.staging"),
+		replayRecordPath(state.CommonDir),
+		resultPath(state.CommonDir, PanelValidation),
+		resultPath(state.CommonDir, PanelLocked),
+	}
+	for _, panel := range []Panel{PanelTraining, PanelValidation, PanelLocked} {
+		paths = append(paths, attemptRecordPath(state.CommonDir, panel), attemptProofRecordPath(state.CommonDir, panel))
+	}
+	// V2 common-directory records are intentionally never named here. These
+	// worktree paths are checked for absence only; their bytes are never opened.
+	paths = append(paths,
+		filepath.Join(state.Root, "docs/evidence/active-causal-diagnosis-v2"),
+		filepath.Join(state.Root, "docs/evidence/.active-causal-diagnosis-v2.staging"),
+		filepath.Join(state.Root, ResultsDirectoryName, "active-causal-diagnosis-v2-validation.json"),
+		filepath.Join(state.Root, ResultsDirectoryName, "active-causal-diagnosis-v2-locked.json"),
+	)
+	for _, path := range paths {
+		if err := requireAbsent(path); err != nil {
+			return fmt.Errorf("v3 preflight collision: %w", err)
+		}
+	}
+	return nil
 }
 
 func canonicalJSON(value any) ([]byte, error) {

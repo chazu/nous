@@ -66,7 +66,7 @@ func (cap *attemptCapability) publishTrainingEvidence(repoRoot string, evidence 
 	}
 	finalDirectory := filepath.Join(repoRoot, TrainingEvidenceDirectory)
 	parent := filepath.Dir(finalDirectory)
-	staging := filepath.Join(parent, ".active-causal-diagnosis-v2.staging")
+	staging := filepath.Join(parent, ".active-causal-diagnosis-v3.staging")
 	if err := requireAbsent(finalDirectory); err != nil {
 		return fail(err)
 	}

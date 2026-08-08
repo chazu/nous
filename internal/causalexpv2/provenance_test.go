@@ -1,14 +1,17 @@
 package causalexpv2
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -167,6 +170,289 @@ func TestProtectedAuthorizationFailuresStopBeforeGeneration(t *testing.T) {
 	}
 	if got := protectedGeneratorCalls.Load(); got != 0 {
 		t.Fatalf("locked authorization failure opened %d protected fixtures", got)
+	}
+}
+
+func writeSentinel(t *testing.T, path string, value []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, value, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestV3CollisionAndV2ResidueIsolation(t *testing.T) {
+	repository, commonDirectory, _ := gitTestRepo(t)
+	state, err := resolveGitState(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := []byte("not-json;selected-rule=SENTINEL;score=999")
+	v2CommonPaths := []string{filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v2-replay.json")}
+	for _, panel := range []Panel{PanelTraining, PanelValidation, PanelLocked} {
+		v2CommonPaths = append(v2CommonPaths,
+			filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v2-"+string(panel)+".json"),
+			filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v2-"+string(panel)+"-proof.json"),
+		)
+	}
+	v2CommonPaths = append(v2CommonPaths,
+		filepath.Join(commonDirectory, ResultsDirectoryName, "active-causal-diagnosis-v2-validation.json"),
+		filepath.Join(commonDirectory, ResultsDirectoryName, "active-causal-diagnosis-v2-locked.json"),
+	)
+	for _, path := range v2CommonPaths {
+		writeSentinel(t, path, sentinel)
+	}
+	if err := verifyV3CollisionAbsence(state); err != nil {
+		t.Fatalf("opaque v2 common-directory residue blocked v3: %v", err)
+	}
+	for _, path := range v2CommonPaths {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, sentinel) {
+			t.Fatalf("v2 common-directory sentinel changed at %s", path)
+		}
+	}
+
+	v3Paths := []string{
+		filepath.Join(repository, TrainingEvidenceDirectory),
+		filepath.Join(repository, filepath.Dir(TrainingEvidenceDirectory), ".active-causal-diagnosis-v3.staging"),
+		replayRecordPath(commonDirectory),
+		resultPath(commonDirectory, PanelValidation),
+		resultPath(commonDirectory, PanelLocked),
+	}
+	for _, panel := range []Panel{PanelTraining, PanelValidation, PanelLocked} {
+		v3Paths = append(v3Paths, attemptRecordPath(commonDirectory, panel), attemptProofRecordPath(commonDirectory, panel))
+	}
+	for _, path := range v3Paths {
+		writeSentinel(t, path, sentinel)
+		protectedGeneratorCalls.Store(0)
+		if err := verifyV3CollisionAbsence(state); err == nil {
+			t.Fatalf("v3 collision was accepted: %s", path)
+		}
+		if got := protectedGeneratorCalls.Load(); got != 0 {
+			t.Fatalf("v3 collision opened %d protected fixtures", got)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, sentinel) {
+			t.Fatalf("v3 collision sentinel changed at %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	v2WorktreePaths := []string{
+		filepath.Join(repository, "docs/evidence/active-causal-diagnosis-v2"),
+		filepath.Join(repository, "docs/evidence/.active-causal-diagnosis-v2.staging"),
+		filepath.Join(repository, ResultsDirectoryName, "active-causal-diagnosis-v2-validation.json"),
+		filepath.Join(repository, ResultsDirectoryName, "active-causal-diagnosis-v2-locked.json"),
+	}
+	for _, path := range v2WorktreePaths {
+		writeSentinel(t, path, sentinel)
+		if err := verifyV3CollisionAbsence(state); err == nil {
+			t.Fatalf("v2 worktree collision was accepted: %s", path)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, sentinel) {
+			t.Fatalf("v2 worktree sentinel changed at %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	protectedGeneratorCalls.Store(0)
+	if _, err := beginTrainingAttempt(context.Background(), repository); err == nil {
+		t.Fatal("unrelated repository unexpectedly gained v3 authorization from v2 residue")
+	}
+	if got := protectedGeneratorCalls.Load(); got != 0 {
+		t.Fatalf("failed v3 authorization opened %d protected fixtures", got)
+	}
+}
+
+func TestPrepublicationFailureDoesNotExposeEmpiricalSentinels(t *testing.T) {
+	repository, commonDirectory, head := gitTestRepo(t)
+	state, err := resolveGitState(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := causalv2.PreregisteredManifest()
+	capability, err := beginAttempt(beginAttemptOptions{
+		Now:               time.Unix(0, 0).UTC(),
+		Git:               state,
+		Panel:             PanelTraining,
+		Seeds:             SeedRange{manifest.TrainingSeeds.Start, manifest.TrainingSeeds.Count, manifest.TrainingSeeds.Step},
+		PretrainingCommit: head,
+		EvidenceDirectory: filepath.Join(repository, TrainingEvidenceDirectory),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < manifest.TrainingSeeds.Count; index++ {
+		seed := manifest.TrainingSeeds.Start + int64(index)*manifest.TrainingSeeds.Step
+		capability.generated[seed] = strings.Repeat("a", 64)
+	}
+	sentinels := []string{"PRIVATE_FIXTURE_SENTINEL", "SELECTED_RULE_SENTINEL", "ACTION_SENTINEL", "OUTCOME_SENTINEL", "SCORE_SENTINEL", "AGGREGATE_SENTINEL"}
+	payload := []byte(strings.Join(sentinels, ":"))
+	failure := capability.publishTrainingEvidence(repository, EvidenceBytes{Report: payload, Bundle: payload})
+	if failure == nil {
+		t.Fatal("forced prepublication failure unexpectedly succeeded")
+	}
+	captured := failure.Error() // Direct library execution has no stdout/stderr channel.
+	for _, sentinel := range sentinels {
+		if strings.Contains(captured, sentinel) {
+			t.Fatalf("prepublication failure exposed %q", sentinel)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(repository, TrainingEvidenceDirectory),
+		filepath.Join(repository, filepath.Dir(TrainingEvidenceDirectory), ".active-causal-diagnosis-v3.staging"),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("forced failure created empirical path %s", path)
+		}
+	}
+	recordBytes, err := os.ReadFile(attemptRecordPath(commonDirectory, PanelTraining))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := causalv2.StrictDecode[AttemptRecord](recordBytes)
+	if err != nil || record.State != "failed" {
+		t.Fatalf("forced failure record = %+v, err=%v", record, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(recordBytes, &fields); err != nil {
+		t.Fatal(err)
+	}
+	wantFields := []string{"attempt_version", "created_utc", "executable_commit", "panel", "plan_commit", "pretraining_commit", "seed_range", "state"}
+	gotFields := make([]string, 0, len(fields))
+	for name := range fields {
+		gotFields = append(gotFields, name)
+	}
+	slices.Sort(gotFields)
+	if !slices.Equal(gotFields, wantFields) {
+		t.Fatalf("failure record fields = %v", gotFields)
+	}
+	proofBytes, err := os.ReadFile(attemptProofRecordPath(commonDirectory, PanelTraining))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := causalv2.StrictDecode[AttemptProofRecord](proofBytes)
+	if err != nil || proof.ProofVersion != AttemptProofVersion || proof.GeneratedFixtures == nil || len(proof.GeneratedFixtures) != 0 || proof.PublishedDigest != "" {
+		t.Fatalf("forced failure proof = %+v, err=%v", proof, err)
+	}
+	for _, sentinel := range sentinels {
+		if bytes.Contains(recordBytes, []byte(sentinel)) || bytes.Contains(proofBytes, []byte(sentinel)) {
+			t.Fatalf("failure provenance exposed %q", sentinel)
+		}
+	}
+}
+
+func TestProtectedPanelFailureHelperProcess(t *testing.T) {
+	if os.Getenv("NOUS_TEST_PROTECTED_FAILURE_HELPER") != "1" {
+		return
+	}
+	payload := os.Getenv("NOUS_TEST_PROTECTED_FAILURE_PAYLOAD")
+	repository := os.Getenv("NOUS_TEST_PROTECTED_FAILURE_ROOT")
+	state, stateErr := resolveGitState(context.Background(), repository)
+	if stateErr != nil {
+		os.Exit(28)
+	}
+	manifest := causalv2.PreregisteredManifest()
+	capability, attemptErr := beginAttempt(beginAttemptOptions{Now: time.Unix(0, 0).UTC(), Git: state, Panel: PanelTraining, Seeds: SeedRange{manifest.TrainingSeeds.Start, manifest.TrainingSeeds.Count, manifest.TrainingSeeds.Step}, PretrainingCommit: state.Head, EvidenceDirectory: filepath.Join(repository, TrainingEvidenceDirectory)})
+	if attemptErr != nil {
+		os.Exit(27)
+	}
+	err := executeProtectedPanelWith(context.Background(), repository, PanelTraining, func(context.Context, string, Panel) error {
+		return errors.New(payload)
+	})
+	if err == nil {
+		os.Exit(29)
+	}
+	if failErr := capability.Fail(); failErr != nil {
+		os.Exit(26)
+	}
+	fmt.Fprintln(os.Stderr, "error:", err)
+	os.Exit(23)
+}
+
+func TestProtectedPanelCommandBoundaryCapturesNoEmpiricalValues(t *testing.T) {
+	sentinels := []string{"PRIVATE_FIXTURE_SENTINEL", "SELECTED_RULE_SENTINEL", "RULE_SENTINEL", "ACTION_SENTINEL", "OUTCOME_SENTINEL", "SCORE_SENTINEL", "AGGREGATE_SENTINEL"}
+	payload := strings.Join(sentinels, ":")
+	for _, panel := range []Panel{PanelTraining, PanelValidation, PanelLocked} {
+		err := executeProtectedPanelWith(context.Background(), t.TempDir(), panel, func(context.Context, string, Panel) error {
+			return errors.New(payload)
+		})
+		if err == nil {
+			t.Fatalf("%s injected failure succeeded", panel)
+		}
+		for _, sentinel := range sentinels {
+			if strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("%s returned error exposed %q", panel, sentinel)
+			}
+		}
+	}
+
+	filesystem, commonDirectory, _ := gitTestRepo(t)
+	command := exec.Command(os.Args[0], "-test.run=^TestProtectedPanelFailureHelperProcess$")
+	command.Env = append(os.Environ(),
+		"NOUS_TEST_PROTECTED_FAILURE_HELPER=1",
+		"NOUS_TEST_PROTECTED_FAILURE_PAYLOAD="+payload,
+		"NOUS_TEST_PROTECTED_FAILURE_ROOT="+filesystem,
+	)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	returned := command.Run()
+	if returned == nil {
+		t.Fatal("forced-failure helper unexpectedly succeeded")
+	}
+	captured := stdout.String() + stderr.String() + returned.Error()
+	for _, sentinel := range sentinels {
+		if strings.Contains(captured, sentinel) {
+			t.Fatalf("forced-failure command exposed %q in captured channels", sentinel)
+		}
+	}
+	rootEntries, err := os.ReadDir(filesystem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rootEntries) != 2 || rootEntries[0].Name() != ".git" || rootEntries[1].Name() != "README" {
+		t.Fatalf("forced-failure command changed worktree entries: %v", rootEntries)
+	}
+	for _, path := range []string{
+		filepath.Join(filesystem, TrainingEvidenceDirectory),
+		filepath.Join(filesystem, filepath.Dir(TrainingEvidenceDirectory), ".active-causal-diagnosis-v3.staging"),
+		resultPath(commonDirectory, PanelValidation),
+		resultPath(commonDirectory, PanelLocked),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("forced-failure command created forbidden path %s", path)
+		}
+	}
+	recordBytes, err := os.ReadFile(attemptRecordPath(commonDirectory, PanelTraining))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := causalv2.StrictDecode[AttemptRecord](recordBytes)
+	if err != nil || record.State != "failed" || record.AttemptVersion != AttemptVersion || record.PlanCommit != PlanCommit {
+		t.Fatalf("forced-failure command attempt record = %+v, err=%v", record, err)
+	}
+	proofBytes, err := os.ReadFile(attemptProofRecordPath(commonDirectory, PanelTraining))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := causalv2.StrictDecode[AttemptProofRecord](proofBytes)
+	if err != nil || proof.ProofVersion != AttemptProofVersion || proof.Panel != PanelTraining || proof.PublishedDigest != "" || proof.GeneratedFixtures == nil || len(proof.GeneratedFixtures) != 0 {
+		t.Fatalf("forced-failure command proof record = %+v, err=%v", proof, err)
+	}
+	for _, encoded := range [][]byte{recordBytes, proofBytes} {
+		for _, sentinel := range sentinels {
+			if bytes.Contains(encoded, []byte(sentinel)) {
+				t.Fatalf("forced-failure provenance exposed %q", sentinel)
+			}
+		}
 	}
 }
 
@@ -470,6 +756,17 @@ func TestReplaySuccessRecordBindsEToRToCandidate(t *testing.T) {
 	if err := verifyReplaySuccessRecord(context.Background(), cState, report, bundle, rState.Head); err != nil {
 		t.Fatal(err)
 	}
+	legacy := record
+	legacy.ReplayVersion = "causal-replay-success/v2"
+	if err := persistReplayRecord(commonDirectory, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyReplaySuccessRecord(context.Background(), cState, report, bundle, rState.Head); err == nil {
+		t.Fatal("v3 accepted a v2 replay success record")
+	}
+	if err := persistReplayRecord(commonDirectory, record); err != nil {
+		t.Fatal(err)
+	}
 	forged := record
 	forged.CandidateCommit = cState.Head
 	if err := persistReplayRecord(commonDirectory, forged); err != nil {
@@ -488,7 +785,7 @@ func TestReplaySuccessRecordBindsEToRToCandidate(t *testing.T) {
 }
 
 func TestAttemptRecordRejectsCompanionProofFields(t *testing.T) {
-	record := AttemptRecord{AttemptVersion: "causal-attempt/v2", PlanCommit: PlanCommit, PretrainingCommit: strings.Repeat("a", 40), Panel: PanelValidation, SeedRange: SeedRange{Start: 132001, Count: 32, Step: 1}, ExecutableCommit: strings.Repeat("b", 40), CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "started"}
+	record := AttemptRecord{AttemptVersion: AttemptVersion, PlanCommit: PlanCommit, PretrainingCommit: strings.Repeat("a", 40), Panel: PanelValidation, SeedRange: SeedRange{Start: 132001, Count: 32, Step: 1}, ExecutableCommit: strings.Repeat("b", 40), CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "started"}
 	var object map[string]any
 	if err := json.Unmarshal(mustCanonical(record), &object); err != nil {
 		t.Fatal(err)
@@ -501,6 +798,274 @@ func TestAttemptRecordRejectsCompanionProofFields(t *testing.T) {
 	}
 	if _, err := causalv2.StrictDecode[AttemptRecord](encoded); err == nil {
 		t.Fatal("attempt record accepted proof-only fields")
+	}
+}
+
+func TestV3ProtocolIdentitiesRejectV2AndViceVersa(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineProvenance, err := gitFile(context.Background(), root, BaselineCommit, "internal/causalexpv2/provenance.go")
+	if err != nil || !bytes.Contains(baselineProvenance, []byte(`"causal-attempt/v2"`)) || !bytes.Contains(baselineProvenance, []byte(legacyV2PlanCommit)) {
+		t.Fatal("test v2 attempt decoder is not tied to baseline source identities")
+	}
+	baselineReplay, err := gitFile(context.Background(), root, BaselineCommit, "internal/causalexpv2/replay_hook.go")
+	if err != nil || !bytes.Contains(baselineReplay, []byte(`"causal-replay-input/v2"`)) || !bytes.Contains(baselineReplay, []byte(`"causal-replay/v2"`)) {
+		t.Fatal("test v2 replay decoder is not tied to baseline source identities")
+	}
+	baselineSuccess, err := gitFile(context.Background(), root, BaselineCommit, "internal/causalexpv2/replay_gate.go")
+	if err != nil || !bytes.Contains(baselineSuccess, []byte(`"causal-replay-success/v2"`)) {
+		t.Fatal("test v2 success decoder is not tied to baseline source identities")
+	}
+
+	attempt := AttemptRecord{AttemptVersion: AttemptVersion, PlanCommit: PlanCommit, Panel: PanelValidation}
+	proof := AttemptProofRecord{ProofVersion: AttemptProofVersion, Panel: PanelValidation}
+	if !validAttemptProtocolIdentity(attempt, proof, PanelValidation) {
+		t.Fatal("v3 attempt/proof identity was rejected")
+	}
+	attempt.AttemptVersion = "causal-attempt/v2"
+	if validAttemptProtocolIdentity(attempt, proof, PanelValidation) {
+		t.Fatal("v3 accepted a v2 attempt record")
+	}
+	attempt.AttemptVersion = AttemptVersion
+	proof.ProofVersion = "causal-attempt-proof/v2"
+	if validAttemptProtocolIdentity(attempt, proof, PanelValidation) {
+		t.Fatal("v3 accepted a v2 proof record")
+	}
+	if _, err := decodeV2AttemptRecordForTest(mustCanonical(AttemptRecord{AttemptVersion: AttemptVersion, PlanCommit: PlanCommit})); err == nil {
+		t.Fatal("baseline-v2 decoder accepted a v3 attempt record")
+	}
+	legacyAttempt := attempt
+	legacyAttempt.AttemptVersion, legacyAttempt.PlanCommit = "causal-attempt/v2", legacyV2PlanCommit
+	if _, err := decodeV2AttemptRecordForTest(mustCanonical(legacyAttempt)); err != nil {
+		t.Fatalf("baseline-v2 decoder rejected its own attempt identity: %v", err)
+	}
+	if _, err := decodeV2AttemptProofForTest(mustCanonical(AttemptProofRecord{ProofVersion: AttemptProofVersion, GeneratedFixtures: map[string]string{}})); err == nil {
+		t.Fatal("baseline-v2 decoder accepted a v3 proof record")
+	}
+	legacyProof := proof
+	legacyProof.ProofVersion = "causal-attempt-proof/v2"
+	if _, err := decodeV2AttemptProofForTest(mustCanonical(legacyProof)); err != nil {
+		t.Fatalf("baseline-v2 decoder rejected its own proof identity: %v", err)
+	}
+
+	encoded := replayInputForTest(t, strings.Repeat("a", 40))
+	input, err := causalv2.StrictDecode[ReplayInput](encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.ReplayInputVersion = "causal-replay-input/v2"
+	legacyBytes := mustCanonical(input)
+	if _, err := verifyReplayInput(legacyBytes); err == nil {
+		t.Fatal("v3 accepted a v2 replay input")
+	}
+	if _, err := decodeV2ReplayInputForTest(encoded); err == nil {
+		t.Fatal("baseline-v2 decoder accepted a v3 replay input")
+	}
+	input.PlanCommit = legacyV2PlanCommit
+	if _, err := decodeV2ReplayInputForTest(mustCanonical(input)); err != nil {
+		t.Fatalf("baseline-v2 decoder rejected its own replay-input identity: %v", err)
+	}
+	worker := replayAttemptCapability(input, gitState{Head: input.PretrainingCommit})
+	if _, err := decodeV2ReplayWorkerForTest(mustCanonical(worker.record)); err == nil {
+		t.Fatal("baseline-v2 decoder accepted a v3 replay worker record")
+	}
+	legacyWorker := worker.record
+	legacyWorker.AttemptVersion, legacyWorker.PlanCommit = "causal-replay/v2", legacyV2PlanCommit
+	if _, err := decodeV2ReplayWorkerForTest(mustCanonical(legacyWorker)); err != nil {
+		t.Fatalf("baseline-v2 decoder rejected its own worker identity: %v", err)
+	}
+	success := replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: PlanCommit}
+	if _, err := decodeV2ReplaySuccessForTest(mustCanonical(success)); err == nil {
+		t.Fatal("baseline-v2 decoder accepted a v3 replay success record")
+	}
+	legacySuccess := success
+	legacySuccess.ReplayVersion, legacySuccess.PlanCommit = "causal-replay-success/v2", legacyV2PlanCommit
+	if _, err := decodeV2ReplaySuccessForTest(mustCanonical(legacySuccess)); err != nil {
+		t.Fatalf("baseline-v2 decoder rejected its own success identity: %v", err)
+	}
+	v3Digest, err := causalv2.Digest("causal-replay-candidate-diff/v3", struct {
+		EvidenceCommit string `json:"evidence_commit"`
+		Diff           []byte `json:"diff"`
+	}{strings.Repeat("a", 40), []byte("same")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Digest, err := causalv2.Digest("causal-replay-candidate-diff/v2", struct {
+		EvidenceCommit string `json:"evidence_commit"`
+		Diff           []byte `json:"diff"`
+	}{strings.Repeat("a", 40), []byte("same")})
+	if err != nil || v2Digest == v3Digest {
+		t.Fatal("candidate diff digest domains are not isolated")
+	}
+}
+
+const legacyV2PlanCommit = "6a3ac6d6debb7ab4f85e6c2a12842076d6392936"
+
+func decodeV2AttemptRecordForTest(encoded []byte) (AttemptRecord, error) {
+	record, err := causalv2.StrictDecode[AttemptRecord](encoded)
+	if err != nil || !bytes.Equal(encoded, mustCanonical(record)) {
+		return record, errors.New("v2 attempt record is not canonical")
+	}
+	if record.AttemptVersion != "causal-attempt/v2" || record.PlanCommit != legacyV2PlanCommit {
+		return record, errors.New("not a v2 attempt record")
+	}
+	return record, nil
+}
+
+func decodeV2AttemptProofForTest(encoded []byte) (AttemptProofRecord, error) {
+	record, err := causalv2.StrictDecode[AttemptProofRecord](encoded)
+	if err != nil || !bytes.Equal(encoded, mustCanonical(record)) {
+		return record, errors.New("v2 attempt proof is not canonical")
+	}
+	if record.ProofVersion != "causal-attempt-proof/v2" {
+		return record, errors.New("not a v2 attempt proof")
+	}
+	return record, nil
+}
+
+func decodeV2ReplayInputForTest(encoded []byte) (ReplayInput, error) {
+	record, err := causalv2.StrictDecode[ReplayInput](encoded)
+	if err != nil || !bytes.Equal(encoded, mustCanonical(record)) {
+		return record, errors.New("v2 replay input is not canonical")
+	}
+	if record.ReplayInputVersion != "causal-replay-input/v2" || record.PlanCommit != legacyV2PlanCommit {
+		return record, errors.New("not a v2 replay input")
+	}
+	return record, nil
+}
+
+func decodeV2ReplayWorkerForTest(encoded []byte) (AttemptRecord, error) {
+	record, err := causalv2.StrictDecode[AttemptRecord](encoded)
+	if err != nil || !bytes.Equal(encoded, mustCanonical(record)) {
+		return record, errors.New("v2 replay worker record is not canonical")
+	}
+	if record.AttemptVersion != "causal-replay/v2" || record.PlanCommit != legacyV2PlanCommit {
+		return record, errors.New("not a v2 replay worker record")
+	}
+	return record, nil
+}
+
+func decodeV2ReplaySuccessForTest(encoded []byte) (replaySuccessRecord, error) {
+	record, err := causalv2.StrictDecode[replaySuccessRecord](encoded)
+	if err != nil || !bytes.Equal(encoded, mustCanonical(record)) {
+		return record, errors.New("v2 replay success record is not canonical")
+	}
+	if record.ReplayVersion != "causal-replay-success/v2" || record.PlanCommit != legacyV2PlanCommit {
+		return record, errors.New("not a v2 replay success record")
+	}
+	return record, nil
+}
+
+func locateV3ExecutableCommitForTest(t *testing.T, repository string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", repository, "rev-list", "--reverse", PlanCommit+"..HEAD")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := resolveGitState(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range strings.Fields(string(output)) {
+		candidateState := state
+		candidateState.Head = candidate
+		candidateState.Clean = true
+		if verifyV3ExecutableConfinement(context.Background(), candidateState) == nil {
+			return candidate
+		}
+	}
+	t.Skip("v3 executable commit has not been created yet")
+	return ""
+}
+
+func cloneAtCommitForTest(t *testing.T, source, commit string) string {
+	t.Helper()
+	repository := filepath.Join(t.TempDir(), "repository")
+	command := exec.Command("git", "clone", "--no-hardlinks", source, repository)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v: %s", err, output)
+	}
+	for _, args := range [][]string{{"config", "user.email", "test@example.invalid"}, {"config", "user.name", "Nous Test"}, {"checkout", "--detach", commit}} {
+		command = exec.Command("git", append([]string{"-C", repository}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	return repository
+}
+
+func TestV3ExecutableConfinementRejectsInjectedChanges(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e3 := locateV3ExecutableCommitForTest(t, root)
+	repository := cloneAtCommitForTest(t, root, e3)
+	state, err := resolveGitState(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyV3ExecutableConfinement(context.Background(), state); err != nil {
+		t.Fatalf("accepted E3 rejected: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		path   string
+		mode   bool
+		revert bool
+	}{
+		{"causal domain", "domains/causal/types.cue", false, false},
+		{"causal runner", "internal/causalrun/dependency.go", false, false},
+		{"causal curriculum", "internal/causalcurriculum/curriculum.go", false, false},
+		{"DP proof", "internal/causaldpproof/exact.go", false, false},
+		{"experiment generator", "internal/causalexpv2/generator.go", false, false},
+		{"non-allowlisted path", "README.md", false, false},
+		{"accepted amendment blob", "docs/active-causal-diagnosis-v3-amendment.md", false, false},
+		{"mode change", "cmd/nous/main.go", true, false},
+		{"missing allowlisted modification", "cmd/nous/main.go", false, true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			clone := cloneAtCommitForTest(t, root, e3)
+			path := filepath.Join(clone, filepath.FromSlash(test.path))
+			if test.mode {
+				if err := os.Chmod(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if test.revert {
+				content, err := gitFile(context.Background(), clone, BaselineCommit, test.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, content, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(content, []byte("\n// injected confinement violation\n")...), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gitCommitAll(t, clone, "inject confinement violation")
+			bad, err := resolveGitState(context.Background(), clone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			protectedGeneratorCalls.Store(0)
+			if err := verifyV3ExecutableConfinement(context.Background(), bad); err == nil {
+				t.Fatal("injected confinement violation was accepted")
+			}
+			if got := protectedGeneratorCalls.Load(); got != 0 {
+				t.Fatalf("confinement violation opened %d protected fixtures", got)
+			}
+		})
 	}
 }
 

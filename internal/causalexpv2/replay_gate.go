@@ -13,7 +13,7 @@ import (
 	"github.com/chazu/nous/internal/causalv2"
 )
 
-const replayRecordVersion = "causal-replay-success/v2"
+const replayRecordVersion = "causal-replay-success/v3"
 
 type replaySuccessRecord struct {
 	ReplayVersion       string `json:"replay_version"`
@@ -29,7 +29,7 @@ type replaySuccessRecord struct {
 }
 
 func replayRecordPath(commonDirectory string) string {
-	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v2-replay.json")
+	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v3-replay.json")
 }
 
 func candidateDiffDigest(ctx context.Context, repositoryRoot, evidenceCommit string) (string, error) {
@@ -38,7 +38,7 @@ func candidateDiffDigest(ctx context.Context, repositoryRoot, evidenceCommit str
 	if err != nil {
 		return "", err
 	}
-	return causalv2.Digest("causal-replay-candidate-diff/v2", struct {
+	return causalv2.Digest("causal-replay-candidate-diff/v3", struct {
 		EvidenceCommit string `json:"evidence_commit"`
 		Diff           []byte `json:"diff"`
 	}{evidenceCommit, diff})

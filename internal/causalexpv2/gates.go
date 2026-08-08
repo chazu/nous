@@ -447,11 +447,11 @@ func beginLockedAttempt(ctx context.Context, repoRoot string) (*attemptCapabilit
 		return nil, fmt.Errorf("read validation attempt proof: %w", err)
 	}
 	proof, err := causalv2.StrictDecode[AttemptProofRecord](proofBytes)
-	if err != nil || !bytes.Equal(proofBytes, mustCanonical(proof)) || proof.ProofVersion != "causal-attempt-proof/v2" || proof.Panel != PanelValidation {
+	if err != nil || !bytes.Equal(proofBytes, mustCanonical(proof)) || proof.ProofVersion != AttemptProofVersion || proof.Panel != PanelValidation {
 		return nil, errors.New("validation attempt proof is not canonical")
 	}
 	manifest := causalv2.PreregisteredManifest()
-	if attempt.State != "published" || attempt.Panel != PanelValidation || attempt.ExecutableCommit != state.Head || proof.PublishedDigest != validation.ReportDigest || len(proof.GeneratedFixtures) != manifest.ValidationSeeds.Count {
+	if !validAttemptProtocolIdentity(attempt, proof, PanelValidation) || attempt.State != "published" || attempt.ExecutableCommit != state.Head || proof.PublishedDigest != validation.ReportDigest || len(proof.GeneratedFixtures) != manifest.ValidationSeeds.Count {
 		return nil, errors.New("validation result is not bound to its published attempt")
 	}
 	for index := 0; index < manifest.ValidationSeeds.Count; index++ {
@@ -469,6 +469,10 @@ func beginLockedAttempt(ctx context.Context, repoRoot string) (*attemptCapabilit
 		capability.validationDigest = validation.ReportDigest
 	}
 	return capability, err
+}
+
+func validAttemptProtocolIdentity(attempt AttemptRecord, proof AttemptProofRecord, panel Panel) bool {
+	return attempt.AttemptVersion == AttemptVersion && attempt.PlanCommit == PlanCommit && attempt.Panel == panel && proof.ProofVersion == AttemptProofVersion && proof.Panel == panel
 }
 
 func mechanicallyValid(report EvaluationReport) bool {
