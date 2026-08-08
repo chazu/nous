@@ -53,19 +53,17 @@ protocol. This document narrows or adds requirements; it does not relax them.
 Current phase state is:
 
 - Phase 1, relational rule induction: complete, locked `valid-null`;
-- Phase 2, active causal diagnosis: `invalid` after the consumed v5 replay;
-- phases 3 through 10: not started.
+- Phase 2, active causal diagnosis: terminal `invalid` after the consumed v6
+  diagnostic returned `contract-rejection` (H0);
+- phases 3 through 10: terminated without execution by Gate 0.
 
 The exact v5 failure is recorded in
-[active-causal-diagnosis-v5-invalid-run.md](active-causal-diagnosis-v5-invalid-run.md).
-The failed v3, v4, and v5 receipts are immutable. Phase 2 blocks Phase 3 until a
-new accepted, versioned Phase 2 amendment produces a mechanically valid replay
-and the remaining validation and locked gates are completed. A replay-only
-recovery may use a narrowly scoped technical amendment that preserves all
-semantic identities. If recovery would change training, fixtures, scoring,
-selected rule, evidence, or empirical claims, the amendment must instead
-revise the affected experimental contract and explain why any further locked
-attempt remains scientifically admissible.
+[active-causal-diagnosis-v5-invalid-run.md](active-causal-diagnosis-v5-invalid-run.md),
+and the terminal Gate 0 outcome is recorded in
+[active-causal-diagnosis-v6-contract-rejection.md](active-causal-diagnosis-v6-contract-rejection.md).
+The failed v3, v4, and v5 receipts and the completed v6 diagnostic receipt are
+immutable. H0 does not authorize the predetermined recovery, another replay,
+another diagnostic version, or advancement to Phase 3.
 
 ## Fixed sequence
 
