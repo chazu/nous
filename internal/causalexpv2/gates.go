@@ -31,6 +31,7 @@ const FrozenConstantsPath = "internal/causalexpv2/freeze.go"
 const (
 	replayEvidenceCommit       = "7482d1b9712f49cb988623a87ec8bb1c34667a26"
 	replayPretrainingCommit    = "89a9221e97dd17d6ba220a22a12d4c0328417ffb"
+	replayV4ExecutableCommit   = "3f400d22a02812da41ed1ffb158db434cfb41ef9"
 	pinnedGoPath               = "/Users/chazu/.local/share/mise/installs/go/1.25.12/bin/go"
 	pinnedGoSHA256             = "8612de418d551a418517845c05cebdcfed49095cd08ef0a4d682bb2a5cf4896c"
 	pinnedGoVersion            = "go version go1.25.12 darwin/arm64"
@@ -181,8 +182,20 @@ func verifyCandidateConstantsState(ctx context.Context, state gitState, evidence
 
 func verifyReplayRepairExecutableCommit(ctx context.Context, root, commit string) error {
 	parent, err := gitStringOutput(ctx, root, "rev-parse", commit+"^")
-	if err != nil || parent != ReplayRepairPlanCommit {
-		return errors.New("X4 is not the direct child of the accepted replay-repair plan")
+	if err != nil || parent != ReplayCachePlanCommit {
+		return errors.New("X5 is not the direct child of the accepted cache-retry plan")
+	}
+	planParent, err := gitStringOutput(ctx, root, "rev-parse", ReplayCachePlanCommit+"^")
+	if err != nil || planParent != replayV4ExecutableCommit {
+		return errors.New("P5 is not the direct child of exact X4")
+	}
+	planDiff, err := gitStringOutput(ctx, root, "diff", "--name-status", "--no-renames", replayV4ExecutableCommit, ReplayCachePlanCommit, "--")
+	if err != nil || planDiff != "A\tdocs/active-causal-diagnosis-v5-replay-amendment.md" {
+		return errors.New("P5 is not the one-document child of exact X4")
+	}
+	relative, err := gitStringOutput(ctx, root, "diff", "--name-status", "--no-renames", ReplayCachePlanCommit, commit, "--")
+	if err != nil || relative != "M\tinternal/causalexpv2/gates.go\nM\tinternal/causalexpv2/provenance_test.go\nM\tinternal/causalexpv2/replay_gate.go" {
+		return errors.New("X5 is not the exact three-file child of P5")
 	}
 	changed, err := gitStringOutput(ctx, root, "diff", "--name-status", "--no-renames", replayEvidenceCommit, commit, "--")
 	if err != nil {
@@ -192,6 +205,7 @@ func verifyReplayRepairExecutableCommit(ctx context.Context, root, commit string
 	slices.Sort(got)
 	want := []string{
 		"A\tdocs/active-causal-diagnosis-v4-replay-amendment.md",
+		"A\tdocs/active-causal-diagnosis-v5-replay-amendment.md",
 		"M\tgo.mod",
 		"M\tgo.sum",
 		"M\tinternal/causalexpv2/gates.go",
@@ -201,13 +215,13 @@ func verifyReplayRepairExecutableCommit(ctx context.Context, root, commit string
 	}
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		return fmt.Errorf("X4 diff is outside the accepted status-sensitive allowlist: got %q", got)
+		return fmt.Errorf("X5 diff is outside the accepted status-sensitive allowlist: got %q", got)
 	}
 	for _, record := range want {
 		_, path, _ := strings.Cut(record, "\t")
 		entry, entryErr := gitStringOutput(ctx, root, "ls-tree", commit, "--", path)
 		if entryErr != nil || !strings.HasPrefix(entry, "100644 blob ") {
-			return fmt.Errorf("X4 path is not a regular 100644 blob: %s", path)
+			return fmt.Errorf("X5 path is not a regular 100644 blob: %s", path)
 		}
 	}
 	accepted, err := gitFile(ctx, root, ReplayRepairPlanCommit, "docs/active-causal-diagnosis-v4-replay-amendment.md")
@@ -218,10 +232,18 @@ func verifyReplayRepairExecutableCommit(ctx context.Context, root, commit string
 	if err != nil || !bytes.Equal(accepted, candidate) {
 		return errors.New("X4 amendment differs from accepted replay-repair plan")
 	}
+	acceptedV5, err := gitFile(ctx, root, ReplayCachePlanCommit, "docs/active-causal-diagnosis-v5-replay-amendment.md")
+	if err != nil {
+		return err
+	}
+	candidateV5, err := gitFile(ctx, root, commit, "docs/active-causal-diagnosis-v5-replay-amendment.md")
+	if err != nil || !bytes.Equal(acceptedV5, candidateV5) {
+		return errors.New("X5 amendment differs from accepted cache-retry plan")
+	}
 	for path, digest := range map[string]string{"go.mod": resolvedGoModSHA256, "go.sum": resolvedGoSumSHA256} {
 		content, readErr := gitFile(ctx, root, commit, path)
 		if readErr != nil || sha256Hex(content) != digest {
-			return fmt.Errorf("X4 %s does not equal the accepted resolved module metadata", path)
+			return fmt.Errorf("X5 %s does not equal the accepted resolved module metadata", path)
 		}
 	}
 	if err := verifyEmptyFreezeAt(ctx, root, commit); err != nil {
@@ -591,52 +613,211 @@ func pinnedWorkerEnvironment(ctx context.Context, base string) ([]string, error)
 		"LC_ALL=C",
 		"TZ=UTC",
 	}
-	if err := verifyPinnedWorkerEnvironment(environment); err != nil {
+	if _, err := capturePinnedWorkerEnvironment(environment, base); err != nil {
 		return nil, err
 	}
 	return environment, nil
 }
 
-func verifyPinnedWorkerEnvironment(environment []string) error {
+type workerEnvironmentSnapshot struct {
+	base       string
+	home       string
+	xdg        string
+	baseDevice uint64
+	baseInode  uint64
+	homeDevice uint64
+	homeInode  uint64
+	xdgDevice  uint64
+	xdgInode   uint64
+}
+
+type workerCacheBudget struct {
+	entries      int
+	pathBytes    int
+	logicalBytes int64
+}
+
+func parsePinnedWorkerEnvironment(environment []string) (map[string]string, string, error) {
 	if len(environment) != 11 {
-		return errors.New("worker environment does not have the exact allowlist")
+		return nil, "", errors.New("worker environment does not have the exact allowlist")
 	}
 	values := map[string]string{}
 	for _, entry := range environment {
 		name, value, found := strings.Cut(entry, "=")
 		if !found || name == "" {
-			return errors.New("worker environment contains a malformed entry")
+			return nil, "", errors.New("worker environment contains a malformed entry")
 		}
 		if _, duplicate := values[name]; duplicate {
-			return errors.New("worker environment contains a duplicate entry")
+			return nil, "", errors.New("worker environment contains a duplicate entry")
 		}
 		values[name] = value
 	}
 	want := map[string]string{"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_ATTR_NOSYSTEM": "1", "LC_ALL": "C", "TZ": "UTC"}
 	for name, expected := range want {
 		if values[name] != expected {
-			return fmt.Errorf("worker environment has noncanonical %s", name)
+			return nil, "", errors.New("worker environment is noncanonical")
 		}
 	}
 	for _, name := range []string{"PATH", "HOME", "XDG_CONFIG_HOME"} {
 		if values[name] == "" || !filepath.IsAbs(values[name]) {
-			return fmt.Errorf("worker environment has invalid %s", name)
+			return nil, "", errors.New("worker environment has an invalid private path")
 		}
+	}
+	base := filepath.Dir(values["PATH"])
+	if filepath.Dir(values["HOME"]) != base || filepath.Dir(values["XDG_CONFIG_HOME"]) != base || filepath.Base(values["PATH"]) != "worker-bin" || filepath.Base(values["HOME"]) != "worker-home" || filepath.Base(values["XDG_CONFIG_HOME"]) != "worker-xdg" {
+		return nil, "", errors.New("worker private paths are not confined")
 	}
 	entries, err := os.ReadDir(values["PATH"])
 	if err != nil || len(entries) != 1 || entries[0].Name() != "git" || entries[0].Type()&os.ModeSymlink == 0 {
-		return errors.New("worker private bin changed")
+		return nil, "", errors.New("worker private bin changed")
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Join(values["PATH"], "git"))
 	pinnedResolved, pinnedErr := filepath.EvalSymlinks(pinnedGitPath)
 	if err != nil || pinnedErr != nil || resolved != pinnedResolved {
-		return errors.New("worker private Git changed")
+		return nil, "", errors.New("worker private Git changed")
 	}
-	for _, name := range []string{"HOME", "XDG_CONFIG_HOME"} {
-		contents, readErr := os.ReadDir(values[name])
-		if readErr != nil || len(contents) != 0 {
-			return fmt.Errorf("worker private %s is not empty", name)
+	return values, base, nil
+}
+
+func capturePinnedWorkerEnvironment(environment []string, expectedBase string) (workerEnvironmentSnapshot, error) {
+	values, base, err := parsePinnedWorkerEnvironment(environment)
+	if err != nil {
+		return workerEnvironmentSnapshot{}, err
+	}
+	if !filepath.IsAbs(expectedBase) || filepath.Clean(expectedBase) != base {
+		return workerEnvironmentSnapshot{}, errors.New("worker private paths are outside the owned replay root")
+	}
+	snapshot := workerEnvironmentSnapshot{base: base, home: values["HOME"], xdg: values["XDG_CONFIG_HOME"]}
+	var baseStat unix.Stat_t
+	baseInfo, baseInfoErr := os.Lstat(base)
+	if baseInfoErr != nil || unix.Lstat(base, &baseStat) != nil || !baseInfo.IsDir() || baseInfo.Mode()&os.ModeSymlink != 0 {
+		return workerEnvironmentSnapshot{}, errors.New("worker private base is not an ordinary directory")
+	}
+	snapshot.baseDevice, snapshot.baseInode = uint64(baseStat.Dev), uint64(baseStat.Ino)
+	identities := [][2]*uint64{{&snapshot.homeDevice, &snapshot.homeInode}, {&snapshot.xdgDevice, &snapshot.xdgInode}}
+	for index, root := range []string{snapshot.home, snapshot.xdg} {
+		info, statErr := os.Lstat(root)
+		contents, readErr := os.ReadDir(root)
+		var stat unix.Stat_t
+		unixErr := unix.Lstat(root, &stat)
+		if statErr != nil || readErr != nil || unixErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || len(contents) != 0 {
+			return workerEnvironmentSnapshot{}, errors.New("worker private cache roots are not fresh ordinary directories")
 		}
+		*identities[index][0], *identities[index][1] = uint64(stat.Dev), uint64(stat.Ino)
+	}
+	return snapshot, nil
+}
+
+func verifyPinnedWorkerEnvironmentAfter(environment []string, snapshot workerEnvironmentSnapshot) error {
+	values, base, err := parsePinnedWorkerEnvironment(environment)
+	if err != nil || base != snapshot.base || values["HOME"] != snapshot.home || values["XDG_CONFIG_HOME"] != snapshot.xdg {
+		return errors.New("worker environment changed after execution")
+	}
+	var baseStat unix.Stat_t
+	baseInfo, baseInfoErr := os.Lstat(base)
+	if baseInfoErr != nil || unix.Lstat(base, &baseStat) != nil || !baseInfo.IsDir() || baseInfo.Mode()&os.ModeSymlink != 0 || uint64(baseStat.Dev) != snapshot.baseDevice || uint64(baseStat.Ino) != snapshot.baseInode {
+		return errors.New("worker private base changed")
+	}
+	budget := &workerCacheBudget{}
+	for index, root := range []string{snapshot.home, snapshot.xdg} {
+		var stat unix.Stat_t
+		info, statErr := os.Lstat(root)
+		unixErr := unix.Lstat(root, &stat)
+		devices := []uint64{snapshot.homeDevice, snapshot.xdgDevice}
+		inodes := []uint64{snapshot.homeInode, snapshot.xdgInode}
+		if statErr != nil || unixErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || uint64(stat.Dev) != devices[index] || uint64(stat.Ino) != inodes[index] {
+			return errors.New("worker private cache root changed")
+		}
+		if err := auditWorkerCacheRoot(root, devices[index], inodes[index], budget); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func auditWorkerCacheRoot(root string, rootDevice, rootInode uint64, budget *workerCacheBudget) error {
+	if budget == nil {
+		return errors.New("worker private cache audit failed")
+	}
+	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return errors.New("worker private cache audit failed")
+	}
+	rootFile := os.NewFile(uintptr(rootFD), "worker-cache-root")
+	if rootFile == nil {
+		_ = unix.Close(rootFD)
+		return errors.New("worker private cache audit failed")
+	}
+	defer rootFile.Close()
+	var rootStat unix.Stat_t
+	if unix.Fstat(rootFD, &rootStat) != nil || uint64(rootStat.Dev) != rootDevice || uint64(rootStat.Ino) != rootInode || rootStat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return errors.New("worker private cache audit failed")
+	}
+	var walk func(*os.File, int, string) error
+	walk = func(directory *os.File, depth int, prefix string) error {
+		for {
+			children, readErr := directory.ReadDir(128)
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				return readErr
+			}
+			for _, child := range children {
+				name := child.Name()
+				if name == "" || name == "." || name == ".." || strings.ContainsRune(name, filepath.Separator) {
+					return errors.New("invalid cache entry")
+				}
+				relative := name
+				if prefix != "" {
+					relative = prefix + "/" + name
+				}
+				budget.pathBytes += len(relative)
+				if budget.pathBytes > 1<<20 || depth > 32 {
+					return errors.New("cache bounds exceeded")
+				}
+				var stat unix.Stat_t
+				if unix.Fstatat(int(directory.Fd()), name, &stat, unix.AT_SYMLINK_NOFOLLOW) != nil {
+					return errors.New("cache metadata changed")
+				}
+				switch stat.Mode & unix.S_IFMT {
+				case unix.S_IFDIR:
+					childFD, openErr := unix.Openat(int(directory.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+					if openErr != nil {
+						return openErr
+					}
+					childFile := os.NewFile(uintptr(childFD), "worker-cache-directory")
+					if childFile == nil {
+						_ = unix.Close(childFD)
+						return errors.New("cache directory unavailable")
+					}
+					var opened unix.Stat_t
+					if unix.Fstat(childFD, &opened) != nil || opened.Dev != stat.Dev || opened.Ino != stat.Ino || opened.Mode&unix.S_IFMT != unix.S_IFDIR {
+						_ = childFile.Close()
+						return errors.New("cache directory changed")
+					}
+					walkErr := walk(childFile, depth+1, relative)
+					closeErr := childFile.Close()
+					if walkErr != nil {
+						return walkErr
+					}
+					if closeErr != nil {
+						return closeErr
+					}
+				case unix.S_IFREG:
+					budget.entries++
+					if budget.entries > 4096 || stat.Nlink != 1 || stat.Size < 0 || stat.Size > (64<<20)-budget.logicalBytes {
+						return errors.New("cache file bounds exceeded")
+					}
+					budget.logicalBytes += stat.Size
+				default:
+					return errors.New("cache entry type rejected")
+				}
+			}
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+		}
+	}
+	if err := walk(rootFile, 1, ""); err != nil {
+		return errors.New("worker private cache audit failed")
 	}
 	return nil
 }
@@ -695,6 +876,12 @@ func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, r
 			return ReplayResult{}, err
 		}
 	}
+	if worker.Path != "" && worker.Environment != nil && len(worker.Environment) == 0 {
+		worker.Environment, err = pinnedWorkerEnvironment(ctx, base)
+		if err != nil {
+			return ReplayResult{}, err
+		}
+	}
 	inputRead, inputWrite, err := os.Pipe()
 	if err != nil {
 		return ReplayResult{}, err
@@ -717,11 +904,16 @@ func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, r
 	command.ExtraFiles = []*os.File{inputRead, outputHandle}
 	var workerOutput bytes.Buffer
 	command.Stdout, command.Stderr = &workerOutput, &workerOutput
-	protected := cap.buildExecutable.Path != ""
-	if protected {
-		if err := verifyPinnedWorkerEnvironment(worker.Environment); err != nil {
+	protectedBuild := cap.buildExecutable.Path != ""
+	environmentAudited := worker.Environment != nil
+	var environmentSnapshot workerEnvironmentSnapshot
+	if environmentAudited {
+		environmentSnapshot, err = capturePinnedWorkerEnvironment(worker.Environment, base)
+		if err != nil {
 			return ReplayResult{}, err
 		}
+	}
+	if protectedBuild {
 		state, stateErr := resolveGitState(ctx, cap.repositoryRoot)
 		if stateErr != nil || verifyPinnedGitRepositoryState(ctx, state) != nil {
 			return ReplayResult{}, errors.New("repository Git state changed before worker start")
@@ -741,10 +933,12 @@ func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, r
 	writeErr := writeAllAndClose(inputWrite, cap.replayInputBytes)
 	waitErr := command.Wait()
 	var auditErr error
-	if protected {
-		if err := verifyPinnedWorkerEnvironment(worker.Environment); err != nil {
+	if environmentAudited {
+		if err := verifyPinnedWorkerEnvironmentAfter(worker.Environment, environmentSnapshot); err != nil {
 			auditErr = errors.Join(auditErr, err)
 		}
+	}
+	if protectedBuild {
 		if err := verifyResolvedReplayWorktree(ctx, cap.repositoryRoot, buildWorktree, cap.pretrainingCommit); err != nil {
 			auditErr = errors.Join(auditErr, errors.New("regeneration executable changed resolved detached build state"))
 		}
@@ -756,7 +950,7 @@ func (cap *ReplayCapability) Replay(ctx context.Context) (result ReplayResult, r
 			auditErr = errors.Join(auditErr, errors.New("repository Git state changed after worker exit"))
 		}
 	} else {
-		auditErr = verifyCleanReplayWorktree(ctx, worktree, cap.pretrainingCommit)
+		auditErr = errors.Join(auditErr, verifyCleanReplayWorktree(ctx, worktree, cap.pretrainingCommit))
 	}
 	if writeErr != nil || waitErr != nil {
 		return ReplayResult{}, errors.Join(fmt.Errorf("regeneration executable failed: %w: %s", errors.Join(writeErr, waitErr), strings.TrimSpace(workerOutput.String())), auditErr)
@@ -923,7 +1117,7 @@ func makeTreeOwnerWritable(root string) error {
 		if entry.IsDir() {
 			return os.Chmod(path, 0o700)
 		}
-		return os.Chmod(path, 0o600)
+		return nil
 	})
 }
 

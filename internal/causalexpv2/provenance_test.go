@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/chazu/nous/internal/causalv2"
+	"golang.org/x/sys/unix"
 )
 
 func gitTestRepo(t *testing.T) (string, string, string) {
@@ -746,28 +747,28 @@ func TestReplayAuditsWorktreeAfterWorkerFailure(t *testing.T) {
 
 func TestReplaySuccessRecordBindsEToRToCandidate(t *testing.T) {
 	commonDirectory := t.TempDir()
-	record := replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: ReplayRepairPlanCommit, PretrainingCommit: replayPretrainingCommit, EvidenceCommit: replayEvidenceCommit, CandidateCommit: strings.Repeat("c", 40), CandidateDiffDigest: strings.Repeat("d", 64), TrainingDigest: strings.Repeat("e", 64), BundleDigest: strings.Repeat("f", 64), CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "succeeded"}
+	record := replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: ReplayCachePlanCommit, PretrainingCommit: replayPretrainingCommit, EvidenceCommit: replayEvidenceCommit, CandidateCommit: strings.Repeat("c", 40), CandidateDiffDigest: strings.Repeat("d", 64), TrainingDigest: strings.Repeat("e", 64), BundleDigest: strings.Repeat("f", 64), CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "succeeded", PredecessorDigest: failedV4ReplaySHA256}
 	if err := createReplayRecord(commonDirectory, record); err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(replayRecordPath(commonDirectory)) != "active-causal-diagnosis-v4-replay.json" {
-		t.Fatal("v4 replay receipt used a non-v4 path")
+	if filepath.Base(replayRecordPath(commonDirectory)) != "active-causal-diagnosis-v5-replay.json" {
+		t.Fatal("v5 replay receipt used a non-v5 path")
 	}
 	encoded, err := os.ReadFile(replayRecordPath(commonDirectory))
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded, err := causalv2.StrictDecode[replaySuccessRecord](encoded)
-	if err != nil || decoded.ReplayVersion != "causal-replay-success/v4" || decoded.PlanCommit != ReplayRepairPlanCommit {
-		t.Fatalf("decode v4 receipt: %+v, %v", decoded, err)
+	if err != nil || decoded.ReplayVersion != "causal-replay-success/v5" || decoded.PlanCommit != ReplayCachePlanCommit || decoded.PredecessorDigest != failedV4ReplaySHA256 {
+		t.Fatalf("decode v5 receipt: %+v, %v", decoded, err)
 	}
 	legacy := record
-	legacy.ReplayVersion = "causal-replay-success/v3"
+	legacy.ReplayVersion = "causal-replay-success/v4"
 	if legacy.ReplayVersion == replayRecordVersion {
-		t.Fatal("v4 replay decoder identity aliases v3")
+		t.Fatal("v5 replay decoder identity aliases v4")
 	}
-	if filepath.Base(replayRecordPath(commonDirectory)) == failedV3ReplayRecordName {
-		t.Fatal("v4 replay path aliases the consumed v3 receipt")
+	if filepath.Base(replayRecordPath(commonDirectory)) == failedV4ReplayRecordName {
+		t.Fatal("v5 replay path aliases the consumed v4 receipt")
 	}
 }
 
@@ -877,17 +878,17 @@ func TestV4CandidateDigestUsesPinnedGitAndV4Domain(t *testing.T) {
 		EvidenceCommit string `json:"evidence_commit"`
 		Diff           []byte `json:"diff"`
 	}{replayEvidenceCommit, diff}
-	want, err := causalv2.Digest("causal-replay-candidate-diff/v4", payload)
+	want, err := causalv2.Digest("causal-replay-candidate-diff/v5", payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := causalv2.Digest("causal-replay-candidate-diff/v3", payload)
+	legacy, err := causalv2.Digest("causal-replay-candidate-diff/v4", payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := candidateDiffDigest(context.Background(), root, replayEvidenceCommit)
 	if err != nil || got != want || got == legacy {
-		t.Fatalf("candidate digest = %s, want v4 %s, legacy %s, err=%v", got, want, legacy, err)
+		t.Fatalf("candidate digest = %s, want v5 %s, legacy %s, err=%v", got, want, legacy, err)
 	}
 }
 
@@ -1019,14 +1020,353 @@ func TestV4WorkerEnvironmentIsExactAndPrivate(t *testing.T) {
 	if err := os.Symlink("/usr/bin/git", filepath.Join(bin, "git")); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyPinnedWorkerEnvironment(environment); err == nil {
+	if _, err := capturePinnedWorkerEnvironment(environment, filepath.Dir(bin)); err == nil {
 		t.Fatal("worker environment accepted a substituted private Git link")
+	}
+}
+
+func TestV5SyntheticReplayHelperProcess(t *testing.T) {
+	mode := ""
+	for index, argument := range os.Args {
+		if argument == "--" && index+1 < len(os.Args) {
+			mode = os.Args[index+1]
+			break
+		}
+	}
+	if mode == "" {
+		return
+	}
+	input := os.NewFile(replayInputFD, "synthetic-replay-input")
+	output := os.NewFile(replayOutputFD, "synthetic-replay-output")
+	if input == nil || output == nil {
+		os.Exit(61)
+	}
+	encoded, err := io.ReadAll(input)
+	if err != nil {
+		os.Exit(62)
+	}
+	if _, err := verifyReplayInput(encoded); err != nil {
+		os.Exit(63)
+	}
+	home := os.Getenv("HOME")
+	for _, root := range []string{home, os.Getenv("XDG_CONFIG_HOME")} {
+		if err := os.Mkdir(filepath.Join(root, "runtime-cache"), 0o700); err != nil {
+			os.Exit(64)
+		}
+		if err := os.WriteFile(filepath.Join(root, "runtime-cache", "entry"), []byte("disposable"), 0o600); err != nil {
+			os.Exit(65)
+		}
+	}
+	if mode == "fail-symlink" {
+		if err := os.Symlink("entry", filepath.Join(home, "runtime-cache", "forbidden-link")); err != nil {
+			os.Exit(66)
+		}
+	}
+	if mode != "fail" && mode != "fail-symlink" {
+		if err := writeReplayOutputAt(output, TrainingReportName, []byte("synthetic-report")); err != nil {
+			os.Exit(67)
+		}
+		if err := writeReplayOutputAt(output, TrainingEpisodesName, []byte("synthetic-bundle")); err != nil {
+			os.Exit(68)
+		}
+		return
+	}
+	os.Exit(69)
+}
+
+func v5EnvironmentForTest(t *testing.T) ([]string, workerEnvironmentSnapshot) {
+	t.Helper()
+	base := t.TempDir()
+	environment, err := pinnedWorkerEnvironment(context.Background(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := capturePinnedWorkerEnvironment(environment, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return environment, snapshot
+}
+
+func TestV5WorkerCachePhaseAudit(t *testing.T) {
+	t.Run("regular cache accepted", func(t *testing.T) {
+		environment, snapshot := v5EnvironmentForTest(t)
+		if err := os.Mkdir(filepath.Join(snapshot.home, "cache"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(snapshot.home, "cache", "entry"), []byte("cache"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyPinnedWorkerEnvironmentAfter(environment, snapshot); err != nil {
+			t.Fatalf("bounded ordinary cache rejected: %v", err)
+		}
+	})
+	t.Run("launch roots must be empty", func(t *testing.T) {
+		environment, snapshot := v5EnvironmentForTest(t)
+		if err := os.WriteFile(filepath.Join(snapshot.home, "sentinel-launch-name"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := capturePinnedWorkerEnvironment(environment, snapshot.base); err == nil || strings.Contains(err.Error(), "sentinel") {
+			t.Fatalf("nonempty launch root error was absent or exposed metadata: %v", err)
+		}
+	})
+	t.Run("XDG launch root must be empty", func(t *testing.T) {
+		environment, snapshot := v5EnvironmentForTest(t)
+		if err := os.WriteFile(filepath.Join(snapshot.xdg, "sentinel-xdg-launch"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := capturePinnedWorkerEnvironment(environment, snapshot.base); err == nil || strings.Contains(err.Error(), "sentinel") {
+			t.Fatalf("nonempty XDG launch root error was absent or exposed metadata: %v", err)
+		}
+	})
+	t.Run("outside owned replay root rejected", func(t *testing.T) {
+		environment, _ := v5EnvironmentForTest(t)
+		if _, err := capturePinnedWorkerEnvironment(environment, t.TempDir()); err == nil {
+			t.Fatal("worker environment outside the expected replay root was accepted")
+		}
+	})
+	for _, rootName := range []string{"home", "xdg"} {
+		t.Run(rootName+" forged root identity", func(t *testing.T) {
+			environment, snapshot := v5EnvironmentForTest(t)
+			if rootName == "home" {
+				snapshot.homeInode++
+			} else {
+				snapshot.xdgInode++
+			}
+			if err := verifyPinnedWorkerEnvironmentAfter(environment, snapshot); err == nil {
+				t.Fatal("forged cache-root identity was accepted")
+			}
+		})
+		t.Run(rootName+" symlink root replacement", func(t *testing.T) {
+			environment, snapshot := v5EnvironmentForTest(t)
+			root := snapshot.home
+			if rootName == "xdg" {
+				root = snapshot.xdg
+			}
+			moved := root + "-moved"
+			if err := os.Rename(root, moved); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Base(moved), root); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyPinnedWorkerEnvironmentAfter(environment, snapshot); err == nil {
+				t.Fatal("symlink cache-root replacement was accepted")
+			}
+		})
+	}
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, workerEnvironmentSnapshot)
+	}{
+		{"symlink", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			if err := os.Symlink("target", filepath.Join(snapshot.home, "sentinel-symlink")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"hardlink", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			first := filepath.Join(snapshot.home, "sentinel-hardlink-source")
+			if err := os.WriteFile(first, []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(first, filepath.Join(snapshot.home, "sentinel-hardlink-copy")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"special file", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			if err := unix.Mkfifo(filepath.Join(snapshot.home, "sentinel-fifo"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"root replacement", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			moved := snapshot.home + "-moved"
+			if err := os.Rename(snapshot.home, moved); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(snapshot.home, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"entry cap", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			for index := 0; index < 4097; index++ {
+				if err := os.WriteFile(filepath.Join(snapshot.home, fmt.Sprintf("entry-%04d", index)), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}},
+		{"depth cap", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			path := snapshot.home
+			for index := 0; index < 33; index++ {
+				path = filepath.Join(path, "d")
+			}
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"path bytes cap", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			parent := filepath.Join(snapshot.home, "q")
+			if err := os.Mkdir(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for index := 0; index < 4096; index++ {
+				name := fmt.Sprintf("%04d%s", index, strings.Repeat("p", 251))
+				if err := os.Mkdir(filepath.Join(parent, name), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}},
+		{"logical bytes cap", func(t *testing.T, snapshot workerEnvironmentSnapshot) {
+			file, err := os.OpenFile(filepath.Join(snapshot.home, "sentinel-large"), os.O_CREATE|os.O_WRONLY, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Truncate((64 << 20) + 1); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			environment, snapshot := v5EnvironmentForTest(t)
+			test.mutate(t, snapshot)
+			err := verifyPinnedWorkerEnvironmentAfter(environment, snapshot)
+			if err == nil {
+				t.Fatal("forbidden post-exit cache state was accepted")
+			}
+			for _, leaked := range []string{"sentinel", "4097", "67108865", snapshot.home, snapshot.xdg} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("cache audit exposed private metadata %q: %v", leaked, err)
+				}
+			}
+		})
+	}
+	t.Run("aggregate entry cap", func(t *testing.T) {
+		environment, snapshot := v5EnvironmentForTest(t)
+		for _, root := range []string{snapshot.home, snapshot.xdg} {
+			for index := 0; index < 2049; index++ {
+				if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("split-entry-%04d", index)), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := verifyPinnedWorkerEnvironmentAfter(environment, snapshot); err == nil {
+			t.Fatal("aggregate HOME/XDG entry overflow was accepted")
+		}
+	})
+	t.Run("aggregate path-byte cap", func(t *testing.T) {
+		environment, snapshot := v5EnvironmentForTest(t)
+		for _, root := range []string{snapshot.home, snapshot.xdg} {
+			parent := filepath.Join(root, "q")
+			if err := os.Mkdir(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for index := 0; index < 2048; index++ {
+				name := fmt.Sprintf("%04d%s", index, strings.Repeat("p", 251))
+				if err := os.Mkdir(filepath.Join(parent, name), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := verifyPinnedWorkerEnvironmentAfter(environment, snapshot); err == nil {
+			t.Fatal("aggregate HOME/XDG path-byte overflow was accepted")
+		}
+	})
+	t.Run("aggregate logical-byte cap", func(t *testing.T) {
+		environment, snapshot := v5EnvironmentForTest(t)
+		for _, root := range []string{snapshot.home, snapshot.xdg} {
+			file, err := os.OpenFile(filepath.Join(root, "split-large"), os.O_CREATE|os.O_WRONLY, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Truncate(33 << 20); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := verifyPinnedWorkerEnvironmentAfter(environment, snapshot); err == nil {
+			t.Fatal("aggregate HOME/XDG logical-byte overflow was accepted")
+		}
+	})
+}
+
+func syntheticV5ReplayCapabilityForTest(t *testing.T, repository, head, mode string) *ReplayCapability {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := validateRegenerationExecutable(regenerationExecutable{Path: path, PrefixArgs: []string{"-test.run=^TestV5SyntheticReplayHelperProcess$", "--", mode}, Environment: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := replayCapabilityForTest(t, repository, head, []byte("synthetic-report"), []byte("synthetic-bundle"))
+	capability.workerExecutable = executable
+	return capability
+}
+
+func TestV5EnvironmentAuditedReplaySuccessAndFailure(t *testing.T) {
+	repository, _, head := gitTestRepo(t)
+	replayEvidenceReads.Store(0)
+	replayCapabilityMints.Store(0)
+	replayWorkerStarts.Store(0)
+	result, err := syntheticV5ReplayCapabilityForTest(t, repository, head, "success").Replay(context.Background())
+	if err != nil || !result.ReportEqual || !result.BundleEqual {
+		t.Fatalf("environment-audited synthetic replay result=%+v err=%v", result, err)
+	}
+	if replayEvidenceReads.Load() != 0 || replayCapabilityMints.Load() != 0 || replayWorkerStarts.Load() != 1 {
+		t.Fatalf("synthetic success activity evidence=%d mint=%d worker=%d", replayEvidenceReads.Load(), replayCapabilityMints.Load(), replayWorkerStarts.Load())
+	}
+	assertOneWorktree(t, repository)
+	replayWorkerStarts.Store(0)
+	_, err = syntheticV5ReplayCapabilityForTest(t, repository, head, "fail-symlink").Replay(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "regeneration executable failed") || !strings.Contains(err.Error(), "worker private cache audit failed") {
+		t.Fatalf("failing worker did not retain post-exit cache audit: %v", err)
+	}
+	if strings.Contains(err.Error(), "forbidden-link") || replayEvidenceReads.Load() != 0 || replayCapabilityMints.Load() != 0 || replayWorkerStarts.Load() != 1 {
+		t.Fatalf("synthetic failure leaked metadata or protected activity: %v", err)
+	}
+	assertOneWorktree(t, repository)
+}
+
+func TestV5CleanupNeverChmodsRegularHardlinks(t *testing.T) {
+	base := t.TempDir()
+	external := filepath.Join(t.TempDir(), "external")
+	if err := os.WriteFile(external, []byte("outside"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(base, "cache")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(external, filepath.Join(directory, "untrusted-hardlink")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := makeTreeOwnerWritable(base); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o400 {
+		t.Fatalf("cleanup chmodded external hardlink target to %o", info.Mode().Perm())
 	}
 }
 
 func TestV4RetryCollisionsPrecedeAllActivityAndIgnoreV3Failure(t *testing.T) {
 	common := t.TempDir()
 	state := gitState{CommonDir: common}
+	installFailedV4PredecessorForTest(t, common)
 	failedV3 := filepath.Join(common, "nous-attempts", failedV3ReplayRecordName)
 	if err := os.MkdirAll(filepath.Dir(failedV3), 0o700); err != nil {
 		t.Fatal(err)
@@ -1036,7 +1376,7 @@ func TestV4RetryCollisionsPrecedeAllActivityAndIgnoreV3Failure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := requireReplayRetrySlotsAbsent(state); err != nil {
-		t.Fatalf("v4 treated failed v3 receipt as a collision: %v", err)
+		t.Fatalf("v5 treated failed v3 receipt as a collision: %v", err)
 	}
 	paths := []string{replayRecordPath(common), attemptRecordPath(common, PanelValidation), attemptProofRecordPath(common, PanelValidation), attemptRecordPath(common, PanelLocked), attemptProofRecordPath(common, PanelLocked), resultPath(common, PanelValidation), resultPath(common, PanelLocked)}
 	for _, path := range paths {
@@ -1065,40 +1405,115 @@ func TestV4RetryCollisionsPrecedeAllActivityAndIgnoreV3Failure(t *testing.T) {
 	}
 	got, err := os.ReadFile(failedV3)
 	if err != nil || !bytes.Equal(got, sentinel) {
-		t.Fatal("v4 read or changed the failed v3 receipt")
+		t.Fatal("v5 read or changed the failed v3 receipt")
 	}
 }
 
-func TestV4R3AnchoredFunctionBodyFloors(t *testing.T) {
+func installFailedV4PredecessorForTest(t *testing.T, common string) []byte {
+	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{
-		"gates.go:mintReplayCapability": true, "gates.go:verifyCandidateConstantsState": true, "gates.go:Replay": true, "gates.go:buildReplayWorker": true, "gates.go:beginValidationAttempt": true,
-		"provenance.go:ExecuteProtectedPanel": true,
-		"replay_gate.go:replayRecordPath":     true, "replay_gate.go:candidateDiffDigest": true, "replay_gate.go:ExecuteReplay": true, "replay_gate.go:createReplayRecord": true, "replay_gate.go:persistReplayRecord": true, "replay_gate.go:verifyReplaySuccessRecord": true,
-		"provenance_test.go:TestReplayHelperProcess": true, "provenance_test.go:TestReplaySuccessRecordBindsEToRToCandidate": true,
+	actual, err := resolveGitState(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	allowedNew := map[string]bool{
-		"gates.go:verifyReplayRepairExecutableCommit": true, "gates.go:pinnedReplayBuilder": true, "gates.go:verifyPinnedProtectedRuntime": true, "gates.go:verifyProtectedRuntimeEnvironment": true, "gates.go:gorootManifest": true, "gates.go:fixedGoEnvironment": true, "gates.go:verifyRegularFileDigest": true, "gates.go:sha256Hex": true, "gates.go:verifyPinnedGitTool": true, "gates.go:verifyProtectedGitEnvironment": true, "gates.go:protectedGitCommandEnvironment": true, "gates.go:verifyPinnedGitRepositoryState": true, "gates.go:pinnedWorkerEnvironment": true, "gates.go:verifyPinnedWorkerEnvironment": true, "gates.go:preflightReplayBuild": true, "gates.go:verifyResolvedReplayWorktree": true, "gates.go:verifyCleanReplayWorktree": true, "gates.go:cleanupReplayWorktreeSet": true, "gates.go:makeTreeOwnerWritable": true, "gates.go:cleanupResolvedReplayWorktree": true,
-		"replay_gate.go:requireReplayRetrySlotsAbsent": true, "replay_gate.go:structuralReplayRecord": true,
-		"provenance_test.go:TestReplayAuditsWorktreeAfterWorkerFailure": true, "provenance_test.go:TestV4PinnedToolsMetadataAndEnvironment": true, "provenance_test.go:setProtectedGitEnvironmentForTest": true, "provenance_test.go:TestV4ProtectedGitEnvironmentRejectsHostileInputs": true, "provenance_test.go:TestV4CandidateDigestUsesPinnedGitAndV4Domain": true, "provenance_test.go:TestV4ProtectedRuntimeEnvironmentRejectsHostileInputs": true, "provenance_test.go:TestV4PinnedGOROOTManifest": true, "provenance_test.go:TestV4PinnedGitRepositoryStateRejectsLocalInfluence": true, "provenance_test.go:TestV4WorkerEnvironmentIsExactAndPrivate": true, "provenance_test.go:TestV4RetryCollisionsPrecedeAllActivityAndIgnoreV3Failure": true, "provenance_test.go:TestV4R3AnchoredFunctionBodyFloors": true, "provenance_test.go:functionFloorsForTest": true, "provenance_test.go:topLevelDeclarationsForTest": true, "provenance_test.go:locateV4ExecutableCommitForTest": true, "provenance_test.go:TestV4DetachedE3BuildRegressionAndBuildOnlyPreflight": true, "provenance_test.go:TestV4ExecutableConfinementAndCandidateTopology": true, "provenance_test.go:TestV4ReplaySuccessRecordBindsR3X4C4AndDigests": true, "provenance_test.go:reconstructX4ForTest": true,
+	encoded, err := os.ReadFile(filepath.Join(actual.CommonDir, "nous-attempts", failedV4ReplayRecordName))
+	if err != nil || sha256Hex(encoded) != failedV4ReplaySHA256 {
+		t.Fatalf("load fixed failed-v4 receipt: %v", err)
 	}
-	allowedChangedDeclaration := map[string]bool{"gates.go:type:regenerationExecutable": true, "replay_gate.go:const:replayRecordVersion": true}
-	allowedNewDeclaration := map[string]bool{}
-	for _, key := range []string{
-		"gates.go:import:\"crypto/sha256\"", "gates.go:import:\"encoding/hex\"", "gates.go:import:\"io/fs\"", "gates.go:import:\"runtime\"", "gates.go:import:\"runtime/debug\"", "gates.go:import:\"sort\"", "gates.go:import:\"strconv\"", "gates.go:import:\"sync/atomic\"",
-		"gates.go:const:replayEvidenceCommit", "gates.go:const:replayPretrainingCommit", "gates.go:const:pinnedGoPath", "gates.go:const:pinnedGoSHA256", "gates.go:const:pinnedGoVersion", "gates.go:const:pinnedGOROOT", "gates.go:const:pinnedGOROOTFiles", "gates.go:const:pinnedGOROOTSHA256", "gates.go:const:pinnedGitPath", "gates.go:const:pinnedGitSHA256", "gates.go:const:pinnedGitVersion", "gates.go:const:pinnedGitConfigSHA256", "gates.go:const:pinnedGitInfoExcludeSHA256", "gates.go:const:resolvedGoModSHA256", "gates.go:const:resolvedGoSumSHA256",
-		"gates.go:var:replayBuildPreflights", "gates.go:var:replayEvidenceReads", "gates.go:var:replayCapabilityMints", "gates.go:var:replayInputConstructions", "gates.go:var:replayWorkerStarts",
-		"provenance_test.go:import:\"go/ast\"", "provenance_test.go:import:\"go/format\"", "provenance_test.go:import:\"go/parser\"", "provenance_test.go:import:\"go/token\"", "provenance_test.go:type:functionFloorForTest",
-		"replay_gate.go:const:ReplayRepairPlanCommit", "replay_gate.go:const:failedV3ReplayRecordName",
-	} {
-		allowedNewDeclaration[key] = true
+	target := filepath.Join(common, "nous-attempts", failedV4ReplayRecordName)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	for _, name := range []string{"gates.go", "provenance.go", "provenance_test.go", "replay_gate.go"} {
+	if err := os.WriteFile(target, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func TestV5FailedV4PredecessorPrecedesAllActivity(t *testing.T) {
+	common := t.TempDir()
+	state := gitState{CommonDir: common}
+	assertZero := func(t *testing.T) {
+		t.Helper()
+		if replayBuildPreflights.Load()+replayEvidenceReads.Load()+replayCapabilityMints.Load()+replayInputConstructions.Load()+replayWorkerStarts.Load() != 0 {
+			t.Fatal("failed predecessor check permitted protected activity")
+		}
+	}
+	reset := func() {
+		replayBuildPreflights.Store(0)
+		replayEvidenceReads.Store(0)
+		replayCapabilityMints.Store(0)
+		replayInputConstructions.Store(0)
+		replayWorkerStarts.Store(0)
+	}
+	reset()
+	if err := requireReplayRetrySlotsAbsent(state); err == nil {
+		t.Fatal("missing failed-v4 predecessor was accepted")
+	}
+	assertZero(t)
+	original := installFailedV4PredecessorForTest(t, common)
+	path := filepath.Join(common, "nous-attempts", failedV4ReplayRecordName)
+	corrupt := append([]byte(nil), original...)
+	corrupt[len(corrupt)/2] ^= 1
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reset()
+	if err := requireReplayRetrySlotsAbsent(state); err == nil {
+		t.Fatal("mismatched failed-v4 predecessor was accepted")
+	}
+	assertZero(t)
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, corrupt) {
+		t.Fatal("predecessor rejection changed the receipt bytes")
+	}
+}
+
+func TestV5X4AnchoredSourceFloors(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := map[string]string{
+		"gates.go:verifyReplayRepairExecutableCommit":  "db5c601dcc28ce1d5d3e692a87636c0b537b5d2eccd774d51639f45661a7e5f8",
+		"gates.go:pinnedWorkerEnvironment":             "437545012a30684634ac1aeef02d1a5885b19767887fa35ffcc10c3efd71441f",
+		"gates.go:Replay":                              "676a608cd6920f9de9980c8722b30274f7b983d21d30904a639bfb725eb2a4ca",
+		"gates.go:makeTreeOwnerWritable":               "df96ce4ea48429c659e1a4cd03625568fd4994b2b44de9b94084391acda77cb0",
+		"replay_gate.go:replayRecordPath":              "ad7cbe100edda049b014bffb0d0f9cf18e83c64342c8daac4f2d68370fbbe51f",
+		"replay_gate.go:candidateDiffDigest":           "763264e55cc98d5681820580e2f72ad04310a9a807dc90ca68185c9d3e654bbd",
+		"replay_gate.go:ExecuteReplay":                 "eaa4adf9606c209b062b6597a10bd172827a8bb605cee840c3d5a62d9e7ec89c",
+		"replay_gate.go:requireReplayRetrySlotsAbsent": "af48d792fb443722e582c78e33648fef214ef29c28feaeadb62a51a0e4fa00f2",
+		"replay_gate.go:structuralReplayRecord":        "c07df1a9de2cc8d0c1df62f102a893cbc52362a4f01257a761f63348d4858890",
+		"replay_gate.go:verifyReplaySuccessRecord":     "e33f7dcf96106ad59584ff7d9cbcf3b95171fbc79ad63783cfc2dc2ba0903cef",
+	}
+	added := map[string]string{
+		"gates.go:parsePinnedWorkerEnvironment":       "a956f94cea70f7f5c510dc212393749caae6a5b7ac605c69647537a5cba3cbe1",
+		"gates.go:capturePinnedWorkerEnvironment":     "760c099e28e09e49f6a30ca0616cac86a60cf922e5853c7af8410877cd629c10",
+		"gates.go:verifyPinnedWorkerEnvironmentAfter": "9c38d265b0512ea3d5b90fc4a2e03ecdc6ccaf6f39399a324e4bfe7bb3eb0571",
+		"gates.go:auditWorkerCacheRoot":               "21b803e48578234dc10544f76d6e6fc445cf9ec04a5a7001ab05074df34b9c28",
+		"replay_gate.go:verifyFailedV4Predecessor":    "59a0d3013d34331b8b4a54940341438d529a1b2a0f0c3ada44ef0b69465098c8",
+	}
+	removed := map[string]bool{"gates.go:verifyPinnedWorkerEnvironment": true}
+	changedDeclarations := map[string]string{
+		"replay_gate.go:const:replayRecordVersion": "06ec7df31bca4bc16ce5aba4938a5bd5ae30c86e3057543e9b2c4f4da0dfabc1",
+		"replay_gate.go:type:replaySuccessRecord":  "84a0bd75b7bd825c16bf621fa94660d34c0b63c96639a34c19a3c6e7e4373f8a",
+	}
+	addedDeclarations := map[string]string{
+		"gates.go:const:replayV4ExecutableCommit":       "d9967e6fc17eba966a59168100e6eb33e74e49aec5b06660b915e9fac4e31ea3",
+		"gates.go:type:workerEnvironmentSnapshot":       "e3e8fec38a8c8b0db37a2d48917e9182aeee3b1f9a5666bffaa5bf0b023ab36e",
+		"gates.go:type:workerCacheBudget":               "642fe40d39fc510c4747dff52ad7e5f06f9811a2c6ecfc4a5259a04d9b73630c",
+		"replay_gate.go:const:ReplayCachePlanCommit":    "d75d16768cd4adb9fa598760227baf2c218c0bfe4a65a544cbb6c01688309b69",
+		"replay_gate.go:const:failedV4ReplayRecordName": "df87d47d75acf7c3a6729e9f88b508163e7703078dc0dc4e5be0996ab90c5850",
+		"replay_gate.go:const:failedV4ReplaySHA256":     "d3b21ea31a0ec82578aed689fb545f9bd3bfe62809486ad698c4b5b2caaa26fc",
+		"replay_gate.go:const:failedV4CandidateDigest":  "a4b49f157e0a6824214882e32c446b66c88d9bd9f1fd4e324cb97cd9f254aa61",
+		"replay_gate.go:type:failedV4ReplayRecord":      "d9e3fd4c4b6563eb80cf05030455f534eceb0e268ec1a0c819a0183f7947652b",
+	}
+	for _, name := range []string{"gates.go", "provenance.go", "replay_gate.go"} {
 		path := "internal/causalexpv2/" + name
-		baseline, err := gitFile(context.Background(), root, replayEvidenceCommit, path)
+		baseline, err := gitFile(context.Background(), root, replayV4ExecutableCommit, path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1106,35 +1521,45 @@ func TestV4R3AnchoredFunctionBodyFloors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		before := functionFloorsForTest(t, path+"@R3", baseline)
-		after := functionFloorsForTest(t, path+"@X4", current)
-		beforeDeclarations := topLevelDeclarationsForTest(t, path+"@R3", baseline)
-		afterDeclarations := topLevelDeclarationsForTest(t, path+"@X4", current)
+		before := functionFloorsForTest(t, path+"@X4", baseline)
+		after := functionFloorsForTest(t, path+"@X5", current)
+		beforeDeclarations := topLevelDeclarationsForTest(t, path+"@X4", baseline)
+		afterDeclarations := topLevelDeclarationsForTest(t, path+"@X5", current)
 		for key, declaration := range beforeDeclarations {
 			currentDeclaration, present := afterDeclarations[key]
 			if !present {
-				t.Fatalf("R3 top-level declaration was deleted: %s:%s", name, key)
+				t.Fatalf("X4 top-level declaration was deleted: %s:%s", name, key)
 			}
-			if !bytes.Equal(declaration, currentDeclaration) && !allowedChangedDeclaration[name+":"+key] {
-				t.Fatalf("unlisted top-level declaration changed: %s:%s", name, key)
+			if !bytes.Equal(declaration, currentDeclaration) {
+				want, allowed := changedDeclarations[name+":"+key]
+				if !allowed || sha256Hex(currentDeclaration) != want {
+					t.Fatalf("unlisted or nonexact top-level declaration changed: %s:%s", name, key)
+				}
 			}
 		}
-		for key := range afterDeclarations {
-			if _, existed := beforeDeclarations[key]; !existed && !allowedNewDeclaration[name+":"+key] {
-				t.Fatalf("unlisted top-level declaration added: %s:%s", name, key)
+		for key, declaration := range afterDeclarations {
+			if _, existed := beforeDeclarations[key]; !existed {
+				want, allowed := addedDeclarations[name+":"+key]
+				if !allowed || sha256Hex(declaration) != want {
+					t.Fatalf("unlisted or nonexact top-level declaration added: %s:%s", name, key)
+				}
 			}
 		}
 		for function, floor := range before {
 			currentFloor, present := after[function]
 			if !present {
-				t.Fatalf("R3 function was deleted: %s:%s", name, function)
+				if removed[name+":"+function] {
+					continue
+				}
+				t.Fatalf("X4 function was deleted: %s:%s", name, function)
 			}
 			if !bytes.Equal(floor.Signature, currentFloor.Signature) {
-				t.Fatalf("R3 function signature changed: %s:%s", name, function)
+				t.Fatalf("X4 function signature changed: %s:%s", name, function)
 			}
-			if allowed[name+":"+function] {
-				if name == "provenance_test.go" {
-					continue
+			if want, allowed := changed[name+":"+function]; allowed {
+				material := append(append([]byte(nil), currentFloor.Signature...), currentFloor.Body...)
+				if sha256Hex(material) != want {
+					t.Fatalf("allowed function differs from exact X5 body: %s:%s", name, function)
 				}
 				if !slices.Equal(floor.EmpiricalStatements, currentFloor.EmpiricalStatements) {
 					t.Fatalf("allowed function changed empirical statements or control flow: %s:%s", name, function)
@@ -1149,12 +1574,93 @@ func TestV4R3AnchoredFunctionBodyFloors(t *testing.T) {
 			if _, existed := before[function]; existed {
 				continue
 			}
-			if !allowedNew[name+":"+function] {
-				t.Fatalf("unlisted function added at X4: %s:%s", name, function)
+			want, allowed := added[name+":"+function]
+			material := append(append([]byte(nil), floor.Signature...), floor.Body...)
+			if !allowed || sha256Hex(material) != want {
+				t.Fatalf("unlisted function added at X5: %s:%s", name, function)
 			}
-			if name != "provenance_test.go" && len(floor.EmpiricalStatements) != 0 {
+			if len(floor.EmpiricalStatements) != 0 {
 				t.Fatalf("new helper reads empirical fields: %s:%s: %q", name, function, floor.EmpiricalStatements)
 			}
+		}
+	}
+	testChanged := map[string]string{
+		"TestV4CandidateDigestUsesPinnedGitAndV4Domain":             "480808fec33eac7734694bf0dfb4d0e4ab35584dd4ab3e60e2c35902984d644c",
+		"TestV4ReplaySuccessRecordBindsR3X4C4AndDigests":            "be6018212b0507b5881b8d1d15a137e4677714980a13081a53cff602747d1fbb",
+		"TestV4DetachedE3BuildRegressionAndBuildOnlyPreflight":      "c208a5cbbf8000d0e67e0f615ee0fefc37261214bce413f645a618c193dc19b0",
+		"TestReplaySuccessRecordBindsEToRToCandidate":               "405b55311d1b69147cd9aa8519b93c8488c1c6a370a5bfe3138c4d5f81e812e4",
+		"TestV4RetryCollisionsPrecedeAllActivityAndIgnoreV3Failure": "3a2d6eaa4de98f620c9cfabded1324cd58a62c00f0cf05d2e0942ddfc50d87d3",
+		"TestV4WorkerEnvironmentIsExactAndPrivate":                  "7dba2cd9a85af52ecb24554c4ba435be3e3c6522347a4f735ebac2ca22caee5f",
+		"locateV4ExecutableCommitForTest":                           "bf5f6553d553374e4994425adfe35a6f51eacb4a594fd3c18de12617acf96927",
+		"TestV4ExecutableConfinementAndCandidateTopology":           "4c1737df96ffc72bffe8285b1ae9a5d4a4bbc7ac228679b25e2e270623592ccf",
+	}
+	testAdded := map[string]string{
+		"TestV5CleanupNeverChmodsRegularHardlinks":        "d2086439f03ade677f41d15987d835fef059d3eb55754cacfccc10bbbf4edba0",
+		"TestV5EnvironmentAuditedReplaySuccessAndFailure": "69323d9624bf3e53639887a3bd46da9b7f9dda76a4d85662ec6489a068402248",
+		"TestV5SyntheticReplayHelperProcess":              "26f75d59125931381bc2e2c2c781f906b01d8f6dd0a08bb22eb9b7fdb13fc0d5",
+		"TestV5WorkerCachePhaseAudit":                     "208c452766b32a411d93497d4db872bbf52009b80d5163ab040fe9919f28f1dc",
+		"reconstructX5ForTest":                            "c1c3a75d80154d96b5300e4e936637d7f8f4d0aa177702862242428a862b0bbb",
+		"v5EnvironmentForTest":                            "65d1c62b69c2ce2e062d82890f0a4427914609a08aec729b53610510cea05f41",
+		"syntheticV5ReplayCapabilityForTest":              "9f1fee540caccf70dab066acb091b47ce1c933592be8f4ae64b01b94ea3b2630",
+		"installFailedV4PredecessorForTest":               "265cde395fafadd7ab2aa835d23ad87c9313018a19035e0cce4eab08655374c2",
+		"TestV5FailedV4PredecessorPrecedesAllActivity":    "60890c985eff9a225499c3a525604f9fad3f7162b22a91851b7ac262d11a2f26",
+	}
+	testRemoved := map[string]bool{"reconstructX4ForTest": true, "TestV4R3AnchoredFunctionBodyFloors": true}
+	testPath := "internal/causalexpv2/provenance_test.go"
+	testBaseline, err := gitFile(context.Background(), root, replayV4ExecutableCommit, testPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testCurrent, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(testPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testBefore := functionFloorsForTest(t, testPath+"@X4", testBaseline)
+	testAfter := functionFloorsForTest(t, testPath+"@X5", testCurrent)
+	for function, floor := range testBefore {
+		currentFloor, present := testAfter[function]
+		if !present {
+			if testRemoved[function] {
+				continue
+			}
+			t.Fatalf("unlisted X4 test function removed: %s", function)
+		}
+		if bytes.Equal(floor.Signature, currentFloor.Signature) && bytes.Equal(floor.Body, currentFloor.Body) {
+			continue
+		}
+		want, allowed := testChanged[function]
+		material := append(append([]byte(nil), currentFloor.Signature...), currentFloor.Body...)
+		if !allowed || sha256Hex(material) != want {
+			t.Fatalf("unlisted or nonexact X4 test function changed: %s", function)
+		}
+	}
+	for function, floor := range testAfter {
+		if _, existed := testBefore[function]; existed {
+			continue
+		}
+		if function == "TestV5X4AnchoredSourceFloors" {
+			continue
+		}
+		want, allowed := testAdded[function]
+		material := append(append([]byte(nil), floor.Signature...), floor.Body...)
+		if !allowed || sha256Hex(material) != want {
+			t.Fatalf("unlisted or nonexact X5 test function added: %s", function)
+		}
+	}
+	testBeforeDeclarations := topLevelDeclarationsForTest(t, testPath+"@X4", testBaseline)
+	testAfterDeclarations := topLevelDeclarationsForTest(t, testPath+"@X5", testCurrent)
+	for key, declaration := range testBeforeDeclarations {
+		currentDeclaration, present := testAfterDeclarations[key]
+		if !present || !bytes.Equal(declaration, currentDeclaration) {
+			t.Fatalf("X4 test declaration changed or was removed: %s", key)
+		}
+	}
+	for key, declaration := range testAfterDeclarations {
+		if _, existed := testBeforeDeclarations[key]; existed {
+			continue
+		}
+		if key != "import:\"golang.org/x/sys/unix\"" || sha256Hex(declaration) != "a3d396b5e8c31115daa95a5e959ddd46d36fc94a5d752892fb1f500ef0a8e68e" {
+			t.Fatalf("unlisted or nonexact X5 test declaration added: %s", key)
 		}
 	}
 	replayGate, err := os.ReadFile(filepath.Join(root, "internal/causalexpv2/replay_gate.go"))
@@ -1284,10 +1790,10 @@ func locateV4ExecutableCommitForTest(t *testing.T, repository string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Head == ReplayRepairPlanCommit {
-		t.Skip("v4 replay-repair executable commit has not been created yet")
+	if state.Head == ReplayCachePlanCommit {
+		t.Skip("v5 replay-repair executable commit has not been created yet")
 	}
-	t.Fatal("history after the accepted v4 plan has no conforming X4 commit")
+	t.Fatal("history after the accepted v5 plan has no conforming X5 commit")
 	return ""
 }
 
@@ -1296,16 +1802,16 @@ func TestV4DetachedE3BuildRegressionAndBuildOnlyPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x4 := locateV4ExecutableCommitForTest(t, root)
+	x5 := locateV4ExecutableCommitForTest(t, root)
 	state, err := resolveGitState(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Head != x4 {
-		t.Skip("build-only preflight is exercised at clean X4 before the v4 receipt")
+	if state.Head != x5 {
+		t.Skip("build-only preflight is exercised at clean X5 before the v5 receipt")
 	}
 	if !state.Clean {
-		t.Skip("build-only preflight waits for the amended clean X4 commit")
+		t.Skip("build-only preflight waits for the clean X5 commit")
 	}
 	setProtectedGitEnvironmentForTest(t)
 	builder, err := pinnedReplayBuilder(context.Background(), root)
@@ -1457,7 +1963,12 @@ func TestV4DetachedE3BuildRegressionAndBuildOnlyPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(replayRecordPath(state.CommonDir)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("v4 receipt existed before build-only preflight")
+		t.Fatal("v5 receipt existed before build-only preflight")
+	}
+	failedV4 := filepath.Join(state.CommonDir, "nous-attempts", failedV4ReplayRecordName)
+	failedV4Before, err := os.ReadFile(failedV4)
+	if err != nil || sha256Hex(failedV4Before) != failedV4ReplaySHA256 {
+		t.Fatal("fixed failed-v4 receipt unavailable before build-only preflight")
 	}
 	replayBuildPreflights.Store(0)
 	replayEvidenceReads.Store(0)
@@ -1471,11 +1982,15 @@ func TestV4DetachedE3BuildRegressionAndBuildOnlyPreflight(t *testing.T) {
 		t.Fatalf("build-only preflight activity = build:%d evidence:%d mint:%d input:%d worker:%d", replayBuildPreflights.Load(), replayEvidenceReads.Load(), replayCapabilityMints.Load(), replayInputConstructions.Load(), replayWorkerStarts.Load())
 	}
 	if _, err := os.Lstat(replayRecordPath(state.CommonDir)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("build-only preflight created a v4 receipt")
+		t.Fatal("build-only preflight created a v5 receipt")
 	}
 	failedAfter, err := os.ReadFile(failedV3)
 	if err != nil || !bytes.Equal(failedBefore, failedAfter) {
 		t.Fatal("build-only preflight changed the failed v3 receipt")
+	}
+	failedV4After, err := os.ReadFile(failedV4)
+	if err != nil || !bytes.Equal(failedV4Before, failedV4After) {
+		t.Fatal("build-only preflight changed the failed v4 receipt")
 	}
 }
 
@@ -1484,14 +1999,14 @@ func TestV4ExecutableConfinementAndCandidateTopology(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x4 := locateV4ExecutableCommitForTest(t, root)
-	repository := cloneAtCommitForTest(t, root, x4)
+	x5 := locateV4ExecutableCommitForTest(t, root)
+	repository := cloneAtCommitForTest(t, root, x5)
 	state, err := resolveGitState(context.Background(), repository)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := verifyReplayRepairExecutableCommit(context.Background(), repository, state.Head); err != nil {
-		t.Fatalf("accepted X4 rejected: %v", err)
+		t.Fatalf("accepted X5 rejected: %v", err)
 	}
 	freeze := filepath.Join(repository, FrozenConstantsPath)
 	if err := os.WriteFile(freeze, expectedFreezeFile("P=E;M=gain;S=C", replayEvidenceCommit, "96b1cdf7579c0a186e5cd9aeb7aaa42f0c224ffe19989bf78b5b3aa320b17fa0"), 0o600); err != nil {
@@ -1499,35 +2014,35 @@ func TestV4ExecutableConfinementAndCandidateTopology(t *testing.T) {
 	}
 	dirty, err := resolveGitState(context.Background(), repository)
 	if err != nil || verifyCandidateConstantsState(context.Background(), dirty, replayEvidenceCommit) != nil {
-		t.Fatalf("exact dirty X4 candidate rejected: %v", err)
+		t.Fatalf("exact dirty X5 candidate rejected: %v", err)
 	}
 	if err := os.Chmod(freeze, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	dirtyMode, err := resolveGitState(context.Background(), repository)
 	if err != nil || verifyCandidateConstantsState(context.Background(), dirtyMode, replayEvidenceCommit) == nil {
-		t.Fatal("dirty X4 accepted executable constants file")
+		t.Fatal("dirty X5 accepted executable constants file")
 	}
 	if err := os.Chmod(freeze, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitCommitAll(t, repository, "C4")
+	gitCommitAll(t, repository, "C5")
 	clean, err := resolveGitState(context.Background(), repository)
 	if err != nil || verifyCandidateConstantsState(context.Background(), clean, replayEvidenceCommit) != nil {
-		t.Fatalf("exact clean C4 candidate rejected: %v", err)
+		t.Fatalf("exact clean C5 candidate rejected: %v", err)
 	}
-	badC4 := cloneAtCommitForTest(t, root, x4)
-	badFreeze := filepath.Join(badC4, FrozenConstantsPath)
+	badC5 := cloneAtCommitForTest(t, root, x5)
+	badFreeze := filepath.Join(badC5, FrozenConstantsPath)
 	if err := os.WriteFile(badFreeze, expectedFreezeFile("P=E;M=gain;S=C", replayEvidenceCommit, "96b1cdf7579c0a186e5cd9aeb7aaa42f0c224ffe19989bf78b5b3aa320b17fa0"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(badFreeze, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitCommitAll(t, badC4, "bad mode C4")
-	badC4State, err := resolveGitState(context.Background(), badC4)
-	if err != nil || verifyCandidateConstantsState(context.Background(), badC4State, replayEvidenceCommit) == nil {
-		t.Fatal("clean C4 accepted executable constants blob")
+	gitCommitAll(t, badC5, "bad mode C5")
+	badC5State, err := resolveGitState(context.Background(), badC5)
+	if err != nil || verifyCandidateConstantsState(context.Background(), badC5State, replayEvidenceCommit) == nil {
+		t.Fatal("clean C5 accepted executable constants blob")
 	}
 
 	for _, test := range []struct {
@@ -1538,6 +2053,7 @@ func TestV4ExecutableConfinementAndCandidateTopology(t *testing.T) {
 		{"protected causal source", "internal/causalexpv2/generator.go", "edit"},
 		{"domain source", "internal/causalv2/domains.go", "edit"},
 		{"amendment", "docs/active-causal-diagnosis-v4-replay-amendment.md", "edit"},
+		{"cache amendment", "docs/active-causal-diagnosis-v5-replay-amendment.md", "edit"},
 		{"module hash", "go.mod", "edit"},
 		{"mode", "internal/causalexpv2/gates.go", "mode"},
 		{"missing", "go.sum", "missing"},
@@ -1546,7 +2062,7 @@ func TestV4ExecutableConfinementAndCandidateTopology(t *testing.T) {
 		{"renamed", "internal/causalexpv2/gates.go", "rename"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			clone := reconstructX4ForTest(t, root, x4, test.path == "go.sum" && test.kind == "missing")
+			clone := reconstructX5ForTest(t, root, x5)
 			path := filepath.Join(clone, filepath.FromSlash(test.path))
 			switch test.kind {
 			case "mode":
@@ -1565,18 +2081,22 @@ func TestV4ExecutableConfinementAndCandidateTopology(t *testing.T) {
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
+			case "missing":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
 			case "rename":
 				if err := os.Rename(path, path+".renamed"); err != nil {
 					t.Fatal(err)
 				}
 			}
-			gitCommitAll(t, clone, "inject v4 confinement violation")
+			gitCommitAll(t, clone, "inject v5 confinement violation")
 			bad, err := resolveGitState(context.Background(), clone)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := verifyReplayRepairExecutableCommit(context.Background(), clone, bad.Head); err == nil {
-				t.Fatal("injected X4 confinement violation was accepted")
+				t.Fatal("injected X5 confinement violation was accepted")
 			}
 		})
 	}
@@ -1593,7 +2113,7 @@ func TestV4ReplaySuccessRecordBindsR3X4C4AndDigests(t *testing.T) {
 		t.Fatal(err)
 	}
 	if verifyCandidateConstantsState(context.Background(), state, replayEvidenceCommit) != nil {
-		t.Skip("v4 receipt binding is exercised at clean C4")
+		t.Skip("v5 receipt binding is exercised at clean C5")
 	}
 	setProtectedGitEnvironmentForTest(t)
 	receiptBytes, err := os.ReadFile(replayRecordPath(state.CommonDir))
@@ -1622,6 +2142,7 @@ func TestV4ReplaySuccessRecordBindsR3X4C4AndDigests(t *testing.T) {
 	}
 	common := t.TempDir()
 	state.CommonDir = common
+	predecessor := installFailedV4PredecessorForTest(t, common)
 	write := func(t *testing.T, record replaySuccessRecord) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(replayRecordPath(common)), 0o700); err != nil {
@@ -1633,10 +2154,11 @@ func TestV4ReplaySuccessRecordBindsR3X4C4AndDigests(t *testing.T) {
 	}
 	write(t, receipt)
 	if err := verifyReplaySuccessRecord(context.Background(), state, report, bundle, replayEvidenceCommit); err != nil {
-		t.Fatalf("valid v4 receipt rejected: %v", err)
+		t.Fatalf("valid v5 receipt rejected: %v", err)
 	}
 	for _, mutate := range []func(*replaySuccessRecord){
 		func(value *replaySuccessRecord) { value.ReplayVersion = "causal-replay-success/v3" },
+		func(value *replaySuccessRecord) { value.ReplayVersion = "causal-replay-success/v4" },
 		func(value *replaySuccessRecord) { value.PlanCommit = PlanCommit },
 		func(value *replaySuccessRecord) { value.PretrainingCommit = strings.Repeat("1", 40) },
 		func(value *replaySuccessRecord) { value.EvidenceCommit = strings.Repeat("2", 40) },
@@ -1645,31 +2167,39 @@ func TestV4ReplaySuccessRecordBindsR3X4C4AndDigests(t *testing.T) {
 		func(value *replaySuccessRecord) { value.TrainingDigest = strings.Repeat("4", 64) },
 		func(value *replaySuccessRecord) { value.BundleDigest = strings.Repeat("5", 64) },
 		func(value *replaySuccessRecord) { value.State = "failed" },
+		func(value *replaySuccessRecord) { value.PredecessorDigest = strings.Repeat("6", 64) },
 	} {
 		forged := receipt
 		mutate(&forged)
 		write(t, forged)
 		if err := verifyReplaySuccessRecord(context.Background(), state, report, bundle, replayEvidenceCommit); err == nil {
-			t.Fatal("forged v4 replay receipt was accepted")
+			t.Fatal("forged v5 replay receipt was accepted")
 		}
 	}
 	write(t, receipt)
 	wrongTopology := state
 	wrongTopology.Head = receipt.CandidateCommit
 	if err := verifyReplaySuccessRecord(context.Background(), wrongTopology, report, bundle, replayEvidenceCommit); err == nil {
-		t.Fatal("v4 replay receipt accepted wrong C4 topology")
+		t.Fatal("v5 replay receipt accepted wrong C5 topology")
+	}
+	predecessorPath := filepath.Join(common, "nous-attempts", failedV4ReplayRecordName)
+	forgedPredecessor := append([]byte(nil), predecessor...)
+	forgedPredecessor[len(forgedPredecessor)-1] ^= 1
+	if err := os.WriteFile(predecessorPath, forgedPredecessor, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write(t, receipt)
+	if err := verifyReplaySuccessRecord(context.Background(), state, report, bundle, replayEvidenceCommit); err == nil {
+		t.Fatal("v5 replay receipt accepted a changed predecessor file")
 	}
 }
 
-func reconstructX4ForTest(t *testing.T, root, x4 string, omitGoSum bool) string {
+func reconstructX5ForTest(t *testing.T, root, x5 string) string {
 	t.Helper()
-	repository := cloneAtCommitForTest(t, root, ReplayRepairPlanCommit)
-	paths := []string{"go.mod", "go.sum", "internal/causalexpv2/gates.go", "internal/causalexpv2/provenance.go", "internal/causalexpv2/provenance_test.go", "internal/causalexpv2/replay_gate.go"}
+	repository := cloneAtCommitForTest(t, root, ReplayCachePlanCommit)
+	paths := []string{"internal/causalexpv2/gates.go", "internal/causalexpv2/provenance_test.go", "internal/causalexpv2/replay_gate.go"}
 	for _, path := range paths {
-		if omitGoSum && path == "go.sum" {
-			continue
-		}
-		content, err := gitFile(context.Background(), root, x4, path)
+		content, err := gitFile(context.Background(), root, x5, path)
 		if err != nil {
 			t.Fatal(err)
 		}

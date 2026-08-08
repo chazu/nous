@@ -14,9 +14,13 @@ import (
 )
 
 const (
-	replayRecordVersion      = "causal-replay-success/v4"
+	replayRecordVersion      = "causal-replay-success/v5"
 	ReplayRepairPlanCommit   = "0162f3eb651049958827da2a9616b0b4b79b512d"
+	ReplayCachePlanCommit    = "630a0ce8c36118957d008fbf7132af2424ee91f0"
 	failedV3ReplayRecordName = "active-causal-diagnosis-v3-replay.json"
+	failedV4ReplayRecordName = "active-causal-diagnosis-v4-replay.json"
+	failedV4ReplaySHA256     = "7ade7b64b49ec797865766e5a0f99ff329a6619ef785f163ed553844277c0fcf"
+	failedV4CandidateDigest  = "7eeddd09ebe942858ff061bb56cc2b42de510d9643c34f3e30708235257aea11"
 )
 
 type replaySuccessRecord struct {
@@ -30,10 +34,24 @@ type replaySuccessRecord struct {
 	BundleDigest        string `json:"bundle_digest"`
 	CreatedUTC          string `json:"created_utc"`
 	State               string `json:"state"`
+	PredecessorDigest   string `json:"predecessor_receipt_digest"`
+}
+
+type failedV4ReplayRecord struct {
+	ReplayVersion       string `json:"replay_version"`
+	PlanCommit          string `json:"plan_commit"`
+	PretrainingCommit   string `json:"pretraining_commit"`
+	EvidenceCommit      string `json:"evidence_commit"`
+	CandidateCommit     string `json:"candidate_commit"`
+	CandidateDiffDigest string `json:"candidate_diff_digest"`
+	TrainingDigest      string `json:"training_digest"`
+	BundleDigest        string `json:"bundle_digest"`
+	CreatedUTC          string `json:"created_utc"`
+	State               string `json:"state"`
 }
 
 func replayRecordPath(commonDirectory string) string {
-	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v4-replay.json")
+	return filepath.Join(commonDirectory, "nous-attempts", "active-causal-diagnosis-v5-replay.json")
 }
 
 func candidateDiffDigest(ctx context.Context, repositoryRoot, evidenceCommit string) (string, error) {
@@ -46,14 +64,14 @@ func candidateDiffDigest(ctx context.Context, repositoryRoot, evidenceCommit str
 	if err != nil {
 		return "", err
 	}
-	return causalv2.Digest("causal-replay-candidate-diff/v4", struct {
+	return causalv2.Digest("causal-replay-candidate-diff/v5", struct {
 		EvidenceCommit string `json:"evidence_commit"`
 		Diff           []byte `json:"diff"`
 	}{evidenceCommit, diff})
 }
 
-// ExecuteReplay owns the fixed E3 regeneration while HEAD is exact X4 with the
-// one uncommitted constants edit that will become C4.
+// ExecuteReplay owns the fixed E3 regeneration while HEAD is exact X5 with the
+// one uncommitted constants edit that will become C5.
 func ExecuteReplay(ctx context.Context, repoRoot string) (returnErr error) {
 	if err := orchestrationAvailable(); err != nil {
 		return err
@@ -112,7 +130,7 @@ func ExecuteReplay(ctx context.Context, repoRoot string) (returnErr error) {
 		return err
 	}
 	if capability.pretrainingCommit != record.PretrainingCommit || capability.evidenceCommit != record.EvidenceCommit || capability.reportDigest != record.TrainingDigest || capability.bundleDigest != record.BundleDigest {
-		return errors.New("minted replay capability differs from started v4 receipt")
+		return errors.New("minted replay capability differs from started v5 receipt")
 	}
 	if _, err := capability.Replay(ctx); err != nil {
 		return err
@@ -122,6 +140,9 @@ func ExecuteReplay(ctx context.Context, repoRoot string) (returnErr error) {
 }
 
 func requireReplayRetrySlotsAbsent(state gitState) error {
+	if err := verifyFailedV4Predecessor(state.CommonDir); err != nil {
+		return err
+	}
 	paths := []string{
 		replayRecordPath(state.CommonDir),
 		attemptRecordPath(state.CommonDir, PanelValidation),
@@ -133,8 +154,20 @@ func requireReplayRetrySlotsAbsent(state gitState) error {
 	}
 	for _, path := range paths {
 		if err := requireAbsent(path); err != nil {
-			return fmt.Errorf("v4 replay preflight collision: %w", err)
+			return fmt.Errorf("v5 replay preflight collision: %w", err)
 		}
+	}
+	return nil
+}
+
+func verifyFailedV4Predecessor(commonDirectory string) error {
+	encoded, err := os.ReadFile(filepath.Join(commonDirectory, "nous-attempts", failedV4ReplayRecordName))
+	if err != nil || sha256Hex(encoded) != failedV4ReplaySHA256 {
+		return errors.New("v5 predecessor receipt is unavailable")
+	}
+	record, err := causalv2.StrictDecode[failedV4ReplayRecord](encoded)
+	if err != nil || !bytes.Equal(encoded, mustCanonical(record)) || record.ReplayVersion != "causal-replay-success/v4" || record.PlanCommit != ReplayRepairPlanCommit || record.PretrainingCommit != replayPretrainingCommit || record.EvidenceCommit != replayEvidenceCommit || record.CandidateCommit != replayV4ExecutableCommit || record.CandidateDiffDigest != failedV4CandidateDigest || record.TrainingDigest != "96b1cdf7579c0a186e5cd9aeb7aaa42f0c224ffe19989bf78b5b3aa320b17fa0" || record.BundleDigest != "117a0322464cdf26022b7c21b2d5401c67cbad974640f042e2591c920d982503" || record.CreatedUTC != "2026-08-08T13:41:52Z" || record.State != "failed" {
+		return errors.New("v5 predecessor receipt is unavailable")
 	}
 	return nil
 }
@@ -170,7 +203,7 @@ func structuralReplayRecord(ctx context.Context, state gitState) (replaySuccessR
 	if err != nil {
 		return replaySuccessRecord{}, err
 	}
-	return replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: ReplayRepairPlanCommit, PretrainingCommit: replayPretrainingCommit, EvidenceCommit: replayEvidenceCommit, CandidateCommit: state.Head, CandidateDiffDigest: diffDigest, TrainingDigest: report.TrainingDigest, BundleDigest: bundle.BundleDigest, CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "started"}, nil
+	return replaySuccessRecord{ReplayVersion: replayRecordVersion, PlanCommit: ReplayCachePlanCommit, PretrainingCommit: replayPretrainingCommit, EvidenceCommit: replayEvidenceCommit, CandidateCommit: state.Head, CandidateDiffDigest: diffDigest, TrainingDigest: report.TrainingDigest, BundleDigest: bundle.BundleDigest, CreatedUTC: time.Now().UTC().Format(time.RFC3339), State: "started", PredecessorDigest: failedV4ReplaySHA256}, nil
 }
 
 func createReplayRecord(commonDirectory string, record replaySuccessRecord) error {
@@ -215,6 +248,9 @@ func requireReplaySuccess(ctx context.Context, state gitState, report TrainingRe
 }
 
 func verifyReplaySuccessRecord(ctx context.Context, state gitState, report TrainingReport, bundle TrainingBundle, evidenceCommit string) error {
+	if err := verifyFailedV4Predecessor(state.CommonDir); err != nil {
+		return err
+	}
 	encoded, err := os.ReadFile(replayRecordPath(state.CommonDir))
 	if err != nil {
 		return fmt.Errorf("read replay success record: %w", err)
@@ -228,7 +264,7 @@ func verifyReplaySuccessRecord(ctx context.Context, state gitState, report Train
 		return err
 	}
 	parent, parentErr := gitStringOutput(ctx, state.Root, "rev-parse", state.Head+"^")
-	if parentErr != nil || verifyCandidateConstantsState(ctx, state, evidenceCommit) != nil || record.ReplayVersion != replayRecordVersion || record.PlanCommit != ReplayRepairPlanCommit || record.State != "succeeded" || record.PretrainingCommit != report.PretrainingCommit || record.EvidenceCommit != evidenceCommit || record.CandidateCommit != parent || record.CandidateDiffDigest != diffDigest || record.TrainingDigest != report.TrainingDigest || record.BundleDigest != bundle.BundleDigest {
+	if parentErr != nil || verifyCandidateConstantsState(ctx, state, evidenceCommit) != nil || record.ReplayVersion != replayRecordVersion || record.PlanCommit != ReplayCachePlanCommit || record.State != "succeeded" || record.PretrainingCommit != report.PretrainingCommit || record.EvidenceCommit != evidenceCommit || record.CandidateCommit != parent || record.CandidateDiffDigest != diffDigest || record.TrainingDigest != report.TrainingDigest || record.BundleDigest != bundle.BundleDigest || record.PredecessorDigest != failedV4ReplaySHA256 {
 		return errors.New("replay success is not bound to E, R, C, and committed evidence")
 	}
 	return nil
