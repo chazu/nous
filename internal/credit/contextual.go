@@ -53,6 +53,29 @@ func DecisionTuple(context, decision string) Tuple {
 	return Tuple{Context: context, Subject: decision, Role: decisionRole}
 }
 
+// StructuralDecisionKey returns an alias-independent decision identity for an
+// ordered sequence of validated structural feature keys.
+func StructuralDecisionKey(method string, features []string) (string, error) {
+	if !validText(method, MaxSubjectBytes) || len(features) == 0 || len(features) > MaxCreditors {
+		return "", fmt.Errorf("invalid structural decision")
+	}
+	for _, feature := range features {
+		if !validText(feature, MaxSubjectBytes) {
+			return "", fmt.Errorf("invalid structural feature")
+		}
+	}
+	encoded, err := json.Marshal(struct {
+		Version  string   `json:"version"`
+		Method   string   `json:"method"`
+		Features []string `json:"features"`
+	}{Version: "structural-decision/v1", Method: method, Features: features})
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return "sha256:structural:v1:" + hex.EncodeToString(digest[:]), nil
+}
+
 // Lookup finds a record by its semantic tuple, independent of its allocated
 // unit name or any collision suffix.
 func Lookup(store *unit.Store, tuple Tuple) *unit.Unit {

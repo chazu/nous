@@ -192,9 +192,9 @@ simplification evidence fields and replay rules but emits a Kubernetes-specific
 conjecture kind and statement. It is not counted as generic reuse.
 
 The seed task contains eight eligible edits and therefore exactly 584 nonempty
-plans. The unique minimum safe plan has two or three atomic edits. Its uniqueness
-must arise from final intent and typed legality, not an artificial intermediate
-validity precondition; intermediate states need only be structurally valid.
+plans. Its complete co-minimal safe set contains plans of length two or three.
+Atomic edits may commute, so all minimum orderings remain explicit ties;
+intermediate states need only be structurally valid.
 
 An independent `internal/kuberepairoracle` package reimplements decoding,
 atomic edits, final semantics, and exhaustive plan enumeration. It must not
@@ -281,9 +281,11 @@ Context is exactly `kubernetes-selector-reference/atomic-edits/v1`. Multiple
 concrete plans may share one structural decision tuple. This is intentionally a
 learned preference over a rule shape, not proof that Nous invented the shape.
 
-Phase B requires one unique phase-A training winner and the exact preregistered
-credit record set. If that precondition fails, Phase B is invalid rather than
-silently pooling tied answers.
+Phase B begins with three preregistered one-edit training tasks, one for each
+component feature used by recomposition. Each must have one unique phase-A
+winner and the exact preregistered credit record set. Training cost is the sum
+of all three exhaustive discoveries. If any winner is tied or any credit set
+differs, Phase B is invalid rather than silently pooling answers.
 
 ## Phase B: matched ordering trial
 

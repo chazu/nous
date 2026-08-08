@@ -90,6 +90,7 @@ func (e *Engine) rewardForWorthGrowth() {
 							Role:    roles[index],
 						}, actual[index], provenance)
 					}
+					e.rewardStructuralFeatures(u, contextName, delta, provenance)
 				}
 				u.Set("lastRewardedWorth", currentWorth)
 				e.log(2, "  Reward: %s grew %d->%d, rewarding creditors +%d",
@@ -97,6 +98,83 @@ func (e *Engine) rewardForWorthGrowth() {
 			}
 		}
 	}
+}
+
+type structuralCreditBinding struct {
+	featureSubject  string
+	featureKey      string
+	relationSubject string
+	relationKey     string
+	stepRole        string
+}
+
+// rewardStructuralFeatures derives transfer credit from optional declarations
+// on a synthesized program's concrete components. It is all-or-nothing: a
+// malformed component declaration emits no structural records or scalar worth.
+func (e *Engine) rewardStructuralFeatures(source *unit.Unit, contextName string, delta int, provenance credit.Provenance) {
+	components := source.GetStrings("components")
+	creditors := source.GetStrings("creditors")
+	roles := source.GetStrings("creditRoles")
+	if len(components) == 0 || len(creditors) != len(components)+1 || len(roles) != len(creditors) ||
+		!sameStringSlice(components, creditors[1:]) || roles[0] != "synthesis" {
+		return
+	}
+	bindings := make([]structuralCreditBinding, len(components))
+	features := make([]string, len(components))
+	for index, componentName := range components {
+		component := e.Store.Get(componentName)
+		if component == nil {
+			return
+		}
+		binding := structuralCreditBinding{
+			featureSubject:  component.GetString("creditFeatureSubject"),
+			featureKey:      component.GetString("creditFeatureKey"),
+			relationSubject: component.GetString("creditRelationSubject"),
+			relationKey:     component.GetString("creditRelationKey"),
+			stepRole:        roles[index+1],
+		}
+		featureUnit := e.Store.Get(binding.featureSubject)
+		relationUnit := e.Store.Get(binding.relationSubject)
+		if binding.stepRole != fmt.Sprintf("step-%d", index+1) ||
+			featureUnit == nil || relationUnit == nil ||
+			featureUnit.GetString("creditFeatureKey") != binding.featureKey ||
+			relationUnit.GetString("creditRelationKey") != binding.relationKey ||
+			binding.featureKey == "" || len(binding.featureKey) > credit.MaxSubjectBytes ||
+			binding.relationKey == "" || len(binding.relationKey) > credit.MaxSubjectBytes {
+			return
+		}
+		bindings[index] = binding
+		features[index] = binding.featureKey
+	}
+	decision, err := credit.StructuralDecisionKey(source.GetString("synthesisMethod"), features)
+	if err != nil {
+		return
+	}
+	credit.Upsert(e.Store, credit.DecisionTuple(contextName, decision), delta, provenance)
+	for _, binding := range bindings {
+		featureUnit := e.Store.Get(binding.featureSubject)
+		oldWorth := featureUnit.Worth()
+		featureUnit.SetWorth(oldWorth + delta/2)
+		actual := featureUnit.Worth() - oldWorth
+		if actual <= 0 {
+			continue
+		}
+		credit.Upsert(e.Store, credit.Tuple{Context: contextName, Subject: binding.featureSubject, Role: "component"}, actual, provenance)
+		credit.Upsert(e.Store, credit.Tuple{Context: contextName, Subject: binding.featureSubject, Role: binding.stepRole}, actual, provenance)
+		credit.Upsert(e.Store, credit.Tuple{Context: contextName, Subject: binding.relationSubject, Role: "relation"}, actual, provenance)
+	}
+}
+
+func sameStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // trackApplics records that a heuristic fired on a unit.
