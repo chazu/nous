@@ -2,9 +2,17 @@
 
 ## Status and inheritance
 
-Accepted amendment, revision 4. Adversarial architecture, theory, and
-experimental reviews all passed on 2026-08-07. No v2 seed has been generated or
-executed.
+Accepted amendment, revision 5. Revision 4 passed adversarial architecture,
+theory, and experimental review on 2026-08-07, but its implementation review
+found contradictions in the retained-control schema and child-VM control plus
+nonconforming cache, benchmark, replay, and core-runtime changes. Revision 5
+repairs those proof boundaries before any protected execution. No v2 seed has
+been generated or executed, and no v2 attempt, result, or evidence path exists,
+so the corrected schemas retain the `/v2` domains and disjoint v2 seed panels.
+
+Revision 5 passed adversarial architecture, theory, and experimental review on
+2026-08-07 after five rounds. The commit containing this accepted text is the
+new `plan_commit`; the earlier revision-4 commit cannot authorize a v2 attempt.
 
 This amendment inherits every semantic definition, bound, report field,
 acceptance threshold, non-claim, and test obligation from the accepted v1 plan
@@ -13,6 +21,410 @@ below. V1 was executed once and independently classified invalid at commit
 `dc36a728f64d1126698ba02f0f9109091124398a`; its rule and digests can never be
 frozen. V2 exists only to repair mechanical proof boundaries, not to tune the
 causal task or empirical threshold.
+
+## Revision 5 corrective contract
+
+This section replaces the revision-4 passages it names. It changes no task
+generator, protected seed, grammar, policy, score, threshold, cohort, or
+empirical hypothesis.
+
+### Core-runtime boundary and executed mutation/child controls
+
+The inherited roadmap boundary remains exact: the v2 implementation has no
+diff in `internal/engine`, `internal/agenda`, or `internal/dsl/vm.go`, adds no VM
+field or hook, and changes no mutation machinery. The dependency verifier
+rejects either a forbidden dependency edge or a forbidden-path diff from the
+accepted plan commit.
+
+The causal builtin adapter may maintain a package-private, race-safe mapping
+from an exact top-level `*dsl.VM` identity to one opaque runner task scope. It
+rejects rebinding, is removed when the runner closes, and is absent for every
+nested child VM. It contains no fixture, hidden hypothesis, teacher, or oracle
+capability. A runtime unit name or copied store is insufficient authority.
+
+`mutation-inert` uses only the existing public engine mutation configuration
+and normal focus cycles. Its retained evidence contains the off/on
+configuration, semantic projections, and the exact sorted mutant-unit records
+observed in the two stores. Off must produce no mutant. On must create at least
+one unit through the existing mutation path. Both semantic projections must be
+equal and independently valid; a synthetic unit inserted by the control is not
+evidence of a mutation attempt.
+
+The mutation inputs are frozen. Both sides first complete the selected-rule
+episode for training seed 122001, then set only
+`H-Causal-V2-Propose.overallRecord` to `{successes:0,failures:1}` and construct a
+fresh ordinary engine on that post-terminal store; the existing constructor
+uses RNG seed 42. Both run exactly two normal focus cycles with interval 1,
+maximum mutants 1, mutant worth 400, validation disabled, minimum applications
+1, and threshold 2.0. Off differs only by `enabled:false`; on uses
+`enabled:true`. No RNG read, agenda insertion, unit-focus override, store edit,
+or direct mutator call occurs between engine construction and those two cycles.
+The retained configuration must equal these values, not merely describe
+producer-chosen values.
+
+`child-vm` is a denial control, replacing the revision-4 sentence that required
+an identical successful child projection. A real nested child VM sharing the
+parent store but lacking an explicit adapter registration attempts one causal
+task operation and must fail before adding an artifact, changing an attributed
+counter, or consuming teacher evidence. Equality between separately authorized
+top-level executions remains covered by deterministic JSON and replay controls.
+
+### Exact cache and reported cache provenance
+
+The exact cache payload remains the revision-4 object
+`{action,posterior_artifact_digest,cells,E,W,H,C,R}`. The posterior field is the
+outer digest of the current sealed posterior artifact, not a semantic-set
+digest. `R` is the exact repeat feature. A reusable in-memory semantic cache may
+be keyed by `(profile_digest,semantic_posterior_set_digest,action)`, but every
+use materializes the exact step-local sealed payload above and rederives `R`.
+
+Production records a cache status at each six-action cache lookup. Statuses are
+ordered step-major, then by the six canonical action codes returned by
+`causal.Actions()`. Every consumed step contributes exactly six statuses; the
+selected status copied into the transcript is the status at that step's
+selected-action position. Evaluation `cache_hits|cache_misses` are reconstructed
+from the complete verified cache artifacts and satisfy
+`cache_hits + cache_misses = 6*action_count`. They never use dynamic-program
+memo counters. Static/recomputed retained rows contain the complete treatment
+and control cache traces. Recomputed evidence has exactly `6*action_count`
+statuses, all `miss`; its work is no lower than cached work.
+
+### Complete dynamic benchmark meter
+
+For each dynamic-optimal fixture, one production dynamic-policy instance owns
+one DP meter. The meter includes table construction, every lookup along the
+realized teacher trajectory, and every lookup while separately simulating each
+possible hidden member of the initial posterior. The uniform expected cost is
+computed by those same simulations, not by an unmetered second policy. The
+retained fixture DP item is independently reconstructed and must remain within
+1,873 states and 193,117 work. Omitting the realized trajectory, any hidden
+member, or any table lookup makes the fixture mechanically invalid.
+
+### Control bundle and separately retained control evidence
+
+The control bundle stays the exact revision-4 three-field object and has no
+fourth field:
+
+```json
+{"control_bundle_version":"causal-control-bundle/v2","certificates":["18 exact certificates"],"control_bundle_digest":"sha256-hex"}
+```
+
+Both training and evaluation reports insert `control_evidence` and
+`control_evidence_digest` immediately after `control_bundle_digest`.
+`control_evidence_digest` is present both inside the object and beside it and
+the two values must be identical. Its digest uses
+`causal-control-evidence/v2`, NUL, and the exact object with its inner digest
+empty:
+
+```json
+{
+  "control_evidence_version":"causal-control-evidence/v2",
+  "selected_rule":"canonical-rule-code",
+  "static_rule":"canonical-rule-code",
+  "static_matrix":["exact-matrix-row"],
+  "recomputed_matrix":["exact-matrix-row"],
+  "mutation":"exact-mutation-proof",
+  "child_vm":"exact-child-vm-proof",
+  "corruption":"exact-corruption-proof",
+  "no_credit":"exact-no-credit-proof",
+  "dependency":"exact-dependency-proof",
+  "control_evidence_digest":"sha256-hex"
+}
+```
+
+The following are normative ordered object schemas. `counter-array` always
+means exactly 15 nonnegative integers in the frozen counter-field order.
+`base64url` means unpadded RFC 4648 base64url of canonical bytes. Empty arrays
+are `[]`, never `null`.
+
+```text
+cache-trace = {statuses:["hit|miss"],hits:integer,misses:integer}
+
+matrix-row = {
+  seed:integer,
+  fixture_digest:sha256-hex,
+  treatment_episode_digest:sha256-hex,
+  treatment_certificate_digest:sha256-hex,
+  control_episode_digest:sha256-hex-or-empty,
+  control_certificate_digest:sha256-hex-or-empty,
+  treatment:exact-control-result,
+  control:exact-control-result,
+  treatment_meter_counts:counter-array,
+  control_meter_counts:counter-array,
+  treatment_cache:cache-trace,
+  control_cache:cache-trace
+}
+
+mutation-config = {
+  enabled:bool,interval:integer,max_mutants:integer,mutant_worth:integer,
+  validate_only:bool,min_applics:integer,mutation_threshold:canonical-number
+}
+mutant-record = {
+  name:string,mutant_of:string,source_slot:string,operation:string,
+  program_digest:sha256-hex,worth:integer
+}
+mutation-proof = {
+  fixture_digest:sha256-hex,off_config:mutation-config,on_config:mutation-config,
+  off_result:exact-control-result,on_result:exact-control-result,
+  off_mutants:[mutant-record],on_mutants:[mutant-record],
+  off_meter_counts:counter-array,on_meter_counts:counter-array
+}
+
+child-vm-proof = {
+  fixture_digest:sha256-hex,profile_digest:sha256-hex,
+  operation:"causal-v2-task-valid?",artifacts_before:integer,
+  artifacts_after:integer,meter_counts_before:counter-array,
+  meter_counts_after:counter-array,teacher_calls_before:integer,
+  teacher_calls_after:integer,failure_code:"child-vm-unauthorized"
+}
+
+corruption-case = {
+  name:canonical-case-name,mutation_descriptor:canonical-case-name,
+  mutated_bytes_digest:sha256-hex,rejection_code:canonical-failure,
+  meter_counts:counter-array
+}
+corruption-proof = {
+  enumerator_version:"causal-corruption-enumerator/v2",
+  fixture_bytes:base64url,profile_bytes:base64url,
+  baseline_artifacts:[base64url],case_count:integer,
+  case_set_digest:sha256-hex,cases:[corruption-case]
+}
+
+no-credit-proof = {
+  central_profile_bytes:base64url,
+  certificate_digests:["exactly-480-sha256-hex-in-seed-major-rule-major-order"],
+  artifact_bytes:["exactly-1041-base64url-sealed-artifacts"],
+  aggregates:["exactly-40-rule-aggregate-objects"],
+  central_transcript:[],task_meter_items:["exactly-525-task-meter-items"],
+  counts:counter-array,resolution:"unresolved",winner_ties:[],selected_rule:"",
+  terminal_transcript_digest:"64-ascii-zeroes"
+}
+
+dependency-parameter = {
+  function:qualified-function,parameter_index:integer,type:canonical-go-type
+}
+dependency-file = {
+  path:repository-relative-path,source_sha256:sha256-hex,
+  imports:[sorted-import-path],exported_function_parameters:[dependency-parameter]
+}
+runner-field = {name:string,type:canonical-go-type,hidden_bearing:bool}
+dependency-proof = {
+  audited_commit:40-hex,audited_roots:[sorted-repository-relative-path],
+  files:[dependency-file],runner_methods:[sorted-method-signature],
+  runner_fields:[runner-field],teacher_methods:[sorted-method-signature],
+  lookups:integer,forbidden:[sorted-canonical-violation]
+}
+```
+
+Both matrices contain exactly 12 rows in training-seed order. Every static row
+has all four episode/certificate digests nonempty and matched to committed
+training evidence. Every recomputed row has nonempty treatment digests matched
+to the committed cached selected-rule episode/certificate and empty control
+digests because the cache-disabled execution has no committed training record.
+No proof contains a literal `passed`; verification derives it from exact
+evidence and fresh execution.
+
+Static and recomputed certificates embed the exact seed-122001 row's actual
+fixture digest and treatment/control results. They never put an aggregate or
+secondary digest into a profile- or transcript-digest field. Certificate meter
+counts are the exact componentwise sum of the 12 retained rows. A certificate
+has no standalone authority: its result and `passed` value are accepted only
+after its evidence section reconstructs.
+
+The static rule is exactly `causal.Rules()[0]` in frozen grammar order, without
+lexical sorting. Both sides run on all 12 already-opened private fixtures from
+the verified training bundle, in seed order, with fresh stores, equivalent
+independent teachers, identical hidden models, costs, ceilings, and budgets,
+and separately signed acquisition profiles. For each side, the underlying fresh
+training episode and application certificate must byte-equal the corresponding
+committed seed/rule records named by the row digests; its `ControlResult` must
+then byte-equal the canonical projection derived from that verified episode.
+Learned/static semantic equality or learned superiority is not required.
+Static passes only when the complete declared baseline matrix reproduces
+exactly and both sides are independently valid. Recomputed uses the selected
+rule on both sides and requires exact equality of actions, outcomes, posterior
+transitions, costs, terminal, score, and accuracy across all 12 rows.
+
+The no-credit proof retains the exact fields above. Its central transcript is
+empty because no selection occurs, and its terminal digest is 64 zeroes. Fresh
+verification reruns all 480 admissions from the exact training episodes and
+certificates and byte-compares every retained result.
+
+Dependency evidence is rooted at an exact 40-hex audited commit and contains
+the sorted audited roots; for every source file, its relative path, SHA-256,
+sorted imports, and sorted exported function/callback parameters; the sorted
+runner fields and methods; the sorted teacher methods; lookup count; and the
+complete forbidden list. Verification enumerates and rereads the Git tree at
+that commit and byte-compares the reconstructed proof. Worktree counts alone
+are insufficient.
+
+The only `audited_roots` value is `["."]`. Files are every tracked regular
+`*.go` file plus every tracked `domains/causal/**/*.cue` file in
+`git ls-tree -r --full-tree <audited_commit>`; symlinks and submodules are
+forbidden. Repository-relative paths use slash separators, no leading `./`, and
+no empty, `.` or `..` segment. All ordered strings use ascending UTF-8 byte
+order. Imports are unquoted Go import paths. Go types are
+`go/types.TypeString(t,q)` where `q(pkg)` returns `pkg.Path()`. A qualified
+function is `<package-import-path>.<function-name>` or
+`<package-import-path>.(<receiver-type>).<method-name>`; method signatures use
+the same type printer. Parameter indices are zero-based and retain their
+function association. This same complete file set is compared with the
+worktree and rejects any diff under `internal/engine`, `internal/agenda`, or
+`internal/dsl/vm.go` from the accepted plan commit.
+
+Corruption evidence retains one canonical baseline and the ordered case
+records. A case name is also the closed enumerator's exact mutation descriptor;
+the verifier deterministically reconstructs its mutated ledger, checks
+`mutated_bytes_digest`, reruns rejection, and checks its meter counts. Mutated
+ledgers are not duplicated per case. Changing, deleting, duplicating,
+reordering, or re-signing evidence fails the evidence digest or fresh verifier.
+
+The corruption baseline is the nonprotected development fixture at seed 112001,
+generator index zero, executed with `P=H;M=gain;S=C` and its own signed
+development profile and private teacher. Its preregistration witness terminates
+`identified` after exactly two actions and has these exact kind cardinalities:
+`descriptor-snapshot:5,observation:1,posterior:3,cache:12,partition:12,
+proposal:12,score:12,tie:2,selection:2,authorization:2,result:2,elimination:7,
+consumption:2,transcript:2,terminal:1`. Contextual verification regenerates this
+development fixture and exact ledger; it never substitutes a protected
+training, validation, or locked episode.
+
+The corruption enumerator is frozen, not evidence-selected. That baseline must
+contain every episode artifact kind, in this exact kind order:
+`descriptor-snapshot,observation,posterior,cache,partition,proposal,score,tie,
+selection,authorization,result,elimination,consumption,transcript,terminal`.
+For each kind it selects the first ledger artifact of that kind. On those 15
+representatives, in kind order, it mutates every outer field in ascending UTF-8
+field-name order, then recursively mutates every payload object field in that
+order, descending into objects and only the first object of a nonempty array,
+then emits delete, duplicate, and forged-charge-index cases. Finally it scans
+the complete ledger in index order and emits one adjacent-swap case for the
+first occurrence of each distinct ordered pair of adjacent artifact kinds;
+later occurrences of the same pair are skipped.
+
+A string appends `-corrupt`, a JSON number adds one, a bool negates, an empty
+array becomes `["corrupt"]`, a nonempty array mutates element zero, and an object
+gains `"unexpected_corruption_field":true`. Case names are respectively
+`kind-<kind>-field-<path>`, `kind-<kind>-<payload-path>`,
+`delete-kind-<kind>`, `duplicate-kind-<kind>`, `forge-kind-<kind>`, and
+`reorder-kind-<left>-<right>`. The 15 schemas yield exactly 135 outer-field and
+81 payload-field cases, plus 45 delete/duplicate/forge cases and at most 225
+distinct ordered kind-pair cases: `case_count <= 486`. Each canonical case is
+capped at 2,048 bytes, so the full cases array is at most
+`486*2048 + 485 + 2 = 995815` bytes including brackets, within its 1 MiB subcap. The case-set digest
+uses `causal-corruption-enumerator/v2`, NUL, and the exact ordered case-name
+array; `case_count` equals its length. Verification reconstructs the entire
+array and rejects a subset, extra, duplicate, or reorder.
+
+The exact manifest inserts
+`"control_evidence_byte_cap":4194304` immediately after
+`control_bundle_byte_cap`, followed by the five aggregate subcaps in the exact
+manifest. The control bundle retains its 2 MiB cap. Control evidence has its own
+4 MiB cap, the nonrecord shell retains its 1 MiB cap, and the complete report
+retains its 16 MiB cap. Its maximum record allowance is exactly
+`1572864+524288+1048576+262144+524288 = 3932160`, leaving 262,144 bytes for the
+fixed evidence shell under 4 MiB. Actual canonical nested-array and complete
+object lengths must independently satisfy every subcap and total cap. Golden
+maximum-width tests prove the bounds.
+
+Each evidence subcap measures canonical JSON of the named complete array,
+including brackets, element commas, quotes, and base64url strings. A group with
+multiple arrays is the sum of those complete encoded-array lengths; separators
+between object fields remain in the fixed shell and are not added twice. The
+exact groups are:
+
+- `no_credit_artifacts`: `no_credit.artifact_bytes`;
+- `corruption_baseline`: `corruption.baseline_artifacts`;
+- `corruption_cases`: `corruption.cases`;
+- `dependency_files`: `dependency.files`; and
+- `other_records`: `static_matrix`, `recomputed_matrix`,
+  `mutation.off_mutants`, `mutation.on_mutants`,
+  `no_credit.certificate_digests`, `no_credit.aggregates`,
+  `no_credit.central_transcript`, `no_credit.task_meter_items`,
+  `dependency.audited_roots`, `dependency.runner_methods`,
+  `dependency.runner_fields`, `dependency.teacher_methods`, and
+  `dependency.forbidden`.
+
+Every control-evidence record-array path belongs to exactly one group. The
+fixed evidence shell is the canonical evidence object with all listed arrays
+replaced by `[]` and its digest empty; it is capped at 262,144 bytes. Because
+the five group measurements conservatively include brackets also present in
+the shell, shell plus group caps is an upper bound on the final object.
+
+The training-digest input inserts `control_evidence_digest` immediately after
+`control_bundle_digest`. Evaluation self-digests cover the complete control
+evidence and its digest.
+
+### Contextual verification and authority
+
+Strict canonical report decoding proves schema and self-consistency only and
+returns no authority. Training freeze, replay, validation, locked execution,
+and publication accept only package-private verified values returned by
+contextual verifiers.
+
+The contextual training verifier accepts repository root plus exact report and
+bundle bytes. It reruns the training matrix from the bundle's already-opened 12
+private fixtures, reconstructs the static and recomputed matrices, reruns the
+full credit and no-credit curricula, and audits dependency evidence at the
+recorded pretraining commit. The contextual evaluation verifier loads the
+committed training report/bundle named by `training_report_commit`, invokes the
+contextual training verifier, and uses only already-opened training fixtures or
+the fixed development witness to freshly reconstruct static, recomputed,
+no-credit, corruption, mutation, and child-VM evidence. Static and recomputed
+use all 12 training fixtures; every other single-context control uses training
+seed 122001 except corruption, which uses development seed 112001. It never
+invokes a validation or locked generator for a control. Dependency evidence alone is
+regenerated at `implementation_commit`. Only then may it reconstruct controls,
+mechanics, status, and report digest. A structurally valid report never mints a
+capability by itself.
+
+### Detached replay worker
+
+The single-use parent replay capability remains mintable only after committed R
+evidence and the exact dirty-R or direct-child-C constants state verify. It
+opens the exact 12 private fixtures from R and writes a canonical transient
+input through inherited pipe file descriptor 3. Its exact field order is
+`{replay_input_version,plan_commit,pretraining_commit,evidence_commit,
+training_digest,bundle_digest,fixtures,corruption_fixture,replay_input_digest}`;
+the version is `causal-replay-input/v2`, `fixtures` contains exactly 12 private
+fixtures in training-seed order, and `corruption_fixture` is the exact private
+development-112001 witness. The self-digest uses that domain, NUL, and the
+object with its digest empty.
+
+The fixed detached-E replay worker accepts no arguments, panel, seed, generator
+option, environment authorization flag, attempt capability, or path. It reads
+one canonical input to EOF from inherited pipe FD 3 and writes through inherited
+FD 4, an already-opened empty temporary directory. It resolves its own worktree
+as clean detached E. All output uses no-follow, exclusive `openat`; it cannot
+call any generator. It can only regenerate training evidence from the supplied
+12 protected fixtures and supplied development witness. Direct invocation may process caller-supplied fixtures if it
+constructs both descriptors, but cannot discover or generate protected bytes
+and confers no acceptance. The parent alone byte-compares both output files to
+R, consumes its in-process capability, and may record the diagnostic receipt.
+
+Old environment-variable or seed-bearing replay requests, a noncanonical input,
+a symlink, wrong E/R/evidence digest, changed fixture, nonempty output directory,
+attempted publication, or output outside the inherited directory fails before
+regeneration or leaves byte comparison false. The pipe is consumed once; reuse
+of the parent capability fails before a second worker is started.
+
+### Revision 5 acceptance tests
+
+In addition to every inherited test, revision 5 requires synthetic rejection
+tests for every schema, evidence, cache, dependency, and replay attack named
+above. It requires `git diff -- internal/engine internal/agenda
+internal/dsl/vm.go` to be empty; scoped normal and race tests for parallel
+top-level VM isolation, rebinding, close/reuse, and child denial; an exact cache
+payload golden including `posterior_artifact_digest` and `R`; production cache
+accounting independent of DP memoization; full DP-meter reconstruction; static
+baseline binding to the committed training matrix; full no-credit and rooted
+dependency reconstruction; direct replay-worker and transient-input attacks;
+maximum-width byte-cap goldens; `mise exec -- go test ./...`; focused
+`mise exec -- go vet`; and `git diff --check`. No test may call a protected
+panel generator. Authorization tests stop before generation and assert a zero
+generator-call counter. Tests use hand/development fixtures or exact fixture
+bytes supplied as test data; only the real single-use runner opens a protected
+panel.
 
 ## Exact v2 manifest, domains, and seed reset
 
@@ -75,6 +487,12 @@ The complete v2 manifest, in field order, is:
   "task_meter_item_byte_cap": 1024,
   "control_certificate_byte_cap": 4096,
   "control_bundle_byte_cap": 2097152,
+  "control_evidence_byte_cap": 4194304,
+  "control_evidence_no_credit_artifacts_byte_cap": 1572864,
+  "control_evidence_corruption_baseline_byte_cap": 524288,
+  "control_evidence_corruption_cases_byte_cap": 1048576,
+  "control_evidence_dependency_files_byte_cap": 262144,
+  "control_evidence_other_records_byte_cap": 524288,
   "training_episode_base_byte_cap": 6144,
   "episode_meter_items_byte_cap": 2048,
   "training_episode_report_byte_cap": 8192,
@@ -103,6 +521,7 @@ Digest domains `causal-profile`, `causal-central-profile`, `causal-public-token`
 `causal-application-certificate`, `causal-rule-applications`,
 `causal-training-episode`, `causal-training-episode-bundle`,
 `causal-control-certificate`, `causal-control-bundle`,
+`causal-control-evidence`,
 `causal-training-digest-input`, `causal-semantic-key`, `causal-meter-array`,
 `causal-task-meter-items`, `causal-central-transcript-event`, and
 `causal-diagnosis-report` all use `/v2`.
@@ -404,17 +823,18 @@ token is authorized; no test touches a future panel.
 The central profile is the exact canonical object
 `{"central_profile_version":"causal-central-profile/v2","manifest":<exact-v2-manifest>,
 "plan_commit":"40-hex","pretraining_commit":"40-hex","training_key":"sha256-hex",
-"profile_digest":"sha256-hex"}`. `training_key` is SHA-256 of
+"credit_enabled":"bool","profile_digest":"sha256-hex"}`. `training_key` is SHA-256 of
 `causal-central-profile/v2`, NUL, the plan commit, NUL, and pretraining commit.
 `profile_digest` is SHA-256 of `causal-central-profile/v2`, NUL, and the exact
-object with `profile_digest:""`. The central descriptor payload has
+object with `profile_digest:""`. Training uses `credit_enabled:true`; the
+distinct no-credit profile uses `credit_enabled:false`. The central descriptor payload has
 `expected_rules:40`, the ordered 12 training seeds, `expected_certificates:480`,
-and `credit_enabled:true`. It is immutable configuration. A narrow unsealed
+and the same signed `credit_enabled` value. It is immutable configuration. A narrow unsealed
 central cursor holds phase
 `initializing|admitting|aggregating|selecting|terminal`; barriers and the sealed
 central transcript corroborate every phase transition, and neither selection
 nor scoring may read the cursor as evidence.
-The no-credit control uses a distinct control profile and `credit_enabled:false`.
+The no-credit control uses that distinct signed control profile.
 
 The post-episode verifier regenerates each training fixture and reruns the
 episode in a fresh store before issuing a certificate. Certificate bytes enter
@@ -482,8 +902,9 @@ Its self-digest uses the matching `/v2` domain. The ordered array plus
 `control_bundle_digest` forms `{"control_bundle_version":"causal-control-bundle/v2",
 "certificates":[...],"control_bundle_digest":"sha256-hex"}` and is capped at
 2 MiB; each certificate is capped at 4,096 bytes. Training and evaluation
-digests include the bundle digest, and report booleans are reconstructed only
-from these certificates.
+digests include the bundle digest and the separately retained control-evidence
+digest. Report booleans reconstruct jointly from certificates and the complete
+freshly verified control evidence; neither object has standalone authority.
 
 An exact control result is
 `{"profile_digest":"sha256-hex-or-empty","actions":["canonical-action"],
@@ -493,11 +914,12 @@ An exact control result is
 Thus retained evidence is embedded rather than represented by an undefined
 secondary digest.
 
-Alias, presentation, proposal-order, mutation, and child-VM controls require
+Alias, presentation, proposal-order, and mutation controls require
 identical normalized semantic projections—actions, outcomes, posterior
 transitions, costs, terminal, and score—while each context-specific profile and
 transcript digest must independently verify; raw digest equality is not
-expected when public context changes. Hidden
+expected when public context changes. Child-VM instead has the revision-5
+fail-before-evidence denial semantics. Hidden
 twins require identical production bytes through the first authorization.
 Wrong-context, alternate-descriptor, occupied-name, stale/duplicate response,
 and every corruption case must fail closed before consuming new evidence. Cost
@@ -536,9 +958,11 @@ below; aggregate meter objects exist only in report mechanics.
 The training report changes `report_version` to `causal-training-report/v2` and
 inserts, immediately after `episode_bundle_bytes`, `"control_bundle":<exact
 control-bundle-object>` then `"control_bundle_digest":"sha256-hex"`,
+`"control_evidence":<exact-control-evidence-object>`,
+`"control_evidence_digest":"sha256-hex"`,
 `"task_meter_items":["exact-task-meter-item"]`, and
 `"task_meter_items_digest":"sha256-hex"`. The evaluation report makes the
-same four insertions immediately after `status`. A task meter item is exactly
+same six insertions immediately after `status`. A task meter item is exactly
 `{"name":"certificate-replay|post-selection-replay|curriculum",
 "subject":"canonical-unique-task-key","counts":["15-integers-in-counter-field-order"]}`.
 Training emits 480 items for each replay name and one curriculum item for each
@@ -599,13 +1023,21 @@ The report inserts `"report_digest":"sha256-hex"` immediately before
 `limitations`. Byte reconstruction follows one algorithm. Record arrays are the
 training report's applications and the one complete `task_meter_items` array;
 the training bundle's fixtures and episodes; the control bundle's certificates;
-and every evaluation policy's fixtures. The task array is replaced once by
-`[]`; its replay and curriculum categories are not removed independently.
+every evaluation policy's fixtures; and these exact paths inside control
+evidence: `static_matrix`, `recomputed_matrix`, `mutation.off_mutants`,
+`mutation.on_mutants`, `corruption.baseline_artifacts`, `corruption.cases`,
+`no_credit.certificate_digests`, `no_credit.artifact_bytes`,
+`no_credit.aggregates`, `no_credit.central_transcript`,
+`no_credit.task_meter_items`, `dependency.audited_roots`, `dependency.files`,
+`dependency.runner_methods`, `dependency.runner_fields`,
+`dependency.teacher_methods`, and `dependency.forbidden`. Each listed array is
+replaced once by `[]`; subcategories are not independently removed.
 Fixed aggregate meter,
 rule, cohort, contrast, and limitation arrays are part of the nonrecord shell.
 To compute `nonrecord_bytes`, replace only those record arrays with `[]`, put
-`00000000` in both byte fields, and, for an evaluation report, put 64 ASCII
-zeroes in `report_digest`; serialize and record the length. Reinsert the record
+`00000000` in both byte fields, put 64 ASCII zeroes in both occurrences of the
+control-evidence digest, and, for an evaluation report, put 64 ASCII zeroes in
+`report_digest`; serialize and record the length. Reinsert the record
 arrays and final nonrecord field, leave `report_bytes` zero and the evaluation
 digest as 64 zeroes, serialize, and record that length as `report_bytes`.
 Both substitutions preserve final field width. Finally, the evaluation digest
@@ -621,8 +1053,14 @@ Each task meter item is capped at 1,024 bytes. Training has at most 1,485 such
 items, so reinsertion costs at most `1485*1024 + 1484 = 1522124` bytes.
 Evaluation has exactly 960 replay items, costing at most
 `960*1024 + 959 = 983999` bytes. Added to the inherited record maxima, the
-2 MiB control-bundle cap, and the 1 MiB nonrecord cap, both reports remain below
-16 MiB; actual canonical lengths and the final report cap are still mandatory.
+2 MiB control-bundle cap, the 4 MiB control-evidence cap, and the 1 MiB
+nonrecord cap, both reports remain below 16 MiB. Training's 480 application
+certificates add at most `480*1024 + 479 = 491999` bytes, so its five in-report
+allowances total `491999+1522124+2097152+4194304+1048576 = 9354155` bytes. Locked
+evaluation adds at most `448*8192 + 447 = 3670463` fixture-record bytes to
+`983999+2097152+4194304+1048576`, totaling 11,994,494 bytes. The 8 MiB training
+episode bundle is a separate file, not embedded in the report. Actual canonical
+lengths and the final report cap are still mandatory.
 
 An episode `meter_items` array has all eight names in the fixed order below.
 Each item is
@@ -767,6 +1205,7 @@ The v2 training-digest input replaces the inherited object with:
   "central_profile_digest": "sha256-hex",
   "episode_bundle_digest": "sha256-hex",
   "control_bundle_digest": "sha256-hex",
+  "control_evidence_digest": "sha256-hex",
   "task_meter_items_digest": "sha256-hex",
   "meter_digest": "sha256-hex",
   "fixture_digests": ["sha256-hex"],
@@ -823,10 +1262,13 @@ fixtures and repeatable development diagnostics use a separate
 `diagnostic-development` capability that cannot produce an acceptance status,
 certificate, or evidence file.
 
-A locked capability is minted only from a mechanically valid validation report
-self-digest bound to the same clean C and v2 manifest. A mechanical validation
-failure or changed C prevents locked generation and forces v3; threshold
-results never permit tuning.
+A locked capability is minted only after contextual evaluation verification
+loads and verifies committed training evidence, freshly regenerates the full
+validation matrix and every control from already-opened training fixtures,
+audits dependency evidence at the same clean C, and requires byte equality with
+the mechanically valid validation report and its self-digest. A mechanical
+validation failure or changed C prevents locked generation and forces v3;
+threshold results never permit tuning.
 
 V2 evidence paths are exactly
 `docs/evidence/active-causal-diagnosis-v2/training.json` and
@@ -837,10 +1279,11 @@ directory with a single no-replace rename. This makes two-file publication
 atomic. A surviving staging directory is failed evidence, never resumed or
 overwritten.
 
-Tests may generate only hand fixtures and development seeds before training.
-Training, validation, and locked generator entry points require their respective
-provenance tokens; tests prove unauthorized access fails without exposing a
-fixture. After v2 plan acceptance the sequence is:
+Tests generate only hand fixtures and development seeds. No test invokes a
+training, validation, or locked generator; authorization tests stop before the
+generator call and prove its counter remains zero. The real protected entry
+points require their respective provenance tokens. After v2 plan acceptance
+the sequence is:
 
 1. commit the accepted amendment;
 2. implement and adversarially review the corrected pretraining executable;
@@ -856,9 +1299,13 @@ fixture. After v2 plan acceptance the sequence is:
    candidate diff from R contains only the three allowlisted constants;
 7. run all tests, commit that constants-only diff as candidate C, and require a
    clean C `HEAD`;
-8. run validation without changes from clean C, then run locked once from the
-   same clean C. Panel reports are written outside the repository, so neither
-   run changes the candidate commit.
+8. from clean direct-child C, synchronously repeat the detached-E fixture-fed
+   byte replay and require both files to equal R; the dirty-R receipt is checked
+   only for diagnostic consistency and grants no authority;
+9. only after that fresh replay, run validation without changes from clean C,
+   contextually reopen and freshly regenerate its matrix and controls, then run
+   locked once from the same clean C. Panel reports are written outside the
+   repository, so neither run changes the candidate commit.
 
 Any v2 training failure is preserved as invalid and requires v3 with another
 disjoint seed set.
