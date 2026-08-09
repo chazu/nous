@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: proposed Part 3 lane-specific implementation plan, revision 9.
+Status: proposed Part 3 lane-specific implementation plan, revision 10.
 
 Revision 1 was committed at
 `10eb2deafd4d8a203257026d0c7925a4f6eaba86` and blocked independently by all
@@ -51,6 +51,12 @@ nonreplayable locked fixture evidence, and an ambiguous cross-panel terminal
 classification. Revision 9 resolves that complete review union while retaining
 the already accepted ledger arithmetic. No panel was observed between
 revisions.
+
+Revision 9 was committed at `3fac7b40779d8dcaa3f857f5219094104322caed`.
+Constraint-semantics accepted it; architecture and experimental validity found
+one mistyped restored validation seed word, and architecture also required a
+closed canonical fixture-bundle wire schema. Revision 10 makes only those two
+mechanical corrections. No panel was observed.
 
 This document narrows Vocabulary 1 of the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). It is
@@ -634,7 +640,7 @@ The `variable-positions` golden vectors are:
 | --- | --- | --- | --- | --- |
 | `training` / `831001` | `ac5eb4be74b192caba90677858e7ca28c346c1329bfe16347b864600b1669f0d` | `12420563552428987082,13443358654286252584` | `16196928853732314818,13964589984287698613,14828555489593947842,3864106448264698449` | `0,1,2` |
 | `development` / `832001` | `7ee119fb7276549805e9faaa614a7049671b62ab1466d6a66417e274b279e2a6` | `9142617286286660760,426147249446875209` | `1213905441346112375,1699159744660973649,1395889987714557996,13902222507069901990` | `5,2,1,4,3,6,0,7` |
-| `validation` / `833001` | `c6ae755044795c25e589d32a073dc98744347a48470364294121d4445b8aca9e` | `14316509253064011885,16539983283958434183` | `4803874459439516066,14275222390261356384,10176726368503672072,10929098418971052156` | `6,0,1,4,7,3,5,2` |
+| `validation` / `833001` | `c6ae755044795c25e589d32a073dc98744347a48470364294121d4445b8aca9e` | `14316509253064023077,16539983283958434183` | `4803874459439516066,14275222390261356384,10176726368503672072,10929098418971052156` | `6,0,1,4,7,3,5,2` |
 | `locked` / 64 zeroes | `d1eae2c49127eaedc67e0983f6395fd5ece5fd712a4b44a8598253a172644af1` | `15126151632354011885,14302879928951594965` | `14781793926225946851,10566838600647845555,7622181505994308792,3324590857268697477` | `5,1,6,7,0,2,4,3` |
 
 Training seeds `831001..831004` map directly, without rejection:
@@ -1009,11 +1015,25 @@ at command start. No panel may discard, replace, or alias a chunk from the other
 execution. Only the primary execution contributes empirical work; audit work and
 its independent 54-event profile preflight are reported as integrity evidence.
 
-`fixtures.json` is the canonical compact JSON array, in task-ordinal order, of
-records containing `ordinal`, the exact canonical problem byte slice encoded as
-unpadded base64url, and the supplied decision's numeric `variable` and `color`.
-It contains no seed, cohort, template, private root, oracle result, or outcome.
-Its decoded problem bytes must themselves pass canonical problem decoding.
+`fixtures.json` is one compact UTF-8 JSON array with no whitespace or trailing
+newline. Every element has this exact field set and field order:
+
+```text
+{"ordinal":n,"problem":"<unpadded-base64url>","variable":n,"color":n}
+```
+
+Development contains exactly 96 elements, validation 192, and locked 384;
+`ordinal` is the consecutive array index `0..N-1`. `problem` is the exact
+canonical problem byte slice in shortest unpadded RFC 4648 base64url.
+`variable` and `color` are nonnegative base-10 JSON integers and together are
+the supplied decision, which must be in range for the decoded problem. The
+decoder rejects missing, reordered, duplicate, or unknown fields; whitespace,
+escapes in keys, padding or noncanonical base64url; non-integer, signed,
+fractional, exponent, leading-zero, or out-of-range numbers; an incorrect panel
+length or ordinal; and any decoded problem that fails canonical problem
+decoding. Re-encoding every accepted bundle by this literal grammar must be
+byte-equal to the input. The file contains no seed, cohort, template, private
+root, oracle result, or outcome.
 Both executions consume the same decoded records from this file; neither may
 regenerate a task. The root manifest records its byte length and SHA-256, and
 the receipt finalization hashes it transitively through the root manifest. Its
