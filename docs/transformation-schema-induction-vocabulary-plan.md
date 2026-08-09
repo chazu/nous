@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Provisional Part 3 Vocabulary 2 implementation plan, revision 9. This document
+Provisional Part 3 Vocabulary 2 implementation plan, revision 10. This document
 is not implementation authority until independent architecture, transformation-
 semantics, and experimental-validity reviewers all accept the same committed
 revision.
@@ -74,6 +74,13 @@ per-node comparison, factor-proof, reservation-endpoint, held-out-release, and
 actual-Store evidence contracts. Revisions made before unanimous v2 acceptance
 remain provisional v2 amendments; the v3 rule below begins only after a v2 plan
 commit has been unanimously accepted.
+
+Revision 9 was blocked because its multi-example factor verifier returned an
+answer into the policy's causal path, its reservation endpoint ignored expected
+case class, and three evidence derivations remained ambiguous. Revision 10
+restores heuristic-owned factor claims with causally inert post-hoc reduction,
+freezes normalization traces, keys action endpoints to sealed case class, and
+closes held-out-result and per-policy Store reconstruction.
 
 Vocabulary 1 ended `valid-null`; Vocabulary 2 does not consume its domain,
 artifacts, evidence, or learned state. It uses only the existing Store, Agenda,
@@ -156,7 +163,7 @@ constant and reproduce it in every report:
   "transcript_raw_byte_cap_per_policy_curriculum": 19200000,
   "transcript_gzip_byte_cap_per_policy_curriculum": 19250000,
   "object_byte_cap_per_policy_curriculum": 67108864,
-  "object_leaf_byte_cap": 61440,
+  "object_leaf_byte_cap": 2560,
   "object_leaf_count_cap_per_policy_curriculum": 24002,
   "object_root_byte_cap_per_policy_curriculum": 4194304,
   "transcript_raw_byte_cap_per_policy_locked_panel": 2457600000,
@@ -932,7 +939,6 @@ All semantic object wires and per-object canonical byte caps are frozen:
 | edit status | `["transform-edit-status/v1",status,editDigest]` | 256 |
 | program | the `concrete-program/v1` wire containing one through four edit wires | 640 |
 | program batch | the `transform-program-batch/v1` wire | 1,152 |
-| policy training | the `transform-policy-curriculum/v1` wire | 61,440 |
 | partial | the `transform-partial/v1` wire | 256 |
 | schema | the `transform-schema/v1` wire | 256 |
 | result | `["transform-result/v1",terminal,outputDigest]` | 256 |
@@ -985,7 +991,7 @@ The normative operation matrix is:
 | evidence-link | acquire,target,anchor,scope,old-guard,locality,training-validate,freeze,heldout | 10/1 | attempted-value,prior-output-or-empty,prior-operation -> evidence-attempt | attached,rejected |
 | canonicalize | all nonterminal phases | 11/1 | any one semantic kind -> same kind | canonical,invalid-input |
 | hash | all nonterminal phases | 11/1 | any one semantic kind -> atom(digest) | hashed,invalid-input |
-| verify | acquire,target,anchor,scope,old-guard,locality,training-validate,freeze,heldout | 11/1 | one or two semantic kinds -> atom(boolean) | verified,rejected |
+| verify | acquire,freeze | 11/1 | program-batch, closure, or schema -> atom(boolean) | verified,rejected |
 | schema-application | training-validate,heldout | 11/1 plus one application credit | forest,schema -> application | applied,abstain/request-count,abstain/anchor,abstain/locality,abstain/expansion,abstain/no-op,invalid-input |
 | replay-application | training-validate,heldout | 11/1 plus one application credit | forest,program-batch -> result | applied,abstain/replay-miss,invalid-input |
 | terminal | terminal | 11/1 | closure or schema or store-boundary -> terminal | completed,no-discovery,budget-exhausted |
@@ -1006,10 +1012,9 @@ twelve maximum-case charges identify twelve distinct comparisons rather than
 repeating one whole-forest claim.
 
 Each factor candidate has one closed proof action after its `refine` and
-allocation events. Positive-stage proof authority is the already authenticated
-four-row program batch; locality-stage authority is the exact policy-training
-envelope. Rows are visited by opaque case token. The ordinary heuristic must
-emit the local observations and same-kind comparisons prescribed by the stage:
+allocation events. Rows are visited by opaque case token. The ordinary
+heuristic must emit the local observations and same-kind comparisons prescribed
+by the stage:
 
 - target observes every edited node and compares the predicted and recovered
   target-signature enum for each program;
@@ -1021,19 +1026,43 @@ emit the local observations and same-kind comparisons prescribed by the stage:
   request and anchor parent-ID facts needed to identify a wrong-context
   counterexample.
 
-The final stage operation is `verify(partial,program-batch)` for target through
-old-guard or `verify(partial,policy-training)` for locality. Its verifier
-strict-decodes those source objects and independently recomputes the candidate's
-per-example results and aggregate boolean; it does not accept a policy-supplied
-boolean. The reducer additionally requires the exact stage-specific observation
-coverage and comparison sequence above, then requires an immediate evidence
-link to the verified boolean atom. Candidate digest, partial stage/value, source
-row token/digest, and operation order provide the candidate/example binding.
-The closure's `resultDigest` must name that verified atom. Missing, extra,
-reordered, cross-candidate, cross-example, or aggregate-only evidence is
-invalid. The no-equality ablation is a declared reducer-side override that
-forces only the `equals-from` old-guard candidate to false after the same full
-proof action.
+For definition-only target, scope instead compares the candidate enum once with
+the canonical `local` enum: `local` claims true and `global` claims false with
+`redundant-noncanonical`; old-guard analogously compares once with canonical
+`any`. These normalization traces inspect no example and are the only exception
+to the per-program sequences above.
+
+The heuristic combines its returned per-example booleans in CUE. To commit the
+aggregate it performs one final ordinary compare of its claimed boolean atom
+against boolean true and immediately attaches that compare's output atom. This
+is explicitly a policy claim, not verifier authority: a false claim yields the
+false comparison output, and no independent answer is returned to the VM,
+Store, agenda, worth, or dispatch path. The closure's `resultDigest` names this
+claimed atom.
+
+After the policy has committed the claim, independent reduction uses the
+premanifest's exact training-fixture digest plus the program batch reconstructed
+from acquisition events. Without invoking a policy-visible capability, it
+strict-decodes those sources, recomputes every per-example and aggregate result,
+and accepts the claim only on equality. It also requires the exact stage-
+specific observation and comparison coverage above. Candidate digest, active
+partial stage/value, source row token/digest, and operation order provide the
+candidate/example binding. Missing, extra, reordered, cross-candidate, cross-
+example, normalization-inconsistent, or aggregate-only evidence is invalid.
+The no-equality policy itself claims false for only the `equals-from` old-guard
+candidate after the same full observation trace; the reducer independently
+checks that declared ablation. Neither independent recomputation nor rejection
+can revise a policy result or resume execution.
+
+`verify` has exactly three non-factor variants. In `acquire`, a program-batch
+input is verified iff its four sorted rows exactly reconstruct the four
+promoted concrete programs. In `freeze`, a closure input is verified iff its
+parent, complete alternative set, policy-claimed result digests, statuses, and
+sole survivor match the active stage; a schema input is verified iff it is
+canonical and exactly assembles the five closed survivors. No other input kind,
+arity, phase, or semantics is legal. Closure verification checks committed
+policy claims and structure only; the causally inert reducer separately audits
+the underlying factor truth.
 
 Output arity is exact by outcome. `ok`, `allocated`, `refined`, `applied`,
 `canonical`, and `hashed` produce the one output shown. Compare `true`/`false`,
@@ -1060,11 +1089,24 @@ At a schema/replay call boundary the verifier atomically reserves the
 applicable maximum work and one application credit before emitting any internal
 predicate/edit event. Exactly one schema-application or replay-application
 event commits the application credit and is the sole event counted as the
-application; it is not the action endpoint. For abstaining or held-out calls,
-the required immediate evidence link is the endpoint. For an applied
-training-validation call, the evidence link is followed by one output-compare
-per canonical node ID and the final highest-ID comparison is the endpoint. The
-80-work precharge covers the complete applicable action through that endpoint.
+application; it is not the action endpoint. If a policy-visible training case
+is positive and the call returns `applied`, the evidence link is followed by
+one output-compare per canonical node ID against that case's provided training
+output; the final highest-ID comparison is the endpoint. Every training
+abstention case, and every non-applied training result, ends at the evidence
+link because no expected output forest exists.
+
+For held-out execution the policy result becomes immutable at the evidence
+link. The external sealed scorer then reveals no value to policy code: if and
+only if the case is expected-positive and the immutable result is `applied`, it
+uses the same sink to append one output-compare per canonical ID against sealed
+truth, with the final comparison as endpoint. Expected-abstention and non-
+applied held-out cases end at the evidence link. These scorer events cannot
+alter the Store, agenda, artifact, terminal, or policy output. The
+80-work precharge covers the complete applicable action through its endpoint.
+Before the call, orchestration configures this endpoint class inside the
+unforgeable sink from the sealed scorer; the flag and truth bytes have no VM or
+policy reference and are released only after the immutable evidence link.
 No second reservation may begin while it is live. A missing, duplicated, or
 out-of-order application event, missing evidence link, missing/extra applied-
 training comparison, crash, or exhaustion before the endpoint is mechanical
@@ -1111,13 +1153,11 @@ make every matrix operation obey that rule; the policy-visible result of an
 application is a projection of the one authenticated compound object, and an
 evidence-link admits only its operation object plus its one evidence-attempt
 object. Since
-every ordinary event object is at most 2,560 bytes and work permits at most
-12,001 events including terminal, the table has at most 24,002 leaves. At most
-one additional admitted policy-training source is 61,440 bytes, so the exact
-worst-case object bytes are `61,445,120 - 2,560 + 61,440 = 61,504,000`.
+every object is at most 2,560 bytes and work permits at most 12,001 events
+including terminal, the table has at most 24,002 leaves using 61,445,120 bytes.
 Its sorted root has the exact object-root wire in the evidence section, a
 4,194,304-byte cap, and counts inside the 67,108,864-byte curriculum cap,
-leaving 1,410,560 bytes margin. A
+leaving 1,469,440 bytes margin. A
 locked policy panel has exactly 128 chunks and caps of
 6,400,000 events, 2,457,600,000 raw bytes, 2,464,000,000 gzip bytes, and
 8,589,934,592 object bytes. Primary and audit bundles are separate; combined
@@ -1397,6 +1437,17 @@ either PBE policy is forbidden even on successful completion. Their training
 evidence is the committed training envelope, exact transcript and reducer
 state, frozen artifact or terminal, and independent oracle reconstruction.
 
+`heldoutResultsSHA256` is derived rather than an evidence leaf. Its canonical
+preimage is capped at 4,096 bytes and is exactly
+`["transform-heldout-results/v2",[[opaqueCaseToken,resultTerminal,
+outputDigestOrEmpty,chargedWork]...]]`, with eight rows in opaque-token order;
+pre-schema terminals use an empty row list. The reducer reconstructs each row
+from the held-out application, its endpoint evidence/comparisons, and the
+committed held-out-input queue, then hashes these bytes. External scoring joins
+the rows to the sealed scorer by token and independently reconstructs correctness,
+false applications, and nonmatching work. No `heldout-results.json` path is
+legal in the evidence graph.
+
 An actual Store leaf is exactly
 `<role>/<policy>/<ordinal>/training-store.json`, capped at 16,777,216 bytes,
 with canonical JSON object wire `{unitName:{slotName:slotValue...}...}`. Unit and
@@ -1411,17 +1462,19 @@ unit-reference slot.
 
 Independent Store replay loads the reviewed domain bytes into a fresh Store,
 strict-decodes the committed policy-training envelope, and reruns the exact
-acquisition configuration and queue to its immutable training terminal. It
-requires byte equality with the Store leaf. For acquisition policies it then
-reconstructs the promoted program batch from the four program units and binds
-that batch to `training-programs.json`; for schema policies it reconstructs all
-partial candidates, refinement parents, factor evidence, five closures,
-barriers, and the frozen artifact schema from Store slots and binds them to the
-transcript reducer and execution row. The terminal operation's store-boundary
-input must contain the Store-leaf digest, and held-out execution must leave the
-Store bytes unchanged. Missing/extra programs, candidates, barriers, artifacts,
-or mismatched terminal/store-boundary evidence is invalid. Stateless PBE has no
-Store replay or Store leaf.
+policy configuration and queue to its immutable training terminal. It requires
+byte equality with the Store leaf. `nous-refine`, `positive-lgg`,
+`concrete-replay`, and `no-equality-guard` all reconstruct the four promoted
+program units and bind the resulting batch to `training-programs.json`. Only
+`nous-refine` and `no-equality-guard` additionally reconstruct all partial
+candidates, refinement parents, factor evidence, five closures, barriers, and
+the Store-resident frozen schema. `positive-lgg` binds its later pure-Go schema
+through the exact post-Store transcript and oracle reconstruction;
+`concrete-replay` binds its frozen program batch. The terminal operation's
+store-boundary input must contain the Store-leaf digest, and held-out execution
+must leave the Store bytes unchanged. Missing/extra programs, candidates,
+barriers, artifacts, or mismatched terminal/store-boundary evidence is invalid.
+Stateless PBE has no Store replay or Store leaf.
 
 Nested report wires are exact. `competence` is
 `["transform-competence/v1",351,25272,7020,microcaseCount,passed,rootSHA256]`.
@@ -1470,7 +1523,7 @@ leaf; every policy, scorer, queue, and family-assignment fixture leaf; the
 fixture root; every policy premanifest; both execution manifests; every
 transcript chunk; every object leaf and object root; every required actual
 training-Store leaf; every applicable promoted-program-batch leaf; every
-held-out-results leaf; and every competence leaf and competence root; locked
+competence leaf and competence root; locked
 additionally contains its single statistical-
 authority leaf. Empty graphs are invalid. It
 excludes the graph file itself, report, and receipt. `evidenceGraphDigest` is
