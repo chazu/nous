@@ -1,6 +1,8 @@
 # Vocabulary research program, Part 3
 
-Status: revision 4, under adversarial review.
+Status: accepted on 2026-08-08 at
+`7067e7b9f3a1fb60c5b2c9c7f769336592532396` after four adversarial review
+rounds.
 
 Revision record:
 
@@ -18,8 +20,8 @@ Revision record:
   invariant-endpoint ambiguity; and
 - revision 4 removes that second primary-claim path and precisely distinguishes
   passive/public Part 3 invariant refinement from Part 2's active hidden-probe
-  macro-F1 hypothesis. It has no implementation authority until a new
-  adversarial review accepts it.
+  macro-F1 hypothesis; the adversarial reviewer returned unqualified `ACCEPT`
+  with no remaining blocker or major concern.
 
 Part 3 is a destination-independent curriculum for improving Nous one
 reasoning operation at a time. It does not amend, resume, or claim completion
