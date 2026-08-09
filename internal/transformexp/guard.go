@@ -772,6 +772,31 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	if json.Unmarshal(competenceBytes, &competence) != nil || competence != report.Payload.Competence || competence != (CompetenceReport{351, 25272, 7020, 14, true}) {
 		return fmt.Errorf("%s competence evidence mismatch", panel)
 	}
+	competencePrefix := relativeTo(authority.Root, filepath.Join(base, "competence/cases")) + "/"
+	trackedCompetence, err := gitOutput(authority.Root, "ls-tree", "-r", "--name-only", authority.Head, "--", strings.TrimSuffix(competencePrefix, "/"))
+	if err != nil {
+		return err
+	}
+	competenceLeaves := map[string][]byte{}
+	for _, repositoryPath := range strings.Split(trackedCompetence, "\n") {
+		if repositoryPath == "" {
+			continue
+		}
+		if !strings.HasPrefix(repositoryPath, competencePrefix) {
+			return fmt.Errorf("%s invalid competence leaf path", panel)
+		}
+		relative := strings.TrimPrefix(repositoryPath, relativeTo(authority.Root, base)+"/")
+		value, err := read(relative)
+		if err != nil {
+			return err
+		}
+		competenceLeaves[relative] = value
+	}
+	rebuiltCompetence, err := canonicalEvidenceRoot("transform-competence-root/v1", "", competenceLeaves)
+	committedCompetenceRoot, rootErr := read("competence/root.json")
+	if err != nil || rootErr != nil || !bytes.Equal(rebuiltCompetence, committedCompetenceRoot) {
+		return fmt.Errorf("%s competence root does not reconstruct from case leaves", panel)
+	}
 	wantRows := DevelopmentCount * len(empiricalPolicies)
 	if panel == "validation" {
 		wantRows = ValidationCount * len(empiricalPolicies)
@@ -870,8 +895,10 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		if !exists {
 			return fmt.Errorf("%s %s execution row has no report row: %s", panel, role, key)
 		}
+		heldoutFixture, heldoutFixtureErr := read(fmt.Sprintf("fixtures/%03d/heldout.json", ordinal))
+		queueFixture, queueFixtureErr := read(fmt.Sprintf("fixtures/%03d/queue.json", ordinal))
 		premanifest, err := read(fmt.Sprintf("pre/%s/%s.json", policy, token))
-		if err != nil || digestBytes(premanifest) != premanifestDigest {
+		if err != nil || heldoutFixtureErr != nil || queueFixtureErr != nil || digestBytes(premanifest) != premanifestDigest || verifyCommittedPremanifest(premanifest, policy, token, trainingDigest, digestBytes(heldoutFixture), digestBytes(queueFixture)) != nil {
 			return fmt.Errorf("%s %s premanifest mismatch: %s", panel, role, key)
 		}
 		chunk, err := read(role + "/" + key + "/transcript.jsonl.gz")
@@ -918,13 +945,47 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		if err != nil || reduced.Vector != vector || reduced.Work != work || reduced.Applications != applications || reduced.Terminal != terminal {
 			return fmt.Errorf("%s %s transcript does not reduce to manifest: %s", panel, role, key)
 		}
+		artifactDigest, artifactErr := reconstructArtifactDigest(rawTranscript, objects, policy, terminal)
+		if artifactErr != nil || artifactDigest != schemaDigest {
+			return fmt.Errorf("%s %s frozen artifact does not reconstruct: %s", panel, role, key)
+		}
 		training, err := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
 		if err != nil || digestBytes(training) != trainingDigest {
 			return fmt.Errorf("%s %s training fixture mismatch: %s", panel, role, key)
 		}
-		if reportRow.Work != work || reportRow.Applications != applications || reportRow.Terminal != terminal || reportRow.SchemaSHA256 != schemaDigest || digestBytes(mustJSON([]any{reportRow.HeldoutCorrectBits, reportRow.FalseApplications})) != heldoutDigest {
+		familyBytes, familyErr := read(fmt.Sprintf("fixtures/%03d/family.json", ordinal))
+		if familyErr != nil || !bytes.Equal(familyBytes, mustJSON([]any{"transform-family-assignment/v1", ordinal, reportRow.Family})) {
+			return fmt.Errorf("%s family assignment does not reconstruct: %s", panel, key)
+		}
+		scorer, scorerErr := read(fmt.Sprintf("fixtures/%03d/scorer.json", ordinal))
+		results, resultErr := reconstructHeldoutResults(rawTranscript, objects, heldoutFixture)
+		score, scoreErr := scoreCommittedHeldout(results, scorer, terminal)
+		if scorerErr != nil || resultErr != nil || scoreErr != nil || digestBytes(results) != heldoutDigest {
+			return fmt.Errorf("%s %s heldout evidence does not reconstruct: %s", panel, role, key)
+		}
+		if reportRow.Work != work || reportRow.Applications != applications || reportRow.Terminal != terminal || reportRow.SchemaSHA256 != schemaDigest || reportRow.HeldoutCorrectBits != score.Bits || reportRow.FalseApplications != score.FalseApplications || reportRow.NonmatchingWork != score.NonmatchingWork {
 			return fmt.Errorf("%s %s report row does not reconstruct: %s", panel, role, key)
 		}
+	}
+	return nil
+}
+
+func verifyCommittedPremanifest(data []byte, policy Policy, token, trainingDigest, heldoutDigest, wantQueueDigest string) error {
+	var wire []json.RawMessage
+	if json.Unmarshal(data, &wire) != nil || len(wire) != 10 {
+		return errors.New("policy premanifest wire")
+	}
+	var version, experiment, cost, panelCommitment, gotToken, gotTraining, heldoutFixture, queueDigest string
+	var gotPolicy Policy
+	var caps []int
+	targets := []any{&version, &experiment, &cost, &panelCommitment, &gotPolicy, &gotToken, &gotTraining, &heldoutFixture, &queueDigest, &caps}
+	for index := range targets {
+		if json.Unmarshal(wire[index], targets[index]) != nil {
+			return errors.New("policy premanifest field")
+		}
+	}
+	if version != "transform-policy-manifest/v1" || experiment != "transform-schema/v1" || cost != "transform-lifecycle-events/v1" || gotPolicy != policy || gotToken != token || gotTraining != trainingDigest || !digestString(panelCommitment) || heldoutFixture != heldoutDigest || queueDigest != wantQueueDigest || !slices.Equal(caps, []int{12000, 50000, 48, 2000, 20000}) {
+		return errors.New("policy premanifest value")
 	}
 	return nil
 }

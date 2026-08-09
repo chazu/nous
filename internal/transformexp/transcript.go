@@ -306,7 +306,7 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 		if len(o.Outputs) == 1 {
 			s.lastOutput = o.Outputs[0]
 		}
-		s.lastAttach = oneOfString(o.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
+		s.lastAttach = oneOfString(o.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "replay-application", "output-compare", "verify")
 	}
 	if o.Phase == "terminal" && o.Operation == "terminal" {
 		s.terminal = true
@@ -436,6 +436,7 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 	lastOperation, lastOutput := "", ""
 	lastAttach := false
 	panelOrdinal, policy, taskToken := -1, "", ""
+	var lifecycle *transformLifecycleState
 	for scanner.Scan() {
 		line := bytes.Clone(scanner.Bytes())
 		event, err := parseTransformEvent(line)
@@ -444,6 +445,7 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 		}
 		if len(events) == 0 {
 			panelOrdinal, policy, taskToken = event.PanelOrdinal, event.Policy, event.TaskToken
+			lifecycle = newTransformLifecycleState(policy)
 			initial, _ := json.Marshal([]any{"transform-chain/v1", manifestDigest, event.TaskToken})
 			previous = digestBytes(initial)
 		} else if event.PanelOrdinal != panelOrdinal || event.Policy != policy || event.TaskToken != taskToken {
@@ -486,6 +488,9 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 		if err := validateTransformSemantics(operation, objects); err != nil {
 			return TransformTranscriptBundle{}, fmt.Errorf("operation %d %s semantic mismatch: %w", event.Sequence, operation.Operation, err)
 		}
+		if err := lifecycle.observe(operation, objects); err != nil {
+			return TransformTranscriptBundle{}, fmt.Errorf("operation %d %s lifecycle mismatch: %w", event.Sequence, operation.Operation, err)
+		}
 		usedObjects[event.Object] = true
 		if operation.Operation == "schema-application" || operation.Operation == "replay-application" {
 			applications++
@@ -498,7 +503,7 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 			if len(operation.Outputs) == 1 {
 				lastOutput = operation.Outputs[0]
 			}
-			lastAttach = oneOfString(operation.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
+			lastAttach = oneOfString(operation.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "replay-application", "output-compare", "verify")
 		}
 		step, _ := json.Marshal([]any{"transform-chain-step/v1", json.RawMessage(line)})
 		previous = digestBytes(step)

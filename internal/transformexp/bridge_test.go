@@ -1,7 +1,10 @@
 package transformexp
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/chazu/nous/internal/unit"
@@ -27,13 +30,25 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 1736 {
+	if len(run.MeterRecords) != 1737 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
+	closures, frozen := 0, 0
 	for i, record := range run.MeterRecords {
 		if record.Phase == "" || len(record.Inputs) == 0 {
 			t.Fatalf("meter record %d lacks semantic preimage: %+v", i, record)
 		}
+		if record.Operation == "verify" && record.Phase == "freeze" && len(record.Inputs) == 1 {
+			if objectVersion(record.Inputs[0], "transform-closure/v1") {
+				closures++
+			}
+			if objectVersion(record.Inputs[0], "transform-schema/v1") {
+				frozen++
+			}
+		}
+	}
+	if closures != 5 || frozen != 1 {
+		t.Fatalf("authenticated closures=%d frozen artifacts=%d", closures, frozen)
 	}
 	survivors := map[string][]string{}
 	for _, name := range run.Candidates {
@@ -58,6 +73,51 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := survivors["locality"]; len(got) != 1 || got[0] != "required" {
 		t.Fatalf("locality survivors=%v", got)
 	}
+}
+
+func TestReducerRejectsForgedStageClosure(t *testing.T) {
+	c, err := makeCurriculum(0, 8, 841001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runAcquisition("../../domains", c.Training, "closure-forgery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := transcriptFromAcquisition(run, 0, NousRefine, "0123456789abcdef", digestBytes([]byte("closure manifest")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := newTransformLifecycleState(string(NousRefine))
+	scanner := bufio.NewScanner(bytes.NewReader(bundle.Raw))
+	for scanner.Scan() {
+		event, _ := parseTransformEvent(scanner.Bytes())
+		operation, _ := parseTransformOperation(bundle.Objects[event.Object])
+		if operation.Operation != "verify" || !objectVersion(bundle.Objects[operation.Inputs[0]], "transform-closure/v1") {
+			if err := state.observe(operation, bundle.Objects); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		var closure []any
+		if json.Unmarshal(bundle.Objects[operation.Inputs[0]], &closure) != nil {
+			t.Fatal("closure did not decode")
+		}
+		closure[4] = strings.Repeat("0", 64)
+		forged := mustJSON(closure)
+		objects := map[string][]byte{}
+		for digest, value := range bundle.Objects {
+			objects[digest] = value
+		}
+		forgedDigest := digestBytes(forged)
+		objects[forgedDigest] = forged
+		operation.Inputs[0] = forgedDigest
+		if err := state.observe(operation, objects); err == nil {
+			t.Fatal("forged closure survivor was accepted")
+		}
+		return
+	}
+	t.Fatal("transcript contained no closure")
 }
 
 func assertRefinementProvenance(t *testing.T, run acquisitionRun) {

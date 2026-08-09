@@ -164,7 +164,15 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 				return nil, fmt.Errorf("missing or changed pre-execution manifest %s", premanifestPath)
 			}
 			row := rowsByKey[key]
-			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, row.SchemaSHA256, digestBytes(c.Training), digestBytes(mustJSON([]any{row.HeldoutCorrectBits, row.FalseApplications}))})
+			artifactDigest, err := reconstructArtifactDigest(bundle.Raw, bundle.Objects, policy, row.Terminal)
+			if err != nil || artifactDigest != row.SchemaSHA256 {
+				return nil, fmt.Errorf("reconstruct %s frozen artifact %s: got %s want %s: %w", role, key, artifactDigest, row.SchemaSHA256, err)
+			}
+			heldoutResults, err := reconstructHeldoutResults(bundle.Raw, bundle.Objects, c.Heldout)
+			if err != nil {
+				return nil, fmt.Errorf("reconstruct %s heldout results %s: %w", role, key, err)
+			}
+			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, artifactDigest, digestBytes(c.Training), digestBytes(heldoutResults)})
 		}
 	}
 	return mustJSON([]any{"transform-execution/v1", role, rows}), nil

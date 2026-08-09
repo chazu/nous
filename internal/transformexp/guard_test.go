@@ -1,6 +1,9 @@
 package transformexp
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,7 +121,10 @@ func TestProtectedPanelConstructorsHaveExactlyOneProductionCaller(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	counts := map[string]int{"developmentPanel(": 0, "validationPanel(": 0, "lockedPanel(": 0}
+	expectedCallers := map[string]string{"developmentPanel": "ExecuteDevelopment", "validationPanel": "ExecuteValidation", "lockedPanel": "ExecuteLocked"}
+	counts := map[string]int{}
+	files := map[string]*ast.File{}
+	fset := token.NewFileSet()
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
@@ -127,13 +133,50 @@ func TestProtectedPanelConstructorsHaveExactlyOneProductionCaller(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		for surface := range counts {
-			counts[surface] += strings.Count(string(data), surface)
+		if strings.Contains(string(data), "//go:linkname") {
+			t.Fatalf("linkname can bypass constructor authority in %s", entry.Name())
+		}
+		parsed, err := parser.ParseFile(fset, entry.Name(), data, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[entry.Name()] = parsed
+	}
+	for filename, file := range files {
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				identifier, ok := node.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				expectedCaller, protected := expectedCallers[identifier.Name]
+				if !protected {
+					return true
+				}
+				parentIsCall := false
+				ast.Inspect(function.Body, func(parent ast.Node) bool {
+					if call, ok := parent.(*ast.CallExpr); ok && call.Fun == identifier {
+						parentIsCall = true
+						return false
+					}
+					return !parentIsCall
+				})
+				if !parentIsCall || function.Name.Name != expectedCaller || filename != "guard.go" {
+					t.Errorf("%s is referenced outside its sole guarded call at %s", identifier.Name, fset.Position(identifier.Pos()))
+				} else {
+					counts[identifier.Name]++
+				}
+				return true
+			})
 		}
 	}
-	for surface, count := range counts {
-		if count != 2 {
-			t.Fatalf("%s production occurrences = %d, want definition plus one guarded call", surface, count)
+	for surface := range expectedCallers {
+		if counts[surface] != 1 {
+			t.Fatalf("%s direct guarded calls = %d, want one", surface, counts[surface])
 		}
 	}
 }

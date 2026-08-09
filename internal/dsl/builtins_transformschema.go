@@ -29,6 +29,8 @@ func init() {
 		"ts-make-program":       bTSMakeProgram,
 		"ts-program-edits":      bTSProgramEdits,
 		"ts-make-schema":        bTSMakeSchema,
+		"ts-close-stage":        bTSCloseStage,
+		"ts-freeze-schema":      bTSFreezeSchema,
 		"ts-meter":              bTSMeter,
 	})
 }
@@ -164,6 +166,24 @@ func recordTransform(vm *VM, operation, outcome string, category int, inputs, ou
 	if phase == "" {
 		return errors.New("unknown transformation semantic phase")
 	}
+	return recordTransformAtPhase(vm, phase, operation, outcome, category, inputs, outputs)
+}
+
+func recordTransformAtPhase(vm *VM, phase, operation, outcome string, category int, inputs, outputs [][]byte) error {
+	if vm.CurrentTask == nil || vm.Store == nil {
+		return nil
+	}
+	current := vm.Store.Get(vm.CurrentTask.UnitName)
+	if current == nil {
+		return nil
+	}
+	experiment := current
+	if name := current.GetString("experiment"); name != "" {
+		experiment = vm.Store.Get(name)
+	}
+	if experiment == nil || experiment.GetString("meterToken") == "" {
+		return nil
+	}
 	token := experiment.GetString("meterToken")
 	transformMeters.Lock()
 	m := transformMeters.items[token]
@@ -181,6 +201,129 @@ func recordTransform(vm *VM, operation, outcome string, category int, inputs, ou
 	m.Lock()
 	m.records = append(m.records, TransformMeterRecord{uint8(category), operation, subject, object, outcome, phase, cloneTransformBytes(inputs), cloneTransformBytes(outputs)})
 	m.Unlock()
+	return nil
+}
+
+func bTSCloseStage(vm *VM) error {
+	stageValue, experimentValue := vm.pop(), vm.pop()
+	if stageValue.Kind() != VString || experimentValue.Kind() != VString || vm.Store == nil || vm.CurrentTask == nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	stage := stageValue.AsString()
+	stageIndex := map[string]int{"target": 0, "anchor": 1, "scope": 2, "old-guard": 3, "locality": 4}[stage]
+	if stageIndex == 0 && stage != "target" {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	experiment := vm.Store.Get(experimentValue.AsString())
+	if experiment == nil || experiment.Name != vm.CurrentTask.UnitName {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	for _, name := range experiment.GetStrings("candidateUnits") {
+		candidate := vm.Store.Get(name)
+		if candidate != nil && candidate.Name != experiment.GetString("rootCandidate") && (candidate.GetString("status") == "pending" || candidate.GetString("evidenceUnit") == "") {
+			vm.push(BoolVal(false))
+			return nil
+		}
+	}
+	closureSlot := "meteredClosure." + stage
+	if experiment.GetBool(closureSlot + ".done") {
+		vm.push(BoolVal(experiment.GetBool(closureSlot + ".valid")))
+		return nil
+	}
+	type alternative struct {
+		partial, result, status string
+	}
+	var alternatives []alternative
+	parentDigest := ""
+	survivorDigest := ""
+	valid := true
+	for _, name := range experiment.GetStrings("candidateUnits") {
+		candidate := vm.Store.Get(name)
+		if candidate == nil || candidate.GetString("stage") != stage {
+			continue
+		}
+		partial := []byte(candidate.GetString("partial"))
+		parsed, err := transformschema.ParsePartial(partial)
+		if err != nil || parsed.Stage != stageIndex+1 {
+			valid = false
+			continue
+		}
+		parent := vm.Store.Get(candidate.GetString("parentCandidate"))
+		if parent == nil {
+			valid = false
+			continue
+		}
+		parentPartial := []byte(parent.GetString("partial"))
+		parsedParent, err := transformschema.ParsePartial(parentPartial)
+		if err != nil || parsedParent.Stage != stageIndex {
+			valid = false
+			continue
+		}
+		thisParent := transformDigest(parentPartial)
+		if parentDigest == "" {
+			parentDigest = thisParent
+		} else if parentDigest != thisParent {
+			valid = false
+		}
+		evidence := vm.Store.Get(candidate.GetString("evidenceUnit"))
+		matched := evidence != nil && evidence.GetBool("matched")
+		status := "counterexample"
+		if candidate.GetString("disposition") == "ablated-ineligible" {
+			status = "ablated-ineligible"
+			matched = false
+		} else if candidate.GetString("status") == "survivor" && matched {
+			status = "survivor"
+			survivorDigest = transformDigest(partial)
+		} else if candidate.GetString("status") == "survivor" || matched {
+			valid = false
+		}
+		result := transformAtom("boolean", matched)
+		alternatives = append(alternatives, alternative{transformDigest(partial), transformDigest(result), status})
+	}
+	slices.SortFunc(alternatives, func(a, b alternative) int { return bytes.Compare([]byte(a.partial), []byte(b.partial)) })
+	wantAlternatives := []int{3, 3, 2, 2, 2}[stageIndex]
+	if len(alternatives) != wantAlternatives || survivorDigest == "" {
+		valid = false
+	}
+	rows := make([]any, len(alternatives))
+	for index, alternative := range alternatives {
+		rows[index] = []any{alternative.partial, alternative.result, alternative.status}
+	}
+	closure, _ := json.Marshal([]any{"transform-closure/v1", stage, parentDigest, rows, survivorDigest})
+	outcome := "verified"
+	if !valid {
+		outcome = "rejected"
+	}
+	if err := recordTransformAtPhase(vm, "freeze", "verify", outcome, 11, [][]byte{closure}, [][]byte{transformAtom("boolean", valid)}); err != nil {
+		return err
+	}
+	experiment.Set(closureSlot+".valid", valid)
+	experiment.Set(closureSlot+".done", true)
+	vm.push(BoolVal(valid))
+	return nil
+}
+
+func bTSFreezeSchema(vm *VM) error {
+	value := vm.pop()
+	if value.Kind() != VString {
+		vm.push(Nil())
+		return nil
+	}
+	data := []byte(value.AsString())
+	if _, err := transformschema.ParseSchema(data); err != nil {
+		if recordErr := recordTransformAtPhase(vm, "freeze", "verify", "rejected", 11, [][]byte{data}, [][]byte{transformAtom("boolean", false)}); recordErr != nil {
+			return recordErr
+		}
+		vm.push(Nil())
+		return nil
+	}
+	if err := recordTransformAtPhase(vm, "freeze", "verify", "verified", 11, [][]byte{data}, [][]byte{transformAtom("boolean", true)}); err != nil {
+		return err
+	}
+	vm.push(value)
 	return nil
 }
 

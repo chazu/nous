@@ -209,7 +209,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	if err != nil {
 		return SafePanelReport{}, panelArtifacts{}, err
 	}
-	report.Limitations = []string{"evidence graph and protected repository authority are not yet implemented", "safe runner is not protected-panel evidence"}
+	report.Limitations = []string{"safe runner is not protected-panel evidence"}
 	slices.Sort(report.Limitations)
 	report.MechanicallyValid = report.DualExecutionEqual && report.TranscriptHashesEqual && report.Conservation && report.OracleParity && report.ProgramsExact && report.ApplicationsExact && report.ArtifactFrozen && report.HeldoutSealed
 	return report, artifacts, nil

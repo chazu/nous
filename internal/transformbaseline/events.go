@@ -25,7 +25,10 @@ func ReplayMetered(programBatchBytes []byte, token string, forestBytes []byte, p
 		outputDigest = baselineDigest(application.Output)
 	}
 	result, _ := json.Marshal([]any{"transform-result/v1", application.Terminal, outputDigest})
-	return application, []Event{{11, "replay-application", phase, application.Terminal, [][]byte{forestBytes, programBatchBytes}, [][]byte{result}}}, nil
+	return application, []Event{
+		{11, "replay-application", phase, application.Terminal, [][]byte{forestBytes, programBatchBytes}, [][]byte{result}},
+		{10, "evidence-link", phase, "attached", [][]byte{result}, nil},
+	}, nil
 }
 
 func ApplySchemaMetered(forestBytes, schemaBytes []byte, phase string) (Application, []Event, error) {

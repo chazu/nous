@@ -7,7 +7,7 @@ import (
 
 func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 	manifest := digestBytes([]byte("manifest"))
-	sink, err := newTransformTranscriptSink(7, string(NousRefine), "0123456789abcdef", manifest)
+	sink, err := newTransformTranscriptSink(7, string(PositiveLGG), "0123456789abcdef", manifest)
 	if err != nil {
 		t.Fatal(err)
 	}

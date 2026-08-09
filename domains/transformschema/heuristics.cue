@@ -401,8 +401,14 @@ units: [
 				then
 			end
 			"pending" @ 0 = "targetCount" @ 1 = and "anchorCount" @ 1 = and "scopeCount" @ 1 = and "guardCount" @ 1 = and "localityCount" @ 1 = and
+			true "closuresValid" !
+			"target" "anchor" "scope" "old-guard" "locality" 5 list-of each
+				it "closureStage" !
+				"experiment" @ "closureStage" @ ts-close-stage "closuresValid" @ and "closuresValid" !
+			end
+			"closuresValid" @ and
 			if
-				"anchor" @ "target" @ "scope" @ "guard" @ "locality" @ ts-make-schema "schema" !
+				"anchor" @ "target" @ "scope" @ "guard" @ "locality" @ ts-make-schema ts-freeze-schema "schema" !
 				true "valid" !
 				"TransformTrainingCase" examples each
 					it "example" !
