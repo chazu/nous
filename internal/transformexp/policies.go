@@ -43,10 +43,18 @@ type PolicyOutcome struct {
 	HeldoutStoreUnchanged bool
 	acquisition           *acquisitionRun
 	baselineEvents        []transformbaseline.Event
+	heldoutObservations   []heldoutObservation
+	frozenReplayBatch     []byte
 }
 
-func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcome, error) {
-	out := PolicyOutcome{Policy: policy, HeldoutTotal: len(c.Expected)}
+type heldoutObservation struct {
+	Token, Terminal string
+	Output          []byte
+	Work            int64
+}
+
+func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (PolicyOutcome, error) {
+	out := PolicyOutcome{Policy: policy, HeldoutTotal: 8}
 	switch policy {
 	case NousRefine, NoEqualityGuard:
 		var configure func(*unit.Store)
@@ -91,7 +99,7 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 		} else {
 			out.Terminal = "completed"
 			out.baselineEvents = baselineEventsFromTransformMeter(run.MeterRecords)
-			return scoreReplay(c, batch, out)
+			return validateReplayTraining(c, batch, out)
 		}
 	case BoundedPBE, RandomPBE:
 		var learned transformbaseline.Result
@@ -132,19 +140,31 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 		}
 		return out, nil
 	}
-	return scoreSchema(c, out)
+	return out, nil
 }
 
-func scoreSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
-	if out.Policy == NousRefine || out.Policy == NoEqualityGuard {
-		return scoreProductionSchema(c, out)
+func executeHeldoutInputs(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {
+	if out.Terminal != "completed" {
+		return out, nil
 	}
-	heldout, err := transformfixturecore.ParseHeldout(c.Heldout)
+	if out.Policy == ConcreteReplay {
+		return scoreReplayHeldout(c, heldoutBytes, out)
+	}
+	if len(out.Schema) == 0 {
+		return out, nil
+	}
+	return scoreSchema(c, heldoutBytes, out)
+}
+
+func scoreSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {
+	if out.Policy == NousRefine || out.Policy == NoEqualityGuard {
+		return scoreProductionSchema(c, heldoutBytes, out)
+	}
+	heldout, err := transformfixturecore.ParseHeldout(heldoutBytes)
 	if err != nil {
 		return out, err
 	}
-	expected := expectedByToken(c)
-	for caseIndex, test := range heldout.Cases {
+	for _, test := range heldout.Cases {
 		beforeEventCount := len(out.baselineEvents)
 		application, events, applyErr := transformbaseline.ApplySchemaMetered(test.Before, out.Schema, "heldout")
 		err = applyErr
@@ -153,24 +173,7 @@ func scoreSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
 		}
 		out.baselineEvents = append(out.baselineEvents, events...)
 		out.Applications++
-		truth := expected[test.Token]
-		if truth.Terminal == "applied" && application.Terminal == "applied" {
-			_, comparisons, compareErr := transformbaseline.CompareOutputsMetered(application.Output, truth.Output, "heldout")
-			if compareErr != nil {
-				return out, compareErr
-			}
-			out.baselineEvents = append(out.baselineEvents, comparisons...)
-		}
-		if correctApplication(application, truth) {
-			out.HeldoutCorrect++
-			out.HeldoutCorrectBits |= 1 << caseIndex
-		}
-		if truth.Terminal == "abstain" && application.Terminal == "applied" {
-			out.FalseApplications++
-		}
-		if truth.Terminal == "abstain" {
-			out.NonmatchingWork += baselineEventWork(out.baselineEvents[beforeEventCount:])
-		}
+		out.heldoutObservations = append(out.heldoutObservations, heldoutObservation{test.Token, application.Terminal, bytes.Clone(application.Output), baselineEventWork(out.baselineEvents[beforeEventCount:])})
 	}
 	if out.Policy == PositiveLGG || out.Policy == BoundedPBE || out.Policy == RandomPBE {
 		out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, out.Schema)
@@ -183,7 +186,7 @@ func scoreSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
 	return out, nil
 }
 
-func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
+func scoreProductionSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {
 	if out.acquisition == nil {
 		return out, errors.New("production heldout is missing frozen acquisition")
 	}
@@ -192,7 +195,7 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 	if run.Terminal != "completed" || run.Artifact == "" || !bytes.Equal([]byte(run.Store.Get(run.Artifact).GetString("schema")), out.Schema) {
 		return out, errors.New("production heldout acquisition did not reproduce frozen schema")
 	}
-	heldout, err := transformfixturecore.ParseHeldout(c.Heldout)
+	heldout, err := transformfixturecore.ParseHeldout(heldoutBytes)
 	if err != nil {
 		return out, err
 	}
@@ -212,8 +215,7 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 	defer experimentUnit.Set("meterToken", oldMeter)
 	vm := dsl.NewVM(run.Store, agenda.New(), nil)
 	vm.CurrentTask = &agenda.Task{UnitName: experiment, SlotName: "tsHeldout"}
-	expected := expectedByToken(c)
-	for caseIndex, test := range heldout.Cases {
+	for _, test := range heldout.Cases {
 		beforeRecords, snapshotErr := dsl.TransformMeterSnapshot(meterToken)
 		if snapshotErr != nil {
 			return out, snapshotErr
@@ -224,35 +226,19 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 		}
 		application := transformbaseline.Application{Terminal: terminal, Output: output}
 		out.Applications++
-		truth := expected[test.Token]
-		if truth.Terminal == "applied" && application.Terminal == "applied" {
-			_, compareErr := dsl.CompareTransformOutputs(vm, application.Output, truth.Output)
-			if compareErr != nil {
-				return out, fmt.Errorf("heldout output comparison: %v", compareErr)
-			}
+		afterRecords, snapshotErr := dsl.TransformMeterSnapshot(meterToken)
+		if snapshotErr != nil {
+			return out, snapshotErr
 		}
-		if correctApplication(application, truth) {
-			out.HeldoutCorrect++
-			out.HeldoutCorrectBits |= 1 << caseIndex
+		beforeWork, _, workErr := transformMeterWork(beforeRecords)
+		if workErr != nil {
+			return out, workErr
 		}
-		if truth.Terminal == "abstain" && application.Terminal == "applied" {
-			out.FalseApplications++
+		afterWork, _, workErr := transformMeterWork(afterRecords)
+		if workErr != nil {
+			return out, workErr
 		}
-		if truth.Terminal == "abstain" {
-			afterRecords, snapshotErr := dsl.TransformMeterSnapshot(meterToken)
-			if snapshotErr != nil {
-				return out, snapshotErr
-			}
-			beforeWork, _, workErr := transformMeterWork(beforeRecords)
-			if workErr != nil {
-				return out, workErr
-			}
-			afterWork, _, workErr := transformMeterWork(afterRecords)
-			if workErr != nil {
-				return out, workErr
-			}
-			out.NonmatchingWork += afterWork - beforeWork
-		}
+		out.heldoutObservations = append(out.heldoutObservations, heldoutObservation{test.Token, application.Terminal, bytes.Clone(application.Output), afterWork - beforeWork})
 	}
 	records, err := dsl.TransformMeterSnapshot(meterToken)
 	if err != nil {
@@ -271,7 +257,7 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 	return out, err
 }
 
-func scoreReplay(c curriculum, batch []byte, out PolicyOutcome) (PolicyOutcome, error) {
+func validateReplayTraining(c policyCurriculum, batch []byte, out PolicyOutcome) (PolicyOutcome, error) {
 	training, err := transformfixturecore.ParseTraining(c.Training)
 	if err != nil {
 		return out, err
@@ -290,37 +276,39 @@ func scoreReplay(c curriculum, batch []byte, out PolicyOutcome) (PolicyOutcome, 
 			out.FalseApplications++
 		}
 	}
-	heldout, err := transformfixturecore.ParseHeldout(c.Heldout)
+	out.frozenReplayBatch = bytes.Clone(batch)
+	return out, nil
+}
+
+func scoreReplayHeldout(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {
+	if len(out.frozenReplayBatch) == 0 {
+		return out, errors.New("replay heldout is missing frozen program batch")
+	}
+	heldout, err := transformfixturecore.ParseHeldout(heldoutBytes)
 	if err != nil {
 		return out, err
 	}
-	expected := expectedByToken(c)
-	for caseIndex, test := range heldout.Cases {
+	for _, test := range heldout.Cases {
 		beforeEventCount := len(out.baselineEvents)
-		application, events, err := transformbaseline.ReplayMetered(batch, test.Token, test.Before, "heldout")
+		application, events, err := transformbaseline.ReplayMetered(out.frozenReplayBatch, test.Token, test.Before, "heldout")
 		if err != nil {
 			return out, err
 		}
 		out.Applications++
 		out.baselineEvents = append(out.baselineEvents, events...)
-		if correctApplication(application, expected[test.Token]) {
-			out.HeldoutCorrect++
-			out.HeldoutCorrectBits |= 1 << caseIndex
-		}
-		if expected[test.Token].Terminal == "abstain" {
-			out.NonmatchingWork += baselineEventWork(out.baselineEvents[beforeEventCount:])
-		}
+		out.heldoutObservations = append(out.heldoutObservations, heldoutObservation{test.Token, application.Terminal, bytes.Clone(application.Output), baselineEventWork(out.baselineEvents[beforeEventCount:])})
 	}
-	out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, batch)
+	out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, out.frozenReplayBatch)
 	if err != nil {
 		return out, err
 	}
 	out.TrainingWork = int(out.Transcript.Work)
 	out.baselineEvents = nil
+	out.frozenReplayBatch = nil
 	return out, nil
 }
 
-func scoreTrainingNegatives(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
+func scoreTrainingNegatives(c policyCurriculum, out PolicyOutcome) (PolicyOutcome, error) {
 	training, err := transformfixturecore.ParseTraining(c.Training)
 	if err != nil {
 		return out, err
@@ -349,12 +337,47 @@ func correctApplication(application transformbaseline.Application, truth expecte
 	return len(application.Terminal) >= 8 && application.Terminal[:8] == "abstain/"
 }
 
-func expectedByToken(c curriculum) map[string]expectedCase {
+func expectedByToken(c scorerCurriculum) map[string]expectedCase {
 	out := make(map[string]expectedCase, len(c.Expected))
 	for _, expected := range c.Expected {
 		out[expected.Token] = expected
 	}
 	return out
+}
+
+func scorePolicyOutcome(scorer scorerCurriculum, out PolicyOutcome) (PolicyOutcome, error) {
+	truth := expectedByToken(scorer)
+	out.HeldoutCorrect = 0
+	out.HeldoutCorrectBits = 0
+	out.FalseApplications = 0
+	out.NonmatchingWork = 0
+	previous := ""
+	for index, observation := range out.heldoutObservations {
+		if observation.Token <= previous {
+			return out, fmt.Errorf("heldout observations are not in opaque-token order")
+		}
+		expected, ok := truth[observation.Token]
+		if !ok {
+			return out, fmt.Errorf("heldout observation has no sealed expectation")
+		}
+		application := transformbaseline.Application{Terminal: observation.Terminal, Output: observation.Output}
+		if correctApplication(application, expected) {
+			out.HeldoutCorrect++
+			out.HeldoutCorrectBits |= 1 << index
+		}
+		if expected.Terminal == "abstain" {
+			out.NonmatchingWork += observation.Work
+			if observation.Terminal == "applied" {
+				out.FalseApplications++
+			}
+		}
+		previous = observation.Token
+	}
+	if len(out.heldoutObservations) != 0 && len(out.heldoutObservations) != len(scorer.Expected) {
+		return out, fmt.Errorf("heldout observation count mismatch")
+	}
+	out.heldoutObservations = nil
+	return out, nil
 }
 
 func programBatch(run acquisitionRun) ([]byte, error) {
@@ -373,22 +396,21 @@ func programBatch(run acquisitionRun) ([]byte, error) {
 	return batch.CanonicalJSON()
 }
 
-func policyToken(c curriculum, policy Policy) string {
+func policyToken(c policyCurriculum, policy Policy) string {
 	return c.PolicyTokens[policy]
 }
 
-func policySeed(c curriculum, policy Policy) (uint64, uint64) {
+func policySeed(c policyCurriculum, policy Policy) (uint64, uint64) {
 	value := c.PolicyRandomness[policy]
 	return value[0], value[1]
 }
 
-func policyManifestDigest(c curriculum, policy Policy) string {
+func policyManifestDigest(c policyCurriculum, policy Policy) string {
 	return digestBytes(policyManifestBytes(c, policy))
 }
 
-func policyManifestBytes(c curriculum, policy Policy) []byte {
+func policyManifestBytes(c policyCurriculum, policy Policy) []byte {
 	training := sha256.Sum256(c.Training)
-	heldout := sha256.Sum256(c.Heldout)
-	queueDigest := digestBytes(mustJSON([]any{"transform-policy-queue/v1", c.Ordinal, empiricalPolicies}))
-	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", c.PanelCommitment, policy, c.PolicyTokens[policy], hex.EncodeToString(training[:]), hex.EncodeToString(heldout[:]), queueDigest, []int{12000, 50000, 48, 2000, 20000}})
+	queueDigest := digestBytes(policyQueueBytesFromView(c))
+	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", c.PanelCommitment, policy, c.PolicyTokens[policy], hex.EncodeToString(training[:]), c.HeldoutDigest, queueDigest, []int{12000, 50000, 48, 2000, 20000}})
 }

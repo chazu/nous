@@ -84,23 +84,13 @@ func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]by
 		base := fmt.Sprintf("fixtures/%03d", c.Ordinal)
 		fixtureFiles[base+"/training.json"] = bytes.Clone(c.Training)
 		fixtureFiles[base+"/heldout.json"] = bytes.Clone(c.Heldout)
-		expected := make([]any, len(c.Expected))
-		for i, value := range c.Expected {
-			var output any
-			if len(value.Output) != 0 {
-				if json.Unmarshal(value.Output, &output) != nil {
-					return nil, nil, fmt.Errorf("expected output JSON")
-				}
-			}
-			expected[i] = []any{value.Token, value.Terminal, output}
+		scorer, err := scorerFixtureBytes(c)
+		if err != nil {
+			return nil, nil, err
 		}
-		var latent any
-		if json.Unmarshal(c.Latent, &latent) != nil {
-			return nil, nil, fmt.Errorf("latent JSON")
-		}
-		fixtureFiles[base+"/scorer.json"] = mustJSON([]any{"transform-scorer-curriculum/v1", c.Family, c.SeedCommitment, c.AcceptedAttempt, latent, expected})
+		fixtureFiles[base+"/scorer.json"] = scorer
 		fixtureFiles[base+"/family.json"] = mustJSON([]any{"transform-family-assignment/v1", c.Ordinal, c.Family})
-		fixtureFiles[base+"/queue.json"] = mustJSON([]any{"transform-policy-queue/v1", c.Ordinal, empiricalPolicies})
+		fixtureFiles[base+"/queue.json"] = policyQueueBytes(c)
 	}
 	fixtureRoot, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
 	if err != nil {
@@ -117,6 +107,10 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 	var rows []any
 	for _, policy := range empiricalPolicies {
 		for _, c := range curricula {
+			policyView, err := decodePolicyView(c)
+			if err != nil {
+				return nil, err
+			}
 			key := fmt.Sprintf("%s/%03d", policy, c.Ordinal)
 			bundle, ok := bundles[key]
 			if !ok || len(bundle.Raw) == 0 || len(bundle.Gzip) == 0 {
@@ -138,7 +132,7 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 				return nil, err
 			}
 			files[base+"/object-root.json"] = objectRoot
-			premanifest := policyManifestBytes(c, policy)
+			premanifest := policyManifestBytes(policyView, policy)
 			files[base+"/premanifest.json"] = premanifest
 			row := rowsByKey[key]
 			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, row.SchemaSHA256, digestBytes(c.Training), digestBytes(mustJSON([]any{row.HeldoutCorrectBits, row.FalseApplications}))})

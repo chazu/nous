@@ -82,13 +82,53 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 		}
 		outcomes := map[Policy]PolicyOutcome{}
 		for _, policy := range empiricalPolicies {
-			outcome, err := executePolicy(domainsDir, c, policy)
+			primaryView, err := decodePolicyView(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			outcome, err := executePolicy(domainsDir, primaryView, policy)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d policy %s: %w", c.Ordinal, policy, err)
 			}
-			audit, err := executePolicy(domainsDir, c, policy)
+			primaryHeldout, err := decodeHeldoutInputs(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			outcome, err = executeHeldoutInputs(primaryView, primaryHeldout, outcome)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			primaryScorer, err := decodeScorerView(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			outcome, err = scorePolicyOutcome(primaryScorer, outcome)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			auditView, err := decodePolicyView(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			audit, err := executePolicy(domainsDir, auditView, policy)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d policy %s audit: %w", c.Ordinal, policy, err)
+			}
+			auditHeldout, err := decodeHeldoutInputs(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			audit, err = executeHeldoutInputs(auditView, auditHeldout, audit)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			auditScorer, err := decodeScorerView(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			audit, err = scorePolicyOutcome(auditScorer, audit)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
 			}
 			if outcome.Terminal != audit.Terminal || outcome.Applications != audit.Applications || outcome.HeldoutCorrect != audit.HeldoutCorrect || outcome.HeldoutCorrectBits != audit.HeldoutCorrectBits || outcome.FalseApplications != audit.FalseApplications || outcome.NonmatchingWork != audit.NonmatchingWork || !bytes.Equal(outcome.Schema, audit.Schema) {
 				report.DualExecutionEqual = false

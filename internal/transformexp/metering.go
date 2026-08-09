@@ -39,7 +39,7 @@ func baselineEventsFromTransformMeter(records []dsl.TransformMeterRecord) []tran
 	return events
 }
 
-func transcriptFromBaselineEvents(events []transformbaseline.Event, c curriculum, policy Policy, terminal string, schema []byte) (TransformTranscriptBundle, error) {
+func transcriptFromBaselineEvents(events []transformbaseline.Event, c policyCurriculum, policy Policy, terminal string, schema []byte) (TransformTranscriptBundle, error) {
 	sink, err := newTransformTranscriptSink(c.Ordinal, string(policy), c.PolicyTokens[policy], policyManifestDigest(c, policy))
 	if err != nil {
 		return TransformTranscriptBundle{}, err
