@@ -4,7 +4,18 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/nogoodfixture"
+	"github.com/chazu/nous/internal/vocab/nogoods"
 )
+
+func TestBridgeProfileDigestIsCommitted(t *testing.T) {
+	execution, err := NewBridgeExecution("../../domains", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.profileHash != committedBridgeProfileHash {
+		t.Fatalf("profile hash = %s", execution.profileHash)
+	}
+}
 
 func learnedArtifact(t *testing.T) (FrozenArtifact, ArtifactAuthority) {
 	t.Helper()
@@ -26,7 +37,7 @@ func learnedArtifact(t *testing.T) (FrozenArtifact, ArtifactAuthority) {
 	return decoded, authority
 }
 
-func TestLearnedArtifactPrunesOnlyReusableDevelopmentCases(t *testing.T) {
+func TestLearnedArtifactProposesOnlyOnReusableDevelopmentCases(t *testing.T) {
 	artifact, authority := learnedArtifact(t)
 	tasks, err := nogoodfixture.Panel("development")
 	if err != nil {
@@ -46,6 +57,19 @@ func TestLearnedArtifactPrunesOnlyReusableDevelopmentCases(t *testing.T) {
 		}
 		if disposition.TasksPopped != 1 {
 			t.Fatalf("task %d popped %d bridge tasks", task.Ordinal, disposition.TasksPopped)
+		}
+	}
+}
+
+func TestBridgeRejectsInvalidDecisionWithoutCreatingRequest(t *testing.T) {
+	artifact, authority := learnedArtifact(t)
+	tasks, err := nogoodfixture.Panel("development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decision := range []nogoods.Literal{{Variable: -1, Color: 0}, {Variable: 99, Color: 0}, {Variable: tasks[0].Decision.Variable, Color: 99}} {
+		if _, err := ConsiderPrune("../../domains", tasks[0].ProblemJSON, decision, &artifact, &authority); err == nil {
+			t.Fatalf("accepted invalid decision %#v", decision)
 		}
 	}
 }

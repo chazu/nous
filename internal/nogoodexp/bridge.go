@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
@@ -24,7 +25,10 @@ type BridgeExecution struct {
 	artifact    *FrozenArtifact
 	authority   *ArtifactAuthority
 	nextRequest int
+	preflight   []TranscriptEvent
 }
+
+const committedBridgeProfileHash = "23fab58512b8b167fe3851b034722ac419307cd6b89aaf48dfc87bc962b2dfa4"
 
 func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *ArtifactAuthority) (*BridgeExecution, error) {
 	store := unit.NewStore()
@@ -39,6 +43,9 @@ func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *
 	if err != nil {
 		return nil, err
 	}
+	if profileHash != committedBridgeProfileHash {
+		return nil, fmt.Errorf("bridge profile digest drifted: %s", profileHash)
+	}
 	if artifact != nil {
 		if err := installArtifact(store, *artifact, authority); err != nil {
 			return nil, err
@@ -46,7 +53,15 @@ func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *
 		copyArtifact := *artifact
 		artifact = &copyArtifact
 	}
-	return &BridgeExecution{base: store, profileHash: profileHash, artifact: artifact, authority: authority, nextRequest: 1}, nil
+	return &BridgeExecution{base: store, profileHash: profileHash, artifact: artifact, authority: authority, nextRequest: 1, preflight: profilePreflightTranscript(profileHash)}, nil
+}
+
+func profilePreflightTranscript(profileHash string) []TranscriptEvent {
+	events := make([]TranscriptEvent, 0, 54)
+	for counter := int32(1); counter <= 54; counter++ {
+		events = append(events, TranscriptEvent{Category: 12, Code: 16, TaskOrdinal: 0xffffffff, Operands: [8]TranscriptOperand{ID("NG-H-ConsiderPrune"), OptionalID(""), Number(counter), ID("profile-preflight:" + profileHash[:16]), ID("ok"), Omitted(), Omitted(), Omitted()}})
+	}
+	return events
 }
 
 func auditBridgeProfile(store *unit.Store) (string, error) {
@@ -99,6 +114,9 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	if err != nil {
 		return Disposition{}, err
 	}
+	if decision.Variable < 0 || decision.Variable >= len(problem.Variables) || !problem.DomainContains(decision.Variable, decision.Color) || slices.ContainsFunc(problem.Assignment, func(literal nogoods.Literal) bool { return literal.Variable == decision.Variable }) {
+		return Disposition{}, fmt.Errorf("invalid supplied bridge decision")
+	}
 	store := cloneStore(execution.base)
 	requestNumber := execution.nextRequest
 	execution.nextRequest++
@@ -113,14 +131,11 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		reducedDomains[index] = slices.Clone(variable.Domain)
 	}
 	reducedDomains[decision.Variable] = []int{decision.Color}
-	for variable := range reducedDomains {
-		if variable != decision.Variable && problem.EdgePresent(variable, decision.Variable) {
-			reducedDomains[variable] = slices.DeleteFunc(reducedDomains[variable], func(color int) bool { return color == decision.Color })
-		}
-	}
 	targetDigest := digestBytes(problemJSON)
 	decisionDigest := digestJSON(decision)
-	assignmentDigest := digestJSON(problem.Assignment)
+	currentAssignment := append(slices.Clone(problem.Assignment), decision)
+	slices.SortFunc(currentAssignment, func(a, b nogoods.Literal) int { return a.Variable - b.Variable })
+	assignmentDigest := digestJSON(currentAssignment)
 	immutableDigest := digestJSON(immutableDomains)
 	reducedDigest := digestJSON(reducedDomains)
 	conflictDigest := digestJSON([]string{})
@@ -144,7 +159,21 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	request.Set("reducedDomainDigest", reducedDigest)
 	request.Set("exactConflictStoreDigest", conflictDigest)
 	request.Set("artifactStoreDigest", artifactStoreDigest)
+	acceptedArtifactDigest, acceptedEvidenceDigest, acceptedPromotionDigest, acceptedProvenanceDigest := "", "", "", ""
+	if execution.artifact != nil && execution.authority != nil && execution.authority.accepts(*execution.artifact) {
+		acceptedArtifactDigest = execution.artifact.Digest
+		acceptedEvidenceDigest = execution.artifact.EvidenceBoundaryDigest
+		acceptedPromotionDigest = execution.artifact.PromotionDigest
+		acceptedProvenanceDigest = execution.artifact.ProvenanceDigest
+	}
+	request.Set("acceptedArtifactDigest", acceptedArtifactDigest)
+	request.Set("acceptedEvidenceDigest", acceptedEvidenceDigest)
+	request.Set("acceptedPromotionDigest", acceptedPromotionDigest)
+	request.Set("acceptedProvenanceDigest", acceptedProvenanceDigest)
 	request.Set("requestDigest", requestDigest)
+	for index, variable := range problem.Variables {
+		request.Set(fmt.Sprintf("domain%d", index), slices.Clone(variable.Domain))
+	}
 	store.Put(request)
 
 	ag := agenda.New()
@@ -184,25 +213,30 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		return Disposition{}, fmt.Errorf("invalid disposition status %q", status)
 	}
 	if status == "propose-prune" {
+		barrier := store.Get(result.Barrier)
+		referenceDigest, referenceErr := dsl.UnitSetDigest(store, []string{result.Request, result.Artifact, result.Binding, result.Completion, result.Certificate, result.Barrier, result.Proposal})
+		barrierDigest := ""
+		if barrier != nil && referenceErr == nil {
+			barrierDigest = digestJSON([]any{barrier.GetStrings("predicateKeys"), barrier.GetStrings("predicateOutcomeKeys"), referenceDigest, requestDigest, targetDigest, decisionDigest, assignmentDigest, immutableDigest, reducedDigest, conflictDigest})
+		}
 		checks := [6]bool{
 			disposition.GetBool("sealed") && disposition.GetString("request") == requestName,
-			store.Get(result.Barrier) != nil && store.Get(result.Barrier).GetBool("sealed"),
+			barrier != nil && barrier.GetBool("sealed") && barrier.GetString("barrierDigest") == barrierDigest && len(barrier.GetStrings("predicateKeys")) == 18 && !slices.Contains(barrier.GetStrings("predicateOutcomeKeys"), "false"),
 			execution.artifact != nil && execution.authority != nil && execution.authority.accepts(*execution.artifact) && result.Artifact == execution.artifact.Name,
 			store.Get(result.Completion) != nil && store.Get(result.Completion).GetBool("conflict"),
 			disposition.GetString("requestDigest") == requestDigest && disposition.GetString("targetDigest") == targetDigest && disposition.GetString("decisionDigest") == decisionDigest,
-			disposition.GetString("referencedUnitSetDigest") == referenceDigest(result),
+			referenceErr == nil && disposition.GetString("referencedUnitSetDigest") == referenceDigest && disposition.GetString("barrierDigest") == barrierDigest,
 		}
 		for index, passed := range checks {
 			if !passed {
+				if index == 1 && barrier != nil {
+					return Disposition{}, fmt.Errorf("adapter proposal check 2 failed: barrier digest got=%q want=%q refs=%q barrierRefs=%q keys=%v outcomes=%v", barrier.GetString("barrierDigest"), barrierDigest, referenceDigest, barrier.GetString("referencedUnitSetDigest"), barrier.GetStrings("predicateKeys"), barrier.GetStrings("predicateOutcomeKeys"))
+				}
 				return Disposition{}, fmt.Errorf("adapter proposal check %d failed", index+1)
 			}
 		}
 	}
 	return result, nil
-}
-
-func referenceDigest(result Disposition) string {
-	return digestJSON([]string{result.Request, result.Artifact, result.Binding, result.Completion, result.Certificate, result.Barrier, result.Proposal})
 }
 
 func cloneStore(source *unit.Store) *unit.Store {

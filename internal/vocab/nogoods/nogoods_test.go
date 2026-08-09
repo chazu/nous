@@ -196,3 +196,27 @@ func TestCertificateRecordIsOneRecordNotSetValidation(t *testing.T) {
 		t.Fatalf("corrupt record error = %v", err)
 	}
 }
+
+func TestGuardMatcherAgreesWithFiveAtomDefinitionExhaustively(t *testing.T) {
+	pairs := [][]int{{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}}
+	for _, anchorDomain := range pairs {
+		for _, xDomain := range pairs {
+			for _, yDomain := range pairs {
+				problem := Problem{Version: ProblemVersion, ColorAliases: []string{"c0", "c1", "c2", "c3"}, Variables: []Variable{{Alias: "a", Domain: anchorDomain}, {Alias: "x", Domain: xDomain}, {Alias: "y", Domain: yDomain}}, Assignment: []Literal{}}
+				for decisionColor := 0; decisionColor < 4; decisionColor++ {
+					for blocked := 0; blocked < 4; blocked++ {
+						for escape := 0; escape < 4; escape++ {
+							for only := 0; only < 4; only++ {
+								binding := Binding{Anchor: 0, X: 1, Y: 2, Blocked: blocked, Escape: escape, Only: only}
+								want := decisionColor == blocked && blocked != escape && blocked != only && escape != only && slices.Equal(anchorDomain, sortedPair(blocked, escape)) && slices.Equal(xDomain, sortedPair(blocked, only)) && slices.Equal(yDomain, sortedPair(blocked, only))
+								if got := GuardMatches(problem, Literal{Variable: 0, Color: decisionColor}, binding); got != want {
+									t.Fatalf("domains=%v/%v/%v decision=%d binding=%#v got=%v want=%v", anchorDomain, xDomain, yDomain, decisionColor, binding, got, want)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

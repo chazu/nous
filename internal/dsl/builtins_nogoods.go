@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/chazu/nous/internal/unit"
 	nogoods "github.com/chazu/nous/internal/vocab/nogoods"
 )
 
@@ -25,7 +26,93 @@ func init() {
 		"ng-certificate-valid?":    bNGCertificateValid,
 		"ng-artifact-name":         bNGArtifactName,
 		"ng-digest-list":           bNGDigestList,
+		"ng-digest-record":         bNGDigestRecord,
+		"ng-unit-set-digest":       bNGUnitSetDigest,
 	})
+}
+
+func bNGDigestRecord(vm *VM) error {
+	value := vm.pop()
+	if value.Kind() != VList || len(value.AsList()) > 64 {
+		vm.push(Nil())
+		return nil
+	}
+	encoded, err := json.Marshal(ngSerializable(value))
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	digest := sha256.Sum256(encoded)
+	vm.push(StringVal(hex.EncodeToString(digest[:])))
+	return nil
+}
+
+func ngSerializable(value Value) any {
+	switch value.Kind() {
+	case VNil:
+		return nil
+	case VBool:
+		return value.AsBool()
+	case VInt:
+		return value.AsInt()
+	case VFloat:
+		return value.AsFloat()
+	case VString:
+		return value.AsString()
+	case VList:
+		items := value.AsList()
+		out := make([]any, len(items))
+		for index, item := range items {
+			out[index] = ngSerializable(item)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func bNGUnitSetDigest(vm *VM) error {
+	names, ok := strictStringList(vm.pop())
+	if !ok {
+		vm.push(Nil())
+		return nil
+	}
+	digest, err := UnitSetDigest(vm.Store, names)
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(digest))
+	return nil
+}
+
+// UnitSetDigest commits the authoritative contents of an already materialized
+// ordered reference set. The two self-referential digest slots are excluded.
+func UnitSetDigest(store *unit.Store, names []string) (string, error) {
+	type record struct {
+		Name  string         `json:"name"`
+		Slots map[string]any `json:"slots"`
+	}
+	records := make([]record, 0, len(names))
+	for _, name := range names {
+		u := store.Get(name)
+		if u == nil {
+			return "", fmt.Errorf("missing referenced unit %q", name)
+		}
+		slots := make(map[string]any, len(u.Slots))
+		for key, value := range u.Slots {
+			if key != "referencedUnitSetDigest" && key != "barrierDigest" && key != "dispositionUnit" {
+				slots[key] = value
+			}
+		}
+		records = append(records, record{Name: name, Slots: slots})
+	}
+	encoded, err := json.Marshal(records)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func bNGDigestList(vm *VM) error {
