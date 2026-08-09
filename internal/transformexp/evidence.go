@@ -27,19 +27,16 @@ func buildPanelEvidence(domainsDir, panel string, curricula []curriculum, author
 }
 
 func buildPanelEvidenceWithPairs(domainsDir, panel string, curricula []curriculum, authority uint64, lockedPairs [][2]uint64, reviewAuthority []byte) (panelEvidence, error) {
+	// Construct exactly the bytes that protected execution persists before event
+	// zero. Execution can only refer to these committed leaves by digest.
+	files, fixtureRoot, err := buildPreparedEvidence(panel, curricula)
+	if err != nil {
+		return panelEvidence{}, err
+	}
 	report, artifacts, err := runPanelDetailedWithPairs(domainsDir, panel, curricula, authority, lockedPairs)
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	files := map[string][]byte{}
-	fixtureFiles, fixtureRoot, err := buildFixtureEvidence(panel, curricula)
-	if err != nil {
-		return panelEvidence{}, err
-	}
-	for name, value := range fixtureFiles {
-		files[name] = value
-	}
-	files["fixture-root.json"] = fixtureRoot
 	report.FixtureRootDigest = digestBytes(fixtureRoot)
 	if len(reviewAuthority) != 0 {
 		if !canonicalJSON(reviewAuthority) {
@@ -76,6 +73,28 @@ func buildPanelEvidenceWithPairs(domainsDir, panel string, curricula []curriculu
 		return panelEvidence{}, err
 	}
 	return panelEvidence{report, reportBytes, graph, files}, nil
+}
+
+func buildPreparedEvidence(panel string, curricula []curriculum) (map[string][]byte, []byte, error) {
+	files, fixtureRoot, err := buildFixtureEvidence(panel, curricula)
+	if err != nil {
+		return nil, nil, err
+	}
+	files["fixture-root.json"] = fixtureRoot
+	for _, policy := range empiricalPolicies {
+		for _, c := range curricula {
+			view, err := decodePolicyView(c)
+			if err != nil {
+				return nil, nil, err
+			}
+			path := fmt.Sprintf("pre/%s/%s.json", policy, c.PolicyTokens[policy])
+			if _, exists := files[path]; exists {
+				return nil, nil, fmt.Errorf("duplicate premanifest path %s", path)
+			}
+			files[path] = policyManifestBytes(view, policy)
+		}
+	}
+	return files, fixtureRoot, nil
 }
 
 func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]byte, []byte, error) {
@@ -132,8 +151,11 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 				return nil, err
 			}
 			files[base+"/object-root.json"] = objectRoot
-			premanifest := policyManifestBytes(policyView, policy)
-			files[base+"/premanifest.json"] = premanifest
+			premanifestPath := fmt.Sprintf("pre/%s/%s.json", policy, c.PolicyTokens[policy])
+			premanifest, ok := files[premanifestPath]
+			if !ok || !bytes.Equal(premanifest, policyManifestBytes(policyView, policy)) {
+				return nil, fmt.Errorf("missing or changed pre-execution manifest %s", premanifestPath)
+			}
 			row := rowsByKey[key]
 			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, row.SchemaSHA256, digestBytes(c.Training), digestBytes(mustJSON([]any{row.HeldoutCorrectBits, row.FalseApplications}))})
 		}

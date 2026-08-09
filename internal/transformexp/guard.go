@@ -561,11 +561,10 @@ func replaceReceiptBytes(root string, receipt *attemptReceipt) error {
 }
 
 func persistPreparedFixtures(root, panel string, curricula []curriculum) (string, error) {
-	files, fixtureRoot, err := buildFixtureEvidence(panel, curricula)
+	files, fixtureRoot, err := buildPreparedEvidence(panel, curricula)
 	if err != nil {
 		return "", err
 	}
-	files["fixture-root.json"] = fixtureRoot
 	base := transcriptPath(root, panel)
 	for name, data := range files {
 		path := filepath.Join(base, filepath.FromSlash(name))

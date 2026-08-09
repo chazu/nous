@@ -2,6 +2,9 @@ package transformexp
 
 import (
 	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -43,7 +46,58 @@ func TestPanelEvidenceGraphBindsFixturesTranscriptsAndObjects(t *testing.T) {
 			t.Fatalf("missing evidence leaf %s", required)
 		}
 	}
+	for _, policy := range empiricalPolicies {
+		for _, c := range curricula {
+			path := "pre/" + string(policy) + "/" + c.PolicyTokens[policy] + ".json"
+			if len(evidence.Files[path]) == 0 {
+				t.Fatalf("missing shared pre-execution leaf %s", path)
+			}
+			for _, role := range []string{"primary", "audit"} {
+				legacy := role + "/" + string(policy) + "/" + formatOrdinal(c.Ordinal) + "/premanifest.json"
+				if _, exists := evidence.Files[legacy]; exists {
+					t.Fatalf("role-specific post-execution premanifest remains at %s", legacy)
+				}
+			}
+		}
+	}
 	if bytes.Contains(evidence.EvidenceGraph, evidence.ReportBytes) {
 		t.Fatal("evidence graph contains report and creates a hash cycle")
+	}
+}
+
+func formatOrdinal(value int) string {
+	return fmt.Sprintf("%03d", value)
+}
+
+func TestPreparedEvidencePersistsPremanifestBeforeExecution(t *testing.T) {
+	c, err := makeCurriculum(0, 0, 841900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	base := transcriptPath(root, "safe")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixtureDigest, err := persistPreparedFixtures(root, "safe", []curriculum{c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtureDigest) != 64 {
+		t.Fatalf("fixture digest length = %d", len(fixtureDigest))
+	}
+	for _, policy := range empiricalPolicies {
+		path := filepath.Join(base, "pre", string(policy), c.PolicyTokens[policy]+".json")
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		view, err := decodePolicyView(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := policyManifestBytes(view, policy); !bytes.Equal(got, want) {
+			t.Fatalf("persisted premanifest differs for %s", policy)
+		}
 	}
 }
