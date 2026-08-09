@@ -22,8 +22,12 @@ func TestNogoodDomainLoadsBoundedVocabularyPack(t *testing.T) {
 	if !store.IsA("NogoodCandidate", "Anything") || !store.IsA("ValidNogoodProblem", "Op") {
 		t.Fatal("nogood category/operation ontology was not loaded")
 	}
-	if got := store.Examples("Heuristic"); !slices.Equal(got, []string{"Heuristic"}) {
-		t.Fatalf("pre-bridge heuristic set = %v", got)
+	if got := store.Examples("Heuristic"); !slices.Equal(got, []string{"Heuristic", "NG-H-ConsiderPrune"}) {
+		t.Fatalf("bridge heuristic set = %v", got)
+	}
+	heuristic := store.Get("NG-H-ConsiderPrune")
+	if heuristic.GetString("ifWorkingOnTask") == "" || heuristic.GetString("thenCompute") == "" {
+		t.Fatal("bridge heuristic programs are empty")
 	}
 	vm := dsl.NewVM(store, agenda.New(), nil)
 	if err := vm.InitError(); err != nil {

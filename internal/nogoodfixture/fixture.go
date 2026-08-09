@@ -37,6 +37,142 @@ type Task struct {
 	Decision      nogoods.Literal
 }
 
+type PromotionCase struct {
+	Ordinal     int
+	ProblemJSON []byte
+	Decision    nogoods.Literal
+	Binding     nogoods.Binding
+	Completion  nogoods.Completion
+}
+
+// PromotionCases is the complete injective substitution set for the three
+// color roles. Each record is explicit input to the heuristic; the production
+// vocabulary only evaluates one supplied record at a time.
+func PromotionCases() ([]PromotionCase, error) {
+	cases := make([]PromotionCase, 0, 24)
+	for blocked := 0; blocked < 4; blocked++ {
+		for escape := 0; escape < 4; escape++ {
+			for only := 0; only < 4; only++ {
+				if blocked == escape || blocked == only || escape == only {
+					continue
+				}
+				problem := nogoods.Problem{
+					Version:      nogoods.ProblemVersion,
+					ColorAliases: []string{"pc0", "pc1", "pc2", "pc3"},
+					Variables: []nogoods.Variable{
+						{Alias: "pa", Domain: sorted(blocked, escape)},
+						{Alias: "px", Domain: sorted(blocked, only)},
+						{Alias: "py", Domain: sorted(blocked, only)},
+					},
+					Edges:      []nogoods.Edge{{Left: 0, Right: 1}, {Left: 0, Right: 2}, {Left: 1, Right: 2}},
+					Assignment: []nogoods.Literal{},
+				}
+				encoded, err := problem.CanonicalJSON()
+				if err != nil {
+					return nil, fmt.Errorf("construct promotion case: %w", err)
+				}
+				cases = append(cases, PromotionCase{
+					Ordinal: len(cases), ProblemJSON: encoded,
+					Decision:   nogoods.Literal{Variable: 0, Color: blocked},
+					Binding:    nogoods.Binding{Anchor: 0, X: 1, Y: 2, Blocked: blocked, Escape: escape, Only: only},
+					Completion: nogoods.Completion{XColor: only, YColor: only},
+				})
+			}
+		}
+	}
+	return cases, nil
+}
+
+// Training constructs the four public examples from which the schema must be
+// learned. The hidden MissingBit field is for fixture/oracle audits only; it is
+// never serialized into the problem object or inserted into a Nous store.
+func Training() ([]Task, error) {
+	tasks := make([]Task, 0, 4)
+	for ordinal, seed := range []int{831001, 831002, 831003, 831004} {
+		task, err := trainingTask(seed, ordinal)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+func trainingTask(seed, ordinal int) (Task, error) {
+	variablePositions := permutation(3, stream("training", seed, 0, "variable-positions"))
+	variableAliases := permutation(3, stream("training", seed, 0, "variable-aliases"))
+	colorPositions := permutation(4, stream("training", seed, 0, "color-positions"))
+	colorAliases := permutation(4, stream("training", seed, 0, "color-aliases"))
+	blocked, escape := colorPositions[0], colorPositions[1]
+	if blocked > escape {
+		blocked, escape = escape, blocked
+	}
+	only := colorPositions[2]
+
+	aliases := make([]string, 3)
+	for descriptor, source := range variableAliases {
+		aliases[descriptor] = fmt.Sprintf("ta%d", source)
+	}
+	colors := make([]string, 4)
+	for descriptor, source := range colorAliases {
+		colors[descriptor] = fmt.Sprintf("tc%d", source)
+	}
+	roleDomains := [3][]int{sorted(blocked, escape), sorted(blocked, only), sorted(blocked, only)}
+	variables := make([]nogoods.Variable, 3)
+	for role, descriptor := range variablePositions {
+		variables[descriptor] = nogoods.Variable{Alias: aliases[descriptor], Domain: roleDomains[role]}
+	}
+	anchorDescriptor := variablePositions[0]
+	xDescriptor, yDescriptor := variablePositions[1], variablePositions[2]
+	if xDescriptor > yDescriptor {
+		xDescriptor, yDescriptor = yDescriptor, xDescriptor
+	}
+	descriptorEdges := [3]nogoods.Edge{
+		canonicalEdge(anchorDescriptor, xDescriptor),
+		canonicalEdge(anchorDescriptor, yDescriptor),
+		canonicalEdge(xDescriptor, yDescriptor),
+	}
+	missing := -1
+	if ordinal > 0 {
+		missing = ordinal - 1
+	}
+	edges := make([]nogoods.Edge, 0, 3)
+	for bit, edge := range descriptorEdges {
+		if bit != missing {
+			edges = append(edges, edge)
+		}
+	}
+	slices.SortFunc(edges, func(a, b nogoods.Edge) int {
+		if a.Left != b.Left {
+			return a.Left - b.Left
+		}
+		return a.Right - b.Right
+	})
+	problem := nogoods.Problem{
+		Version:      nogoods.ProblemVersion,
+		ColorAliases: colors,
+		Variables:    variables,
+		Edges:        edges,
+		Assignment:   []nogoods.Literal{},
+	}
+	encoded, err := problem.CanonicalJSON()
+	if err != nil {
+		return Task{}, fmt.Errorf("construct training task %d: %w", ordinal, err)
+	}
+	return Task{
+		Panel: "training", Ordinal: ordinal, Seed: seed, MissingBit: missing,
+		ProblemJSON: encoded,
+		Decision:    nogoods.Literal{Variable: variablePositions[0], Color: blocked},
+	}, nil
+}
+
+func canonicalEdge(left, right int) nogoods.Edge {
+	if left > right {
+		left, right = right, left
+	}
+	return nogoods.Edge{Left: left, Right: right}
+}
+
 type panelShape struct {
 	SeedsStart int
 	Counts     [4]int

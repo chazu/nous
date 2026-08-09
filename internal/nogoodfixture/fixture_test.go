@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/nogoodoracle"
+	"github.com/chazu/nous/internal/vocab/nogoods"
 )
 
 func TestVariablePositionGoldenVectors(t *testing.T) {
@@ -24,6 +25,77 @@ func TestVariablePositionGoldenVectors(t *testing.T) {
 		got := permutation(test.n, stream(test.panel, test.root, test.ordinal, "variable-positions"))
 		if !slices.Equal(got, test.want) {
 			t.Fatalf("%s permutation = %v, want %v", test.panel, got, test.want)
+		}
+	}
+}
+
+func TestTrainingIsOneFailureAndThreeSingleEdgeCounterexamples(t *testing.T) {
+	tasks, err := Training()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 4 {
+		t.Fatalf("training tasks = %d", len(tasks))
+	}
+	seenMissing := map[int]bool{}
+	for ordinal, task := range tasks {
+		if task.Ordinal != ordinal || task.Seed != 831001+ordinal || task.Panel != "training" {
+			t.Fatalf("training manifest[%d] = %#v", ordinal, task)
+		}
+		problem, err := nogoods.ParseProblem(task.ProblemJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(problem.Variables) != 3 || len(problem.ColorAliases) != 4 {
+			t.Fatalf("training shape[%d] = %d variables/%d colors", ordinal, len(problem.Variables), len(problem.ColorAliases))
+		}
+		result, err := nogoodoracle.Enumerate(task.ProblemJSON, nogoodoracle.Literal{Variable: task.Decision.Variable, Color: task.Decision.Color})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Satisfiable != (ordinal > 0) {
+			t.Fatalf("training[%d] satisfiable = %v", ordinal, result.Satisfiable)
+		}
+		if ordinal == 0 {
+			if task.MissingBit != -1 {
+				t.Fatalf("full training missing bit = %d", task.MissingBit)
+			}
+		} else {
+			seenMissing[task.MissingBit] = true
+		}
+	}
+	for bit := 0; bit < 3; bit++ {
+		if !seenMissing[bit] {
+			t.Fatalf("missing-edge training did not cover bit %d", bit)
+		}
+	}
+}
+
+func TestPromotionCasesCoverAllInjectiveColorSubstitutions(t *testing.T) {
+	cases, err := PromotionCases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 24 {
+		t.Fatalf("promotion cases = %d", len(cases))
+	}
+	seen := map[[3]int]bool{}
+	for ordinal, testCase := range cases {
+		if testCase.Ordinal != ordinal {
+			t.Fatalf("promotion ordinal[%d] = %d", ordinal, testCase.Ordinal)
+		}
+		roles := [3]int{testCase.Binding.Blocked, testCase.Binding.Escape, testCase.Binding.Only}
+		if roles[0] == roles[1] || roles[0] == roles[2] || roles[1] == roles[2] || seen[roles] {
+			t.Fatalf("invalid/duplicate promotion roles = %v", roles)
+		}
+		seen[roles] = true
+		problem, err := nogoods.ParseProblem(testCase.ProblemJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conflict, err := nogoods.EvaluateCompletion(problem, nogoods.FullMask, testCase.Binding, testCase.Completion)
+		if err != nil || !conflict {
+			t.Fatalf("promotion[%d] conflict = %v, %v", ordinal, conflict, err)
 		}
 	}
 }
