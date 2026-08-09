@@ -137,6 +137,9 @@ func TestProtectedExecutionReloadsPersistedFixtureBytes(t *testing.T) {
 	if !bytes.Equal(fresh[0].Training, wantTraining) || !bytes.Equal(fixtureRoot, files["fixture-root.json"]) {
 		t.Fatal("protected fixture reload reused mutated in-memory curriculum")
 	}
+	if len(fresh[0].Scorer) == 0 || len(fresh[0].Latent) != 0 || len(fresh[0].Expected) != 0 || fresh[0].SeedCommitment != "" || fresh[0].AcceptedAttempt != 0 || fresh[0].GeneratorLedger != (acceptanceLedger{}) {
+		t.Fatal("prepared reload decoded sealed scorer truth before policy execution")
+	}
 	if _, err := buildPanelEvidence("../../domains", "development", fresh, 841001, nil); err == nil {
 		t.Fatal("generic evidence builder accepted protected panel")
 	}

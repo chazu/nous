@@ -9,6 +9,7 @@ import (
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/transformbaseline"
+	"github.com/chazu/nous/internal/transformfixturecore"
 	"github.com/chazu/nous/internal/transformoracle"
 	"github.com/chazu/nous/internal/unit"
 	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
@@ -174,11 +175,28 @@ func runTransformMicrocases(domainsDir string) (map[string][]byte, error) {
 			forest := cloneBase()
 			forest.Nodes[1].Key, forest.Nodes[2].Key, forest.Nodes[3].Key = "service", "change", "usage"
 			forest.Nodes = append(forest.Nodes, transformschema.Node{ID: 4, Kind: "decoy", Parent: 0, Key: "occupied", Value: "c", Target: -1})
-			store := unit.NewStore()
-			for _, name := range []string{"service", "change", "usage", "occupied", "0", "1", "2", "3"} {
-				store.Put(unit.New(name))
+			c, err := makeCurriculum(0, 8, 992004)
+			if err != nil {
+				return false
 			}
-			return store.Count() == 8 && apply(forest, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}).Terminal == "applied"
+			training, err := transformfixturecore.ParseTraining(c.Training)
+			if err != nil {
+				return false
+			}
+			occupied := make([]string, 0, 4)
+			for _, example := range training.Cases {
+				if example.Kind == "positive" {
+					occupied = append(occupied, "TS.Program.TS.Example.competence-occupied."+example.Token)
+				}
+			}
+			run, err := runAcquisitionConfigured(domainsDir, c.Training, "competence-occupied", func(store *unit.Store) {
+				for _, name := range occupied {
+					placeholder := unit.New(name)
+					placeholder.Set("descriptorAlias", "already-occupied")
+					store.Put(placeholder)
+				}
+			})
+			return err == nil && len(run.Programs) == 4 && run.Terminal == "completed" && apply(forest, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}).Terminal == "applied"
 		}},
 		{"primitive-edit-rejection", []any{"zero", "five", "duplicate-target", "no-op"}, func() bool {
 			duplicate := transformschema.Program{Edits: []transformschema.Edit{{1, "b"}, {1, "c"}}}
@@ -190,6 +208,8 @@ func runTransformMicrocases(domainsDir string) (map[string][]byte, error) {
 		{"wrong-context-corruption", []any{"two-requests", "remote", "reducer-rejection"}, func() bool {
 			forest := cloneBase()
 			forest.Nodes = append(forest.Nodes, transformschema.Node{ID: 4, Kind: "request", Parent: 0, Key: "x", From: "a", To: "b", Target: 1})
+			zeroRequest := cloneBase()
+			zeroRequest.Nodes = zeroRequest.Nodes[:2]
 			schema := transformschema.Schema{"request-target", "definition", "local", "any", "required"}
 			c, err := makeCurriculum(0, 8, 992001)
 			if err != nil {
@@ -206,7 +226,7 @@ func runTransformMicrocases(domainsDir string) (map[string][]byte, error) {
 			corrupt := bytes.Clone(bundle.Raw)
 			corrupt[len(corrupt)-2] ^= 1
 			_, reduceErr := reduceTransformTranscriptWithTraining(corrupt, bundle.Objects, digestBytes([]byte("competence-corruption-manifest")), c.Training)
-			return apply(forest, schema).Terminal == "abstain/request-count" && reduceErr != nil
+			return apply(zeroRequest, schema).Terminal == "abstain/request-count" && apply(forest, schema).Terminal == "abstain/request-count" && reduceErr != nil
 		}},
 		{"concrete-program-recovery", []any{"ordinary-heuristic", "four-promoted", "exact-replay"}, func() bool {
 			c, err := makeCurriculum(0, 8, 992002)
@@ -226,9 +246,7 @@ func runTransformMicrocases(domainsDir string) (map[string][]byte, error) {
 			audit, err := transformoracle.AuditPolicy(c.Training, c.Heldout, nil, batch)
 			return err == nil && audit.ProgramsExact
 		}},
-		{"ties-evidence-barriers", []any{"mdl-order", "five-closures", "five-barriers"}, func() bool {
-			left := transformschema.Schema{"request-target", "definition", "local", "equals-from", "none"}
-			right := transformschema.Schema{"request-target", "references", "global", "any", "none"}
+		{"ties-evidence-barriers", []any{"complete-minimum-tier", "five-closures", "five-barriers"}, func() bool {
 			partial := transformschema.Partial{}
 			for _, value := range []string{"definition", "request-target", "local", "any", "required"} {
 				var err error
@@ -256,7 +274,12 @@ func runTransformMicrocases(domainsDir string) (map[string][]byte, error) {
 					barriers++
 				}
 			}
-			return schemaDescription(left) == schemaDescription(right) && partial.Stage == 5 && barriers == 5 && closures == 5
+			left, _ := (transformschema.Schema{"request-target", "definition", "local", "equals-from", "none"}).CanonicalJSON()
+			right, _ := (transformschema.Schema{"request-target", "references", "global", "any", "none"}).CanonicalJSON()
+			higher, _ := (transformschema.Schema{"first-local", "definition+references", "global", "equals-from", "required"}).CanonicalJSON()
+			tier, tierErr := transformbaseline.MinimumDescriptionTier([][]byte{higher, right, left})
+			completeTier := tierErr == nil && len(tier) == 2 && bytes.Equal(tier[0], left) && bytes.Equal(tier[1], right)
+			return completeTier && partial.Stage == 5 && barriers == 5 && closures == 5
 		}},
 		{"application-prefixes", []any{"standalone", "driver", "byte-identical"}, func() bool {
 			forestBytes, _ := base.CanonicalJSON()

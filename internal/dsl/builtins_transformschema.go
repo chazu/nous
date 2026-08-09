@@ -10,31 +10,73 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/chazu/nous/internal/transformfixturecore"
 	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
 )
 
 func init() {
 	registerVocabularyWords("transformschema", map[string]builtinFn{
-		"ts-forest-valid?":      bTSForestValid,
-		"ts-schema-apply":       bTSSchemaApply,
-		"ts-program-apply":      bTSProgramApply,
-		"ts-refine":             bTSRefine,
-		"ts-candidate-allocate": bTSCandidateAllocate,
-		"ts-output-compare":     bTSOutputCompare,
-		"ts-digest":             bTSDigest,
-		"ts-node-facts":         bTSNodeFacts,
-		"ts-parent-facts":       bTSParentFacts,
-		"ts-target":             bTSTarget,
-		"ts-make-edit":          bTSMakeEdit,
-		"ts-make-program":       bTSMakeProgram,
-		"ts-program-edits":      bTSProgramEdits,
-		"ts-make-schema":        bTSMakeSchema,
-		"ts-close-stage":        bTSCloseStage,
-		"ts-freeze-schema":      bTSFreezeSchema,
-		"ts-eq":                 bTSEqual,
-		"ts-factor-result":      bTSFactorResult,
-		"ts-meter":              bTSMeter,
+		"ts-forest-valid?":        bTSForestValid,
+		"ts-schema-apply":         bTSSchemaApply,
+		"ts-program-apply":        bTSProgramApply,
+		"ts-refine":               bTSRefine,
+		"ts-candidate-allocate":   bTSCandidateAllocate,
+		"ts-output-compare":       bTSOutputCompare,
+		"ts-digest":               bTSDigest,
+		"ts-node-facts":           bTSNodeFacts,
+		"ts-parent-facts":         bTSParentFacts,
+		"ts-target":               bTSTarget,
+		"ts-make-edit":            bTSMakeEdit,
+		"ts-make-program":         bTSMakeProgram,
+		"ts-program-edits":        bTSProgramEdits,
+		"ts-make-schema":          bTSMakeSchema,
+		"ts-close-stage":          bTSCloseStage,
+		"ts-freeze-schema":        bTSFreezeSchema,
+		"ts-verify-program-batch": bTSVerifyProgramBatch,
+		"ts-eq":                   bTSEqual,
+		"ts-id-eq":                bTSIDEqual,
+		"ts-id-set-eq":            bTSIDSetEqual,
+		"ts-factor-result":        bTSFactorResult,
+		"ts-meter":                bTSMeter,
 	})
+}
+
+func bTSVerifyProgramBatch(vm *VM) error {
+	value := vm.pop()
+	if value.Kind() != VString || vm.Store == nil {
+		vm.push(Nil())
+		return nil
+	}
+	experiment := vm.Store.Get(value.AsString())
+	if experiment == nil {
+		vm.push(Nil())
+		return nil
+	}
+	batch := transformfixturecore.ProgramBatch{}
+	for _, name := range experiment.GetStrings("programUnits") {
+		program := vm.Store.Get(name)
+		if program == nil {
+			vm.push(Nil())
+			return nil
+		}
+		example := vm.Store.Get(program.GetString("example"))
+		if example == nil {
+			vm.push(Nil())
+			return nil
+		}
+		before := []byte(example.GetString("before"))
+		batch.Rows = append(batch.Rows, transformfixturecore.ProgramRow{Token: example.GetString("token"), BeforeDigest: transformDigest(before), Program: []byte(program.GetString("program"))})
+	}
+	encoded, err := batch.CanonicalJSON()
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	if err := recordTransformAtPhase(vm, "acquire", "verify", "verified", 11, [][]byte{encoded}, [][]byte{transformAtom("boolean", true)}); err != nil {
+		return err
+	}
+	vm.push(StringVal(string(encoded)))
+	return nil
 }
 
 func bTSEqual(vm *VM) error {
@@ -49,6 +91,61 @@ func bTSEqual(vm *VM) error {
 		if err := recordTransform(vm, "compare", "invalid-input", 3, [][]byte{leftBytes, rightBytes}, nil); err != nil {
 			return err
 		}
+		vm.push(BoolVal(false))
+		return nil
+	}
+	equal := bytes.Equal(leftBytes, rightBytes)
+	outcome := "false"
+	if equal {
+		outcome = "true"
+	}
+	if err := recordTransform(vm, "compare", outcome, 3, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", equal)}); err != nil {
+		return err
+	}
+	vm.push(BoolVal(equal))
+	return nil
+}
+
+func bTSIDEqual(vm *VM) error {
+	return typedTransformEqual(vm, "id")
+}
+
+func bTSIDSetEqual(vm *VM) error {
+	return typedTransformEqual(vm, "id-set")
+}
+
+func typedTransformEqual(vm *VM, kind string) error {
+	right, left := vm.pop(), vm.pop()
+	encode := func(value Value) ([]byte, bool) {
+		switch kind {
+		case "id":
+			if value.Kind() != VInt || value.AsInt() < -1 || value.AsInt() >= transformschema.MaxNodes {
+				return nil, false
+			}
+			return boundedTransformComparisonAtom(kind, value.AsInt())
+		case "id-set":
+			if value.Kind() != VList {
+				return nil, false
+			}
+			serial, ok := tsSerializable(value).([]any)
+			if !ok || len(serial) > 6 {
+				return nil, false
+			}
+			ids := make([]int, len(serial))
+			for index, item := range serial {
+				id, ok := item.(int)
+				if !ok || id < 0 || id >= transformschema.MaxNodes || index > 0 && id <= ids[index-1] {
+					return nil, false
+				}
+				ids[index] = id
+			}
+			return boundedTransformComparisonAtom(kind, ids)
+		}
+		return nil, false
+	}
+	leftBytes, leftOK := encode(left)
+	rightBytes, rightOK := encode(right)
+	if !leftOK || !rightOK {
 		vm.push(BoolVal(false))
 		return nil
 	}

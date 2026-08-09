@@ -109,6 +109,9 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 				if err != nil {
 					return out, err
 				}
+				if out.Terminal == "completed" {
+					out.baselineEvents = append(out.baselineEvents, transformbaseline.Event{Category: 11, Operation: "verify", Phase: "freeze", Outcome: "verified", Inputs: [][]byte{out.Schema}, Outputs: [][]byte{mustJSON([]any{"transform-atom/v1", "boolean", true})}})
+				}
 			}
 		} else {
 			out.Terminal = "completed"
@@ -130,6 +133,9 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 		}
 		out.Terminal, out.Schema, out.Applications = learned.Terminal, learned.Schema, learned.Applications
 		out.baselineEvents = events
+		if out.Terminal == "completed" {
+			out.baselineEvents = append(out.baselineEvents, transformbaseline.Event{Category: 11, Operation: "verify", Phase: "freeze", Outcome: "verified", Inputs: [][]byte{out.Schema}, Outputs: [][]byte{mustJSON([]any{"transform-atom/v1", "boolean", true})}})
+		}
 	default:
 		return out, fmt.Errorf("unknown policy %q", policy)
 	}

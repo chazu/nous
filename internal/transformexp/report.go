@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/chazu/nous/internal/transformfixturecore"
 	"github.com/chazu/nous/internal/transformoracle"
 )
 
@@ -116,6 +117,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 		curricula[index].Expected = nil
 		curricula[index].SeedCommitment = ""
 		curricula[index].AcceptedAttempt = 0
+		curricula[index].GeneratorLedger = acceptanceLedger{}
 	}
 	defer func() {
 		for index := range sealedScorers {
@@ -128,12 +130,6 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 		if c.Ordinal != index {
 			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("noncanonical curriculum ordinal")
 		}
-		generatorExact := c.GeneratorLedger.Applications == 72*16 && c.GeneratorLedger.Work == 109161 && digestString(c.GeneratorLedger.MatrixSHA256) && c.GeneratorLedger.Accepted
-		report.GeneratorAcceptance.Curricula++
-		report.GeneratorAcceptance.Applications += c.GeneratorLedger.Applications
-		report.GeneratorAcceptance.Work += c.GeneratorLedger.Work
-		report.GeneratorAcceptance.Exact = report.GeneratorAcceptance.Exact && generatorExact
-		generatorRows = append(generatorRows, []any{c.Ordinal, c.GeneratorLedger.Applications, c.GeneratorLedger.Work, c.GeneratorLedger.MatrixSHA256, c.GeneratorLedger.Accepted})
 		for _, policy := range empiricalPolicies {
 			primaryView, err := decodePolicyView(c)
 			if err != nil {
@@ -245,13 +241,42 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			bits := outcome.HeldoutCorrectBits
 			report.Rows = append(report.Rows, PolicyReportRow{c.Ordinal, c.Family, policy, outcome.Terminal, work, outcome.Applications, schemaDigest, outcome.HeldoutCorrect, hex.EncodeToString([]byte{bits}), outcome.FalseApplications, nonmatchingWork, transcriptDigest})
 		}
+		// Only now, after every policy terminal and its eight held-out results
+		// are immutable, may orchestration decode the sealed truth. Recompute
+		// the construction ledger with generator code and the audit ledger with
+		// the independent oracle implementation.
+		scorerView, err := decodeSealedScorer(sealedScorers[index])
+		if err != nil {
+			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d post-terminal scorer: %w", c.Ordinal, err)
+		}
+		if scorerView.Family != c.Family {
+			eraseScorerView(&scorerView)
+			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d post-terminal family mismatch", c.Ordinal)
+		}
+		trainingFixture, trainingErr := transformfixturecore.ParseTraining(c.Training)
+		heldoutFixture, heldoutErr := transformfixturecore.ParseHeldout(c.Heldout)
+		if trainingErr != nil || heldoutErr != nil {
+			eraseScorerView(&scorerView)
+			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d post-terminal fixtures", c.Ordinal)
+		}
+		generatorLedger, err := generatorAcceptanceMatrix(trainingFixture, heldoutFixture, scorerView.Expected, scorerView.Latent)
+		eraseScorerView(&scorerView)
+		if err != nil {
+			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d construction acceptance: %w", c.Ordinal, err)
+		}
+		generatorExact := generatorLedger.Applications == 72*16 && generatorLedger.Work == 109161 && digestString(generatorLedger.MatrixSHA256) && generatorLedger.Accepted
+		report.GeneratorAcceptance.Curricula++
+		report.GeneratorAcceptance.Applications += generatorLedger.Applications
+		report.GeneratorAcceptance.Work += generatorLedger.Work
+		report.GeneratorAcceptance.Exact = report.GeneratorAcceptance.Exact && generatorExact
+		generatorRows = append(generatorRows, []any{c.Ordinal, generatorLedger.Applications, generatorLedger.Work, generatorLedger.MatrixSHA256, generatorLedger.Accepted})
 		scorerBytes := bytes.Clone(sealedScorers[index])
 		oracleLedger, err := transformoracle.AuditAcceptance(c.Training, c.Heldout, scorerBytes)
 		eraseBytes(scorerBytes)
 		if err != nil {
 			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d acceptance audit: %w", c.Ordinal, err)
 		}
-		oracleExact := oracleLedger.Applications == c.GeneratorLedger.Applications && oracleLedger.Work == c.GeneratorLedger.Work && oracleLedger.MatrixSHA256 == c.GeneratorLedger.MatrixSHA256 && oracleLedger.Accepted == c.GeneratorLedger.Accepted
+		oracleExact := oracleLedger.Applications == generatorLedger.Applications && oracleLedger.Work == generatorLedger.Work && oracleLedger.MatrixSHA256 == generatorLedger.MatrixSHA256 && oracleLedger.Accepted == generatorLedger.Accepted
 		report.OracleAcceptance.Curricula++
 		report.OracleAcceptance.Applications += oracleLedger.Applications
 		report.OracleAcceptance.Work += oracleLedger.Work

@@ -12,8 +12,8 @@ func TestAcquisitionSemanticRecordsReduceToTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	work, vector, err := transformMeterWork(run.MeterRecords)
-	wantVector := [12]int64{1053, 184, 231, 2062, 13, 12, 30, 30, 98, 66, 20, 14}
-	if err != nil || work != 3843 || vector != wantVector || len(run.MeterRecords) != 3813 {
+	wantVector := [12]int64{1053, 184, 231, 2042, 13, 12, 30, 30, 98, 66, 20, 15}
+	if err != nil || work != 3824 || vector != wantVector || len(run.MeterRecords) != 3794 {
 		t.Fatalf("work=%d vector=%v err=%v", work, vector, err)
 	}
 	manifest := digestBytes([]byte("acquisition manifest"))

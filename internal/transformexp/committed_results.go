@@ -23,6 +23,24 @@ type committedHeldoutScore struct {
 	NonmatchingWork   int64
 }
 
+func decodeCommittedHeldoutResults(results []byte) ([]committedHeldoutResult, error) {
+	var resultWire []json.RawMessage
+	var version string
+	var rows [][]json.RawMessage
+	if json.Unmarshal(results, &resultWire) != nil || len(resultWire) != 2 || json.Unmarshal(resultWire[0], &version) != nil || version != "transform-heldout-results/v2" || json.Unmarshal(resultWire[1], &rows) != nil || len(rows) != 8 {
+		return nil, errors.New("invalid heldout results wire")
+	}
+	decoded := make([]committedHeldoutResult, len(rows))
+	previous := ""
+	for index, row := range rows {
+		if len(row) != 4 || json.Unmarshal(row[0], &decoded[index].Token) != nil || json.Unmarshal(row[1], &decoded[index].Terminal) != nil || json.Unmarshal(row[2], &decoded[index].OutputDigest) != nil || json.Unmarshal(row[3], &decoded[index].Work) != nil || decoded[index].Token <= previous || decoded[index].Work <= 0 || decoded[index].OutputDigest != "" && !digestString(decoded[index].OutputDigest) {
+			return nil, errors.New("invalid heldout result row")
+		}
+		previous = decoded[index].Token
+	}
+	return decoded, nil
+}
+
 // reconstructHeldoutResults derives the result commitment from the admitted
 // application objects and charged events. Report fields are deliberately not
 // inputs to this function.
@@ -60,12 +78,7 @@ func reconstructHeldoutResults(raw []byte, objects map[string][]byte, heldoutByt
 				return nil, err
 			}
 			observations = append(observations, observed{terminal: terminal, output: output})
-			if operation.Operation == "replay-application" {
-				observations[len(observations)-1].work = pending
-				pending = 0
-			} else {
-				awaitingAttachment = true
-			}
+			awaitingAttachment = true
 			continue
 		}
 		if awaitingAttachment {
@@ -90,7 +103,7 @@ func reconstructHeldoutResults(raw []byte, objects map[string][]byte, heldoutByt
 	for index, observation := range observations {
 		rows[index] = []any{heldout.Cases[index].Token, observation.terminal, observation.output, observation.work}
 	}
-	return mustJSON([]any{"transform-heldout-results/v1", rows}), nil
+	return mustJSON([]any{"transform-heldout-results/v2", rows}), nil
 }
 
 func decodeCommittedApplication(operation TransformOperation, objects map[string][]byte) (string, string, error) {
@@ -180,7 +193,7 @@ func scoreCommittedHeldout(results, scorerBytes []byte, policyTerminal string) (
 	var resultWire []json.RawMessage
 	var version string
 	var rows [][]json.RawMessage
-	if json.Unmarshal(results, &resultWire) != nil || len(resultWire) != 2 || json.Unmarshal(resultWire[0], &version) != nil || version != "transform-heldout-results/v1" || json.Unmarshal(resultWire[1], &rows) != nil || len(rows) != 8 {
+	if json.Unmarshal(results, &resultWire) != nil || len(resultWire) != 2 || json.Unmarshal(resultWire[0], &version) != nil || version != "transform-heldout-results/v2" || json.Unmarshal(resultWire[1], &rows) != nil || len(rows) != 8 {
 		return committedHeldoutScore{}, errors.New("invalid heldout results wire")
 	}
 	var scorerWire []json.RawMessage

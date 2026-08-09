@@ -69,10 +69,10 @@ func applicationReservations(events []transformbaseline.Event) (map[int]applicat
 	for index, event := range events {
 		switch event.Operation {
 		case "replay-application":
-			if _, exists := reservations[index]; exists {
+			if _, exists := reservations[index]; exists || index+1 >= len(events) || events[index+1].Operation != "evidence-link" || events[index+1].Phase != event.Phase {
 				return nil, errors.New("overlapping replay application reservation")
 			}
-			reservations[index] = applicationReservation{event.Phase, 1}
+			reservations[index] = applicationReservation{event.Phase, 2}
 		case "schema-application":
 			if len(event.Outputs) != 1 || index+1 >= len(events) || events[index+1].Operation != "evidence-link" {
 				return nil, errors.New("schema application lacks immediate evidence boundary")

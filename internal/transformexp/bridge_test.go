@@ -30,10 +30,10 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 3813 {
+	if len(run.MeterRecords) != 3794 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
-	closures, frozen := 0, 0
+	closures, frozen, batches := 0, 0, 0
 	for i, record := range run.MeterRecords {
 		if record.Phase == "" || len(record.Inputs) == 0 {
 			t.Fatalf("meter record %d lacks semantic preimage: %+v", i, record)
@@ -46,9 +46,12 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 				frozen++
 			}
 		}
+		if record.Operation == "verify" && record.Phase == "acquire" && len(record.Inputs) == 1 && objectVersion(record.Inputs[0], "transform-program-batch/v1") {
+			batches++
+		}
 	}
-	if closures != 5 || frozen != 1 {
-		t.Fatalf("authenticated closures=%d frozen artifacts=%d", closures, frozen)
+	if closures != 5 || frozen != 1 || batches != 1 {
+		t.Fatalf("authenticated batches=%d closures=%d frozen artifacts=%d", batches, closures, frozen)
 	}
 	survivors := map[string][]string{}
 	for _, name := range run.Candidates {

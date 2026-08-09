@@ -246,7 +246,7 @@ func (s *TransformTranscriptSink) EmitValues(operation, phase, outcome string, c
 
 func (s *TransformTranscriptSink) EmitEvidenceLink(phase string, attemptedBytes []byte) error {
 	if !s.lastAttach || s.lastOutput == "" || s.lastObject == "" {
-		return errors.New("invalid evidence boundary")
+		return fmt.Errorf("invalid evidence boundary: attach=%t output=%t operation=%t", s.lastAttach, s.lastOutput != "", s.lastObject != "")
 	}
 	before := make(map[string]struct{}, len(s.Objects.Objects))
 	for digest := range s.Objects.Objects {
@@ -340,9 +340,6 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 		s.Applications++
 		s.applicationCommitted = true
 		s.waitingForComparison = o.Operation == "schema-application" && o.Phase == "training-validate" && s.reservedMaximumWork == 80 && o.Outcome == "applied"
-		if o.Operation == "replay-application" {
-			s.finishApplicationReservation()
-		}
 	}
 	if o.Operation == "evidence-link" {
 		s.lastAttach = false
@@ -355,7 +352,7 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 		if len(o.Outputs) == 1 {
 			s.lastOutput = o.Outputs[0]
 		}
-		s.lastAttach = oneOfString(o.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
+		s.lastAttach = oneOfString(o.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "replay-application", "output-compare", "verify")
 	}
 	if o.Operation == "output-compare" && s.waitingForComparison && s.outputComparisonIsEndpoint(o) {
 		s.finishApplicationReservation()
@@ -546,7 +543,10 @@ func transformApplicationSpans(raw []byte, objects map[string][]byte) (map[int]t
 		span := transformApplicationSpan{}
 		switch operation.Operation {
 		case "replay-application":
-			span = transformApplicationSpan{sequence, sequence, sequence, operation.Phase, 1, operation.Operation}
+			if sequence+1 >= len(decoded) || decoded[sequence+1].operation.Operation != "evidence-link" || decoded[sequence+1].operation.Phase != operation.Phase {
+				return nil, errors.New("replay application lacks immediate evidence boundary")
+			}
+			span = transformApplicationSpan{sequence, sequence, sequence + 1, operation.Phase, 2, operation.Operation}
 		case "schema-application":
 			if len(operation.Outputs) != 1 {
 				return nil, errors.New("schema application reservation lacks output")
@@ -711,7 +711,7 @@ func reduceTransformTranscriptWithTraining(raw []byte, objects map[string][]byte
 			if len(operation.Outputs) == 1 {
 				lastOutput = operation.Outputs[0]
 			}
-			lastAttach = oneOfString(operation.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
+			lastAttach = oneOfString(operation.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "replay-application", "output-compare", "verify")
 		}
 		step, _ := json.Marshal([]any{"transform-chain-step/v1", json.RawMessage(line)})
 		previous = digestBytes(step)
@@ -725,7 +725,7 @@ func reduceTransformTranscriptWithTraining(raw []byte, objects map[string][]byte
 			if activeReservation.operation == "schema-application" && activeReservation.maximumWork == 80 {
 				wantEndpoint = "output-compare"
 			}
-			if activeReservation.operation == "schema-application" && operation.Operation != wantEndpoint || activeReservation.operation == "replay-application" && operation.Operation != "replay-application" {
+			if activeReservation.operation == "schema-application" && operation.Operation != wantEndpoint || activeReservation.operation == "replay-application" && operation.Operation != "evidence-link" {
 				return TransformTranscriptBundle{}, errors.New("application reservation has invalid final event")
 			}
 			activeReservation = nil
@@ -837,12 +837,12 @@ func validateReducedOperation(operation TransformOperation, applications int, la
 		"candidate-allocate": {[]string{"target", "anchor", "scope", "old-guard", "locality", "freeze"}, []string{"allocated", "duplicate", "rejected"}, 1, 1, 0, 1},
 		"refine":             {[]string{"target", "anchor", "scope", "old-guard", "locality"}, []string{"refined", "rejected", "invalid-input"}, 2, 2, 0, 1},
 		"edit-validate":      {[]string{"acquire", "training-validate", "heldout"}, []string{"valid", "no-op", "invalid-input"}, 2, 2, 1, 1},
-		"edit-apply":         {[]string{"acquire", "training-validate", "heldout"}, []string{"applied", "invalid-input"}, 2, 2, 1, 1},
+		"edit-apply":         {[]string{"acquire", "training-validate", "heldout"}, []string{"applied", "invalid-input"}, 2, 2, 0, 1},
 		"schema-predicate":   {[]string{"training-validate", "heldout"}, []string{"true", "false", "invalid-input"}, 4, 4, 0, 1},
 		"output-compare":     {[]string{"acquire", "training-validate"}, []string{"equal", "different", "invalid-input"}, 3, 3, 0, 1},
 		"evidence-link":      {[]string{"acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "freeze", "heldout"}, []string{"attached", "rejected"}, 3, 3, 1, 1},
-		"canonicalize":       {nonterminal, []string{"canonical", "invalid-input"}, 1, 1, 1, 1},
-		"hash":               {nonterminal, []string{"hashed", "invalid-input"}, 1, 1, 1, 1},
+		"canonicalize":       {nonterminal, []string{"canonical", "invalid-input"}, 1, 1, 0, 1},
+		"hash":               {nonterminal, []string{"hashed", "invalid-input"}, 1, 1, 0, 1},
 		"verify":             {[]string{"acquire", "freeze"}, []string{"verified", "rejected"}, 1, 1, 1, 1},
 		"schema-application": {[]string{"training-validate", "heldout"}, []string{"applied", "abstain/request-count", "abstain/anchor", "abstain/locality", "abstain/expansion", "abstain/no-op", "invalid-input"}, 2, 2, 1, 1},
 		"replay-application": {[]string{"training-validate", "heldout"}, []string{"applied", "abstain/replay-miss", "invalid-input"}, 2, 2, 1, 1},

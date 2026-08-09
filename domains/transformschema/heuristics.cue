@@ -66,9 +66,12 @@ units: [
 			"programs" @ "experiment" @ "programUnits" set-slot
 			"programs" @ list-length 4 ts-eq "positiveCount" @ 4 ts-eq and
 			if
+				"experiment" @ ts-verify-program-batch nil !=
+				if
 				"H-TransformAcquireConcretePrograms" "acquisitionOnly" get-slot true =
 				if true "experiment" @ "tsAcquisitionClosed" set-slot
 				else 700 "experiment" @ "tsRefine" "Materialize schema factor alternatives" add-task then
+				else "no-discovery" "experiment" @ "terminal" set-slot then
 			else
 				"no-discovery" "experiment" @ "terminal" set-slot
 			then
@@ -192,10 +195,10 @@ units: [
 						"kind" @ "definition" ts-eq if true "hasDefinition" ! then
 						"kind" @ "reference" ts-eq if true "hasReference" ! then
 					end
-					"value" @ "definition" ts-eq "hasDefinition" @ "hasReference" @ not and and
-					"value" @ "references" ts-eq "hasReference" @ "hasDefinition" @ not and and or
-					"value" @ "definition+references" ts-eq "hasDefinition" @ "hasReference" @ and and or
-					"caseExact" !
+					"definition+references" "recoveredSignature" !
+					"hasDefinition" @ "hasReference" @ not and if "definition" "recoveredSignature" ! then
+					"hasReference" @ "hasDefinition" @ not and if "references" "recoveredSignature" ! then
+					"value" @ "recoveredSignature" @ ts-eq "caseExact" !
 					"caseExact" @ not if false "exact" ! then
 				end
 			else
@@ -220,16 +223,17 @@ units: [
 						end
 						false "caseExact" !
 						"value" @ "request-target" ts-eq
-						if "before" @ "requestID" @ ts-target "definitionID" @ ts-eq "caseExact" ! then
+						if "before" @ "requestID" @ ts-target "definitionID" @ ts-id-eq "caseExact" ! then
 						"value" @ "from-value" ts-eq
 						if
 							"before" @ "requestID" @ ts-node-facts 2 list-get "fromValue" !
-							0 "matchingDefinitions" ! nil "matchingID" !
+							0 "matchingDefinitions" ! -1 "matchingID" !
 							12 iota each
 								it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
 								"facts" @ nil != if "facts" @ 0 list-get "definition" ts-eq "facts" @ 1 list-get "fromValue" @ ts-eq and if "matchingDefinitions" @ 1 + "matchingDefinitions" ! "nodeID" @ "matchingID" ! then then
 							end
-							"matchingDefinitions" @ 1 ts-eq "matchingID" @ "definitionID" @ ts-eq and "caseExact" !
+							"matchingID" @ "definitionID" @ ts-id-eq "matchingIDExact" !
+							"matchingDefinitions" @ 1 ts-eq "matchingIDExact" @ and "caseExact" !
 						then
 						"value" @ "first-local" ts-eq
 						if
@@ -237,9 +241,9 @@ units: [
 							nil "firstID" !
 							12 iota each
 								it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
-								"facts" @ nil != if "facts" @ 0 list-get "definition" ts-eq "firstID" @ nil ts-eq and if "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-eq if "nodeID" @ "firstID" ! then then then
+								"facts" @ nil != if "facts" @ 0 list-get "definition" ts-eq "firstID" @ nil ts-eq and if "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-id-eq if "nodeID" @ "firstID" ! then then then
 							end
-							"firstID" @ "definitionID" @ ts-eq "caseExact" !
+							"firstID" @ "definitionID" @ ts-id-eq "caseExact" !
 						then
 						"caseExact" @ not if false "exact" ! then
 					end
@@ -274,16 +278,16 @@ units: [
 								12 iota each
 									it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
 									"facts" @ nil != if "facts" @ 0 list-get "reference" ts-eq if
-										"before" @ "nodeID" @ ts-target "definitionID" @ ts-eq
-										"value" @ "global" ts-eq "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-eq or and
+									"before" @ "nodeID" @ ts-target "definitionID" @ ts-id-eq
+									"value" @ "global" ts-eq "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-id-eq or and
 										if
 											"anyPredicted" @ "nodeID" @ list-append "anyPredicted" !
 											"facts" @ 1 list-get "fromValue" @ ts-eq if "equalsPredicted" @ "nodeID" @ list-append "equalsPredicted" ! then
 										then
 									then then
 								end
-								"equalsPredicted" @ "editedReferences" @ ts-eq if "equalsMatches" @ 1 + "equalsMatches" ! then
-								"anyPredicted" @ "editedReferences" @ ts-eq if "anyMatches" @ 1 + "anyMatches" ! then
+								"equalsPredicted" @ "editedReferences" @ ts-id-set-eq if "equalsMatches" @ 1 + "equalsMatches" ! then
+								"anyPredicted" @ "editedReferences" @ ts-id-set-eq if "anyMatches" @ 1 + "anyMatches" ! then
 							end
 							"equalsMatches" @ 4 ts-eq "anyMatches" @ 4 ts-eq or "exact" !
 						then
@@ -321,13 +325,13 @@ units: [
 									12 iota each
 										it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
 										"facts" @ nil != if "facts" @ 0 list-get "reference" ts-eq if
-											"before" @ "nodeID" @ ts-target "definitionID" @ ts-eq
-											"selectedScope" @ "global" ts-eq "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-eq or and
+										"before" @ "nodeID" @ ts-target "definitionID" @ ts-id-eq
+										"selectedScope" @ "global" ts-eq "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-id-eq or and
 											"value" @ "any" ts-eq "facts" @ 1 list-get "fromValue" @ ts-eq or and
 											if "predicted" @ "nodeID" @ list-append "predicted" ! then
 										then then
 									end
-									"predicted" @ "editedReferences" @ ts-eq if "matches" @ 1 + "matches" ! then
+								"predicted" @ "editedReferences" @ ts-id-set-eq if "matches" @ 1 + "matches" ! then
 								end
 								"matches" @ 4 ts-eq "exact" !
 							then
@@ -344,8 +348,8 @@ units: [
 										"requestCount" @ 1 ts-eq
 										if
 											"before" @ "requestID" @ ts-target "definitionID" !
-											"before" @ "requestID" @ ts-parent-facts 0 list-get
-											"before" @ "definitionID" @ ts-parent-facts 0 list-get !=
+										"before" @ "requestID" @ ts-parent-facts 0 list-get
+										"before" @ "definitionID" @ ts-parent-facts 0 list-get ts-id-eq not
 											if true "sawWrongContext" ! then
 										then
 									then

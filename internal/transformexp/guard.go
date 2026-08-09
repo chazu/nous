@@ -916,7 +916,7 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	if len(report.Payload.Rows) != wantRows || len(report.Payload.Limitations) != 0 {
 		return fmt.Errorf("%s report row/limitation cardinality mismatch", panel)
 	}
-	acceptanceGate := true
+	oracleParityGate := true
 	for ordinal := 0; ordinal < wantRows/len(empiricalPolicies); ordinal++ {
 		training, trainingErr := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
 		heldout, heldoutErr := read(fmt.Sprintf("fixtures/%03d/heldout.json", ordinal))
@@ -926,7 +926,7 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 		}
 		audit, auditErr := transformoracle.AuditAcceptance(training, heldout, scorer)
 		if auditErr != nil || audit.Applications != 72*16 || audit.Work != 109161 || !digestString(audit.MatrixSHA256) || !audit.Accepted {
-			acceptanceGate = false
+			oracleParityGate = false
 			return fmt.Errorf("%s acceptance matrix %d does not independently reconstruct", panel, ordinal)
 		}
 	}
@@ -981,7 +981,7 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	for _, row := range report.Payload.Rows {
 		conservationGate = conservationGate && row.Work > 0 && row.Work <= LifecycleWorkCap
 		applicationsGate = applicationsGate && row.Applications >= 0 && row.Applications <= ApplicationsPerPolicy
-		artifactGate = artifactGate && (row.Terminal != "completed" && row.SchemaSHA256 == "" || row.Terminal == "completed" && digestString(row.SchemaSHA256))
+		artifactGate = artifactGate && (row.Terminal != "completed" && row.SchemaSHA256 == "" || row.Terminal == "completed" && row.Policy == ConcreteReplay && row.SchemaSHA256 == "" || row.Terminal == "completed" && row.Policy != ConcreteReplay && digestString(row.SchemaSHA256))
 		bits, bitErr := hex.DecodeString(row.HeldoutCorrectBits)
 		heldoutGate = heldoutGate && bitErr == nil && len(bits) == 1
 	}
@@ -993,7 +993,7 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	sourceGate := bytes.Equal(reviewBytes, authority.ReviewAuthority) && report.Payload.ImplementationCommit == authority.Reviews.ImplementationCommit
 	graphBytes, graphErr := readCommittedBlob(authority.Root, authority.Head, relativeTo(authority.Root, filepath.Join(base, "evidence-graph.json")))
 	graphGate := graphErr == nil && digestBytes(graphBytes) == report.Payload.EvidenceGraph
-	reconstructedGates := [12]bool{manifestGate, competenceGate, bytes.Equal(primaryWire[2], auditWire[2]), transcriptGate, conservationGate, acceptanceGate, programsGate, applicationsGate, artifactGate, heldoutGate && storeGate, sourceGate, graphGate}
+	reconstructedGates := [12]bool{manifestGate, competenceGate, bytes.Equal(primaryWire[2], auditWire[2]), transcriptGate, conservationGate, oracleParityGate, programsGate, applicationsGate, artifactGate, heldoutGate && storeGate, sourceGate, graphGate}
 	if report.Payload.Gates != reconstructedGates {
 		return fmt.Errorf("%s committed gates do not match reconstructed evidence", panel)
 	}
@@ -1176,6 +1176,45 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		score, scoreErr := scoreCommittedHeldout(results, scorer, terminal)
 		if scorerErr != nil || resultErr != nil || scoreErr != nil || digestBytes(results) != heldoutDigest {
 			return fmt.Errorf("%s %s heldout evidence does not reconstruct: %s", panel, role, key)
+		}
+		if terminal == "completed" {
+			var schemaBytes, batchBytes []byte
+			if policy == ConcreteReplay {
+				batchBytes = trainingPrograms
+			} else {
+				schemaBytes = objects[schemaDigest]
+				if len(schemaBytes) == 0 {
+					return fmt.Errorf("%s %s oracle schema artifact is absent: %s", panel, role, key)
+				}
+				if requiresPrograms {
+					batchBytes = trainingPrograms
+				}
+			}
+			oraclePolicy, oracleErr := transformoracle.AuditPolicy(trainingFixture, heldoutFixture, schemaBytes, batchBytes)
+			committedObservations, observationsErr := decodeCommittedHeldoutResults(results)
+			if oracleErr != nil || observationsErr != nil || !oraclePolicy.TrainingExact || requiresPrograms && !oraclePolicy.ProgramsExact || len(oraclePolicy.Heldout) != len(committedObservations) {
+				return fmt.Errorf("%s %s independent policy oracle does not reconstruct: %s", panel, role, key)
+			}
+			for observationIndex, observation := range oraclePolicy.Heldout {
+				committed := committedObservations[observationIndex]
+				oracleOutputDigest := ""
+				if len(observation.Output) != 0 {
+					oracleOutputDigest = digestBytes(observation.Output)
+				}
+				if observation.Token != committed.Token || observation.Terminal != committed.Terminal || oracleOutputDigest != committed.OutputDigest {
+					return fmt.Errorf("%s %s oracle observation differs from transcript: %s case %d", panel, role, key, observationIndex)
+				}
+			}
+			oracleScore, oracleScoreErr := transformoracle.AuditScore(scorer, oraclePolicy.Heldout)
+			decodedBits, bitsErr := hex.DecodeString(score.Bits)
+			if oracleScoreErr != nil || bitsErr != nil || len(decodedBits) != 1 || oracleScore.CorrectBits != decodedBits[0] || oracleScore.FalseApplications != score.FalseApplications {
+				return fmt.Errorf("%s %s independent score oracle differs: %s", panel, role, key)
+			}
+		} else {
+			terminalAudit, terminalErr := transformoracle.AuditTerminal(trainingFixture, heldoutFixture, terminal)
+			if terminalErr != nil || !terminalAudit.Valid {
+				return fmt.Errorf("%s %s independent terminal oracle rejects: %s", panel, role, key)
+			}
 		}
 		if reportRow.Work != work || reportRow.Applications != applications || reportRow.Terminal != terminal || reportRow.SchemaSHA256 != schemaDigest || reportRow.HeldoutCorrectBits != score.Bits || reportRow.FalseApplications != score.FalseApplications || reportRow.NonmatchingWork != score.NonmatchingWork {
 			return fmt.Errorf("%s %s report row does not reconstruct: %s", panel, role, key)

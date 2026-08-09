@@ -51,7 +51,7 @@ type ProgramRow struct {
 type ProgramBatch struct{ Rows []ProgramRow }
 
 func ProfileDigest() string {
-	b, _ := json.Marshal([]any{"transform-profile/v1", "typed-reference-forest/v1", "set-scalar-from-request/v1", "anchor-target-scope-old-guard-locality/v1", "transform-lifecycle-events/v1", 12, 4, 72, 48, 12000})
+	b, _ := json.Marshal([]any{"transform-profile/v1", "typed-reference-forest/v1", "set-scalar-from-request/v1", "anchor-target-scope-old-guard-locality/v1", "transform-lifecycle-events/v2", 12, 4, 72, 48, 12000})
 	d := sha256.Sum256(b)
 	return hex.EncodeToString(d[:])
 }

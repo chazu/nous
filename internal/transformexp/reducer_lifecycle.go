@@ -27,7 +27,9 @@ type transformLifecycleState struct {
 	factorStart     int
 	factorResults   map[string]bool
 	acquireBefore   string
+	acquireAfter    string
 	acquireEdits    []transformschema.Edit
+	acquireCompare  int
 	programs        []reconstructedProgram
 	trainingCases   map[string]transformfixturecore.TrainingCase
 	afterEvidence   []TransformOperation
@@ -84,6 +86,9 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 			return false, err
 		}
 	}
+	if err := requireFactorComparisons(partial, phase, trace, objects); err != nil {
+		return false, err
+	}
 	if phase == "locality" {
 		if len(scans) != 4 {
 			return false, fmt.Errorf("locality factor observed %d complete training forests, want 4", len(scans))
@@ -127,6 +132,47 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 		exact = false
 	}
 	return exact, nil
+}
+
+func requireFactorComparisons(partial transformschema.Partial, phase string, trace []TransformOperation, objects map[string][]byte) error {
+	wantKind, minimum := "", 4
+	definitionNormalization := (phase == "scope" || phase == "old-guard") && partial.Targets == "definition"
+	switch {
+	case definitionNormalization:
+		wantKind, minimum = "enum", 1
+	case phase == "target":
+		wantKind = "enum"
+	case phase == "anchor":
+		wantKind = "id"
+	case phase == "locality":
+		wantKind, minimum = "id", 1
+	case phase == "scope" || phase == "old-guard":
+		wantKind = "id-set"
+	default:
+		return errors.New("unsupported factor comparison phase")
+	}
+	count := 0
+	nodes := 0
+	for _, operation := range trace {
+		if operation.Operation == "node" {
+			nodes++
+		}
+		if operation.Operation != "compare" || len(operation.Inputs) != 2 || len(operation.Outputs) != 1 {
+			continue
+		}
+		leftKind, _, leftErr := decodeTransformAtom(objects[operation.Inputs[0]])
+		rightKind, _, rightErr := decodeTransformAtom(objects[operation.Inputs[1]])
+		if leftErr == nil && rightErr == nil && leftKind == wantKind && rightKind == wantKind {
+			count++
+		}
+	}
+	if count < minimum {
+		return fmt.Errorf("%s factor %s has %d %s comparisons, want at least %d", phase, partial.Anchor, count, wantKind, minimum)
+	}
+	if definitionNormalization && nodes != 0 {
+		return fmt.Errorf("%s definition-only normalization inspected examples", phase)
+	}
+	return nil
 }
 
 func requireTargetObservations(trace []TransformOperation, programs []reconstructedProgram, objects map[string][]byte) error {
@@ -397,12 +443,20 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 			program := transformschema.Program{Edits: slices.Clone(s.acquireEdits)}
 			actual, applyErr := program.Apply(before)
 			actualBytes, canonicalErr := actual.CanonicalJSON()
-			if beforeErr != nil || afterErr != nil || applyErr != nil || canonicalErr != nil || operation.Outcome != "equal" || !bytes.Equal(actualBytes, objects[operation.Inputs[0]]) || !bytes.Equal(actualBytes, objects[operation.Inputs[1]]) {
+			kind, selector, selectorErr := decodeTransformAtom(objects[operation.Inputs[2]])
+			id, idOK := jsonInteger(selector)
+			if beforeErr != nil || afterErr != nil || applyErr != nil || canonicalErr != nil || selectorErr != nil || kind != "id" || !idOK || operation.Outcome != "equal" || !bytes.Equal(actualBytes, objects[operation.Inputs[0]]) || !bytes.Equal(actualBytes, objects[operation.Inputs[1]]) || id != s.acquireCompare || s.acquireAfter != "" && s.acquireAfter != operation.Inputs[1] {
 				return errors.New("concrete program acquisition does not reconstruct")
 			}
-			s.programs = append(s.programs, reconstructedProgram{before, after, slices.Clone(s.acquireEdits)})
-			s.acquireBefore = ""
-			s.acquireEdits = nil
+			s.acquireAfter = operation.Inputs[1]
+			s.acquireCompare++
+			if s.acquireCompare == len(after.Nodes) {
+				s.programs = append(s.programs, reconstructedProgram{before, after, slices.Clone(s.acquireEdits)})
+				s.acquireBefore = ""
+				s.acquireAfter = ""
+				s.acquireEdits = nil
+				s.acquireCompare = 0
+			}
 		}
 	case "evidence-link":
 		if s.activeCandidate != "" && oneOfString(operation.Phase, "target", "anchor", "scope", "old-guard", "locality") {
@@ -467,6 +521,47 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 		}
 		if objectVersion(objects[operation.Inputs[0]], "transform-closure/v1") {
 			return s.observeClosure(operation, objects)
+		}
+		if objectVersion(objects[operation.Inputs[0]], "transform-program-batch/v1") && operation.Phase == "acquire" {
+			if len(s.programs) != 4 || s.acquireBefore != "" || s.acquireAfter != "" || len(s.acquireEdits) != 0 || s.acquireCompare != 0 {
+				return errors.New("program batch verified before four complete acquisitions")
+			}
+			batch, err := transformfixturecore.ParseProgramBatch(objects[operation.Inputs[0]])
+			kind, value, atomErr := decodeTransformAtom(objects[operation.Outputs[0]])
+			verified, ok := value.(bool)
+			if err != nil || atomErr != nil || kind != "boolean" || !ok || !verified || operation.Outcome != "verified" {
+				return errors.New("invalid program batch verification")
+			}
+			expectedRows := make([]transformfixturecore.ProgramRow, len(s.programs))
+			for index, program := range s.programs {
+				beforeBytes, _ := program.before.CanonicalJSON()
+				programBytes, _ := (transformschema.Program{Edits: slices.Clone(program.edits)}).CanonicalJSON()
+				fixture, exists := s.trainingCases[digestBytes(beforeBytes)]
+				if len(s.trainingCases) != 0 && (!exists || fixture.Kind != "positive") {
+					return errors.New("verified program has no positive fixture row")
+				}
+				if exists {
+					expectedRows[index] = transformfixturecore.ProgramRow{Token: fixture.Token, BeforeDigest: digestBytes(beforeBytes), Program: programBytes}
+				} else {
+					matched := false
+					for _, row := range batch.Rows {
+						if row.BeforeDigest == digestBytes(beforeBytes) && bytes.Equal(row.Program, programBytes) {
+							expectedRows[index] = row
+							matched = true
+							break
+						}
+					}
+					if !matched {
+						return errors.New("verified batch omits a promoted program")
+					}
+				}
+			}
+			expectedBytes, expectedErr := (transformfixturecore.ProgramBatch{Rows: expectedRows}).CanonicalJSON()
+			actualBytes, actualErr := batch.CanonicalJSON()
+			if expectedErr != nil || actualErr != nil || !bytes.Equal(expectedBytes, actualBytes) {
+				return errors.New("program batch differs from promoted programs")
+			}
+			return nil
 		}
 		if objectVersion(objects[operation.Inputs[0]], "transform-schema/v1") && operation.Phase == "freeze" {
 			kind, value, err := decodeTransformAtom(objects[operation.Outputs[0]])

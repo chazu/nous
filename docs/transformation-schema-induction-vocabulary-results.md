@@ -1,7 +1,7 @@
 # Transformation-schema induction vocabulary: implementation and trial record
 
-Status: **v2 implementation-review candidate; v1 was closed unexecuted and no
-v2 protected panel has run**
+Status: **v2 implementation-review revision 2; revision 1 was rejected, v1 was
+closed unexecuted, and no v2 protected panel has run**
 
 This document records Vocabulary 2 of the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) as it
@@ -46,7 +46,12 @@ The policy-visible curriculum contains training bytes, a commitment to delayed
 held-out inputs, opaque task tokens, and committed policy randomness. It does
 not contain the family, latent schema, accepted generation attempt, held-out
 inputs, or scorer truth. Held-out inputs are decoded only after the policy
-artifact freezes; scorer bytes are decoded only after held-out execution.
+artifact freezes. Prepared fixture reload preserves scorer bytes as an opaque
+envelope: it does not decode latent schema, expected outputs, accepted attempt,
+seed commitment, or acceptance ledger. Scorer truth is decoded only after every
+policy terminal and its eight held-out results are immutable. Construction
+acceptance is then recomputed by fixture-generator code and separately audited
+by the independent oracle; neither ledger is derived from the other.
 
 ## Evidence and independent reconstruction
 
@@ -54,6 +59,8 @@ Every semantic action emits a charged, hash-chained event naming canonical
 input, output, and operation objects. The trace now authenticates:
 
 - concrete edit discovery and application;
+- complete ascending per-node output comparison for each acquired program,
+  followed by ordinary acquire-time verification of the exact four-row batch;
 - all 13 partial-candidate allocations and 12 refinement-parent edges;
 - semantic facts and predicates used to evaluate each factor;
 - exactly five canonical closure objects, including every alternative,
@@ -71,7 +78,9 @@ The independent reducer validates operation semantics, lifecycle order,
 closure graph, artifact immutability, application credits, work conservation,
 object completeness, gzip framing, and terminal totals. A separate oracle that
 does not import the production vocabulary reconstructs the learned programs,
-applications, and score.
+every frozen-schema or replay application, and the score. Committed replay runs
+that oracle again from Git-bound fixture, artifact, program-batch, transcript,
+and scorer leaves; fixture acceptance is not a substitute for policy parity.
 
 Factor truth remains heuristic-owned: each CUE factor action emits its own
 boolean claim. The reducer reconstructs that claim afterward from the four
@@ -124,6 +133,31 @@ The competence suite also passed its frozen exhaustive bounds:
 | Schema applications | 25,272 |
 | Concrete-program applications | 7,020 |
 | Committed executable microcases | 14 |
+
+The 14 cases now include an actual zero-request forest, execution of ordinary
+acquisition with all four destination program-unit names preoccupied, and a
+direct audit of the bounded PBE minimum-description tier routine retaining
+every canonical equal-cost candidate.
+
+## Adversarial implementation review history
+
+Architecture, semantics, and experimental-validity reviewers unanimously
+rejected implementation revision 1 at
+`77acc437511cc88b291deb3c674d42ccc12d791e`. Their blocking findings were:
+
+- stale v1 profile and held-out-result identities;
+- replay without an immediate evidence-link endpoint and a contradictory
+  concrete-replay artifact gate;
+- scorer and oracle truth decoded before policy execution;
+- generator acceptance reconstructed from the oracle instead of independently;
+- committed `oracleParity` accepted without rerunning policy and score audits;
+- incomplete acquisition, factor-comparison, batch-verification, and baseline
+  freeze evidence; and
+- competence labels broader than their executable checks.
+
+Revision 2 addresses those findings and remains a candidate until all three
+reviewers accept the same exact commit. No protected command was run while
+repairing either revision.
 
 The repository-wide suite was also run on this implementation-review
 candidate. It completed every other listed package, including

@@ -64,6 +64,34 @@ func RandomPBE(trainingBytes []byte, seed1, seed2 uint64) (Result, error) {
 	return result, err
 }
 
+// MinimumDescriptionTier applies the same description and canonical ordering
+// used by BoundedPBE and returns every candidate tied at the minimum cost. It
+// is exposed so competence evidence can audit the baseline's retain-all-ties
+// rule without spending empirical application credits.
+func MinimumDescriptionTier(candidates [][]byte) ([][]byte, error) {
+	parsed := make([]schema, len(candidates))
+	for index, candidate := range candidates {
+		value, err := parseSchema(candidate)
+		if err != nil {
+			return nil, err
+		}
+		parsed[index] = value
+	}
+	slices.SortFunc(parsed, compareSchema)
+	if len(parsed) == 0 {
+		return nil, nil
+	}
+	minimum := description(parsed[0])
+	var result [][]byte
+	for _, candidate := range parsed {
+		if description(candidate) != minimum {
+			break
+		}
+		result = append(result, encodeSchema(candidate))
+	}
+	return result, nil
+}
+
 func RandomPBEMetered(trainingBytes []byte, seed1, seed2 uint64) (Result, []Event, error) {
 	training, err := transformfixturecore.ParseTraining(trainingBytes)
 	if err != nil {

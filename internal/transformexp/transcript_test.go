@@ -122,15 +122,18 @@ func TestTransformTranscriptRequiresLiveApplicationReservation(t *testing.T) {
 		t.Fatalf("unreserved application err=%v events=%d", err, len(sink.Events))
 	}
 	for i := 0; i < 40; i++ {
-		if err := sink.BeginApplication("training-validate", 1); err != nil {
+		if err := sink.BeginApplication("training-validate", 2); err != nil {
 			t.Fatalf("reserve %d: %v", i, err)
 		}
 		if err := sink.Emit(operation); err != nil {
 			t.Fatalf("application %d: %v", i, err)
 		}
+		if err := sink.EmitEvidenceLink("training-validate", []byte(`["transform-result/v1","abstain/replay-miss",""]`)); err != nil {
+			t.Fatalf("evidence %d: %v", i, err)
+		}
 	}
 	before := len(sink.Events)
-	if err := sink.BeginApplication("training-validate", 1); !errors.Is(err, errTransformApplicationBudget) || len(sink.Events) != before {
+	if err := sink.BeginApplication("training-validate", 2); !errors.Is(err, errTransformApplicationBudget) || len(sink.Events) != before {
 		t.Fatalf("exhausted reserve err=%v events=%d/%d", err, len(sink.Events), before)
 	}
 }

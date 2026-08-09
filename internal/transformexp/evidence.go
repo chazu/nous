@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/chazu/nous/internal/transformfixturecore"
-	"github.com/chazu/nous/internal/transformoracle"
 )
 
 type evidenceLeaf struct {
@@ -212,17 +211,9 @@ func decodePreparedCurricula(files map[string][]byte, panel string, count int) (
 		if err != nil {
 			return nil, fmt.Errorf("invalid prepared panel commitment %d: %w", ordinal, err)
 		}
-		audit, err := transformoracle.AuditAcceptance(training, heldout, scorer)
-		if err != nil {
-			return nil, fmt.Errorf("prepared acceptance audit %d: %w", ordinal, err)
-		}
-		ledger := acceptanceLedger{audit.Applications, audit.Work, audit.MatrixSHA256, audit.Accepted}
-		c := curriculum{Ordinal: ordinal, Family: family, Panel: panel, PanelCommitment: panelCommitment, Training: training, Heldout: heldout, Queue: queue, Scorer: scorer, GeneratorLedger: ledger}
-		scorerView, err := decodeScorerView(c)
-		if err != nil || scorerView.Family != family {
-			return nil, fmt.Errorf("invalid prepared scorer %d: %w", ordinal, err)
-		}
-		c.SeedCommitment, c.AcceptedAttempt, c.Latent, c.Expected = scorerView.SeedCommitment, scorerView.AcceptedAttempt, scorerView.Latent, scorerView.Expected
+		// scorer is an opaque sealed blob here. Its framing and truth-bearing
+		// contents are decoded only after the policy terminal is immutable.
+		c := curriculum{Ordinal: ordinal, Family: family, Panel: panel, PanelCommitment: panelCommitment, Training: training, Heldout: heldout, Queue: queue, Scorer: scorer}
 		policyView, err := decodePolicyView(c)
 		if err != nil {
 			return nil, fmt.Errorf("invalid prepared policy view %d: %w", ordinal, err)
