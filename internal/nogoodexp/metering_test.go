@@ -56,6 +56,27 @@ func TestMeterRejectsTrainingAndResumeOmissionsAndTupleRetargeting(t *testing.T)
 	if _, err := acquisitionTranscript(training, nil); err == nil {
 		t.Fatal("training meter accepted an omitted problem read")
 	}
+	training, err = RunTraining("../../domains")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range training.MeterRecords {
+		if training.MeterRecords[index].Operation == "problem-read" {
+			training.MeterRecords[index].Subject = "NG.Training.Example.3"
+			break
+		}
+	}
+	if _, err := acquisitionTranscript(training, nil); err == nil {
+		t.Fatal("training meter accepted a retargeted problem read")
+	}
+	training, err = RunTraining("../../domains")
+	if err != nil {
+		t.Fatal(err)
+	}
+	training.MeterRecords[0].Category = 11
+	if _, err := acquisitionTranscript(training, nil); err == nil {
+		t.Fatal("training meter accepted category corruption")
+	}
 
 	artifact, authority := learnedArtifact(t)
 	tasks, err := nogoodfixture.Panel("development")

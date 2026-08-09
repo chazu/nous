@@ -188,6 +188,13 @@ func auditTrainingMeter(run TrainingRun) error {
 	if proofs != 24 {
 		return fmt.Errorf("training promotion meter does not cover the sealed 24-case boundary")
 	}
+	expectedRecords, err := reconstructTrainingMeter(run)
+	if err != nil {
+		return err
+	}
+	if err := compareMeterMultiset(run.MeterRecords, expectedRecords); err != nil {
+		return fmt.Errorf("training meter reconstruction: %w", err)
+	}
 	return auditTrainingMeterTuples(run)
 }
 
