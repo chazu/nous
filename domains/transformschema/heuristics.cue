@@ -354,6 +354,9 @@ units: [
 					then
 				then
 			then
+			"H-TransformEvaluateFactor" "ablateEquality" get-slot true =
+			"stage" @ "old-guard" = and "value" @ "equals-from" = and
+			if false "exact" ! "ablated-ineligible" "candidate" @ "disposition" set-slot then
 			"exact" @ if "survivor" else "rejected" then "candidate" @ "status" set-slot
 			"TS.Evidence." "candidate" @ concat "evidence" !
 			"evidence" @ "TransformFactorEvidence" create-unit drop

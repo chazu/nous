@@ -5,6 +5,8 @@ package transformbaseline
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,12 +24,21 @@ type Result struct {
 	Ties         [][]byte
 }
 
+type Application struct {
+	Terminal string
+	Output   []byte
+}
+
 type schema struct{ anchor, targets, scope, guard, locality string }
 type node struct {
 	id, parent, target         int
 	kind, key, value, from, to string
 }
 type forest struct{ nodes []node }
+type edit struct {
+	target int
+	value  string
+}
 
 var errInvalid = errors.New("invalid baseline input")
 
@@ -53,6 +64,88 @@ func RandomPBE(trainingBytes []byte, seed1, seed2 uint64) (Result, error) {
 		candidates[i], candidates[j] = candidates[j], candidates[i]
 	})
 	return enumerate(training, candidates, false)
+}
+
+// PositiveLGG generalizes only over positive examples and deliberately fixes
+// locality to none. Negative examples cannot specialize its frozen result.
+func PositiveLGG(trainingBytes, programBatchBytes []byte) (Result, error) {
+	training, err := transformfixturecore.ParseTraining(trainingBytes)
+	if err != nil {
+		return Result{}, err
+	}
+	batch, err := transformfixturecore.ParseProgramBatch(programBatchBytes)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := validateProgramBatch(training, batch); err != nil {
+		return Result{}, err
+	}
+	var exact []schema
+	applications := 0
+	for _, candidate := range schemas() {
+		if candidate.locality != "none" {
+			continue
+		}
+		matches := true
+		for _, c := range training.Cases {
+			if c.Kind != "positive" {
+				continue
+			}
+			applications++
+			terminal, output, applyErr := apply(c.Before, candidate)
+			if applyErr != nil {
+				return Result{}, applyErr
+			}
+			if terminal != "applied" || !bytes.Equal(output, c.After) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			exact = append(exact, candidate)
+		}
+	}
+	if len(exact) == 0 {
+		return Result{Terminal: "no-discovery", Applications: applications}, nil
+	}
+	slices.SortFunc(exact, compareSchema)
+	best := description(exact[0])
+	result := Result{Terminal: "completed", Schema: encodeSchema(exact[0]), Applications: applications}
+	for _, candidate := range exact {
+		if description(candidate) != best {
+			break
+		}
+		result.Ties = append(result.Ties, encodeSchema(candidate))
+	}
+	return result, nil
+}
+
+func ApplySchema(forestBytes, schemaBytes []byte) (Application, error) {
+	s, err := parseSchema(schemaBytes)
+	if err != nil {
+		return Application{}, err
+	}
+	terminal, output, err := apply(forestBytes, s)
+	return Application{Terminal: terminal, Output: output}, err
+}
+
+func Replay(programBatchBytes []byte, token string, forestBytes []byte) (Application, error) {
+	batch, err := transformfixturecore.ParseProgramBatch(programBatchBytes)
+	if err != nil {
+		return Application{}, err
+	}
+	digest := sha256.Sum256(forestBytes)
+	beforeDigest := hex.EncodeToString(digest[:])
+	for _, row := range batch.Rows {
+		if row.Token == token && row.BeforeDigest == beforeDigest {
+			program, err := parseProgram(row.Program)
+			if err != nil {
+				return Application{}, err
+			}
+			return applyProgram(forestBytes, program)
+		}
+	}
+	return Application{Terminal: "abstain/replay-miss"}, nil
 }
 
 func enumerate(training transformfixturecore.Training, candidates []schema, retainTier bool) (Result, error) {
@@ -137,6 +230,124 @@ func compareSchema(a, b schema) int {
 func encodeSchema(s schema) []byte {
 	b, _ := json.Marshal([]any{"transform-schema/v1", s.anchor, s.targets, s.scope, s.guard, s.locality})
 	return b
+}
+
+func parseSchema(data []byte) (schema, error) {
+	v, err := decodeValue(data)
+	if err != nil {
+		return schema{}, err
+	}
+	r, ok := v.([]any)
+	if !ok || len(r) != 6 || r[0] != "transform-schema/v1" {
+		return schema{}, errInvalid
+	}
+	values := [5]string{}
+	for i := range values {
+		values[i], ok = r[i+1].(string)
+		if !ok {
+			return schema{}, errInvalid
+		}
+	}
+	s := schema{values[0], values[1], values[2], values[3], values[4]}
+	if !oneOf(s.anchor, "request-target", "from-value", "first-local") || !oneOf(s.targets, "definition", "references", "definition+references") || !oneOf(s.scope, "local", "global") || !oneOf(s.guard, "equals-from", "any") || !oneOf(s.locality, "required", "none") || !bytes.Equal(encodeSchema(s), data) {
+		return schema{}, errInvalid
+	}
+	return s, nil
+}
+
+func decodeValue(data []byte) (any, error) {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.UseNumber()
+	var value any
+	if err := d.Decode(&value); err != nil {
+		return nil, errInvalid
+	}
+	var extra any
+	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errInvalid
+	}
+	return value, nil
+}
+
+func parseProgram(data []byte) ([]edit, error) {
+	v, err := decodeValue(data)
+	if err != nil {
+		return nil, err
+	}
+	r, ok := v.([]any)
+	if !ok || len(r) != 2 || r[0] != "concrete-program/v1" {
+		return nil, errInvalid
+	}
+	rows, ok := r[1].([]any)
+	if !ok || len(rows) < 1 || len(rows) > 4 {
+		return nil, errInvalid
+	}
+	out := make([]edit, len(rows))
+	previous := -1
+	for i, raw := range rows {
+		row, ok := raw.([]any)
+		if !ok || len(row) != 3 || row[0] != "set-value/v1" {
+			return nil, errInvalid
+		}
+		target, targetOK := integer(row[1])
+		value, valueOK := row[2].(string)
+		if !targetOK || !valueOK || target <= previous || !lower(value) {
+			return nil, errInvalid
+		}
+		out[i] = edit{target, value}
+		previous = target
+	}
+	canonicalRows := make([]any, len(out))
+	for i, e := range out {
+		canonicalRows[i] = []any{"set-value/v1", e.target, e.value}
+	}
+	canonical, _ := json.Marshal([]any{"concrete-program/v1", canonicalRows})
+	if !bytes.Equal(canonical, data) {
+		return nil, errInvalid
+	}
+	return out, nil
+}
+
+func validateProgramBatch(training transformfixturecore.Training, batch transformfixturecore.ProgramBatch) error {
+	positives := map[string]transformfixturecore.TrainingCase{}
+	for _, c := range training.Cases {
+		if c.Kind == "positive" {
+			positives[c.Token] = c
+		}
+	}
+	if len(positives) != 4 || len(batch.Rows) != 4 {
+		return errInvalid
+	}
+	for _, row := range batch.Rows {
+		c, ok := positives[row.Token]
+		digest := sha256.Sum256(c.Before)
+		if !ok || row.BeforeDigest != hex.EncodeToString(digest[:]) {
+			return errInvalid
+		}
+		program, err := parseProgram(row.Program)
+		if err != nil {
+			return errInvalid
+		}
+		application, err := applyProgram(c.Before, program)
+		if err != nil || application.Terminal != "applied" || !bytes.Equal(application.Output, c.After) {
+			return errInvalid
+		}
+	}
+	return nil
+}
+
+func applyProgram(forestBytes []byte, program []edit) (Application, error) {
+	f, err := parseForest(forestBytes)
+	if err != nil {
+		return Application{}, err
+	}
+	for _, edit := range program {
+		if edit.target < 0 || edit.target >= len(f.nodes) || f.nodes[edit.target].value == edit.value {
+			return Application{Terminal: "invalid-input"}, nil
+		}
+		f.nodes[edit.target].value = edit.value
+	}
+	return Application{Terminal: "applied", Output: encodeForest(f)}, nil
 }
 
 func apply(data []byte, s schema) (string, []byte, error) {

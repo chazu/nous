@@ -18,6 +18,13 @@ func TestExactProgramBatchMaximum(t *testing.T) {
 	if len(b) != 1104 {
 		t.Fatalf("maximum batch bytes=%d", len(b))
 	}
+	parsed, err := ParseProgramBatch(b)
+	if err != nil || len(parsed.Rows) != 4 {
+		t.Fatalf("parse rows=%d err=%v", len(parsed.Rows), err)
+	}
+	if _, err := ParseProgramBatch(append(b, ' ')); err == nil {
+		t.Fatal("accepted noncanonical program batch")
+	}
 }
 
 func TestProfileDigestStable(t *testing.T) {

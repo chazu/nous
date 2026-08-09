@@ -167,6 +167,43 @@ func (h Heldout) CanonicalJSON() ([]byte, error) {
 	return json.Marshal([]any{HeldoutVersion, h.ProfileDigest, rows})
 }
 
+func ParseHeldout(data []byte) (Heldout, error) {
+	v, err := decode(data)
+	if err != nil {
+		return Heldout{}, err
+	}
+	r, ok := v.([]any)
+	if !ok || len(r) != 3 || r[0] != HeldoutVersion {
+		return Heldout{}, ErrInvalid
+	}
+	profile, ok := r[1].(string)
+	if !ok {
+		return Heldout{}, ErrInvalid
+	}
+	rows, ok := r[2].([]any)
+	if !ok {
+		return Heldout{}, ErrInvalid
+	}
+	h := Heldout{ProfileDigest: profile}
+	for _, raw := range rows {
+		row, ok := raw.([]any)
+		if !ok || len(row) != 2 {
+			return Heldout{}, ErrInvalid
+		}
+		token, ok := row[0].(string)
+		before, marshalErr := json.Marshal(row[1])
+		if !ok || marshalErr != nil {
+			return Heldout{}, ErrInvalid
+		}
+		h.Cases = append(h.Cases, HeldoutCase{Token: token, Before: before})
+	}
+	canonical, err := h.CanonicalJSON()
+	if err != nil || !bytes.Equal(canonical, data) {
+		return Heldout{}, ErrInvalid
+	}
+	return h, nil
+}
+
 func (b ProgramBatch) CanonicalJSON() ([]byte, error) {
 	if len(b.Rows) != 4 {
 		return nil, ErrInvalid
@@ -195,6 +232,40 @@ func (b ProgramBatch) CanonicalJSON() ([]byte, error) {
 		return nil, ErrInvalid
 	}
 	return encoded, nil
+}
+
+func ParseProgramBatch(data []byte) (ProgramBatch, error) {
+	v, err := decode(data)
+	if err != nil {
+		return ProgramBatch{}, err
+	}
+	r, ok := v.([]any)
+	if !ok || len(r) != 2 || r[0] != BatchVersion {
+		return ProgramBatch{}, ErrInvalid
+	}
+	rows, ok := r[1].([]any)
+	if !ok {
+		return ProgramBatch{}, ErrInvalid
+	}
+	b := ProgramBatch{}
+	for _, raw := range rows {
+		row, ok := raw.([]any)
+		if !ok || len(row) != 3 {
+			return ProgramBatch{}, ErrInvalid
+		}
+		token, a := row[0].(string)
+		beforeDigest, c := row[1].(string)
+		program, marshalErr := json.Marshal(row[2])
+		if !a || !c || marshalErr != nil {
+			return ProgramBatch{}, ErrInvalid
+		}
+		b.Rows = append(b.Rows, ProgramRow{token, beforeDigest, program})
+	}
+	canonical, err := b.CanonicalJSON()
+	if err != nil || !bytes.Equal(canonical, data) {
+		return ProgramBatch{}, ErrInvalid
+	}
+	return b, nil
 }
 
 func validToken(s string) bool {
