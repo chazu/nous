@@ -77,17 +77,18 @@ func validateTransformSemantics(operation TransformOperation, objects map[string
 			return errors.New("edit validation mismatch")
 		}
 	case "edit-apply":
-		forest, err := transformschema.ParseForest(inputs[0])
-		if err != nil {
-			return err
+		forest, forestErr := transformschema.ParseForest(inputs[0])
+		edit, editErr := decodeTransformEdit(inputs[1])
+		var next transformschema.Forest
+		applyErr := errors.New("invalid edit application input")
+		if forestErr == nil && editErr == nil {
+			next, applyErr = (transformschema.Program{Edits: []transformschema.Edit{edit}}).Apply(forest)
 		}
-		edit, err := decodeTransformEdit(inputs[1])
-		if err != nil {
-			return err
-		}
-		next, err := (transformschema.Program{Edits: []transformschema.Edit{edit}}).Apply(forest)
-		if err != nil {
-			return err
+		if forestErr != nil || editErr != nil || applyErr != nil {
+			if operation.Outcome != "invalid-input" || len(outputs) != 0 {
+				return errors.New("invalid edit application was accepted")
+			}
+			return nil
 		}
 		want, _ := next.CanonicalJSON()
 		if operation.Outcome != "applied" || len(outputs) != 1 || !bytes.Equal(want, outputs[0]) {
@@ -142,10 +143,26 @@ func validateTransformSemantics(operation TransformOperation, objects map[string
 	case "evidence-link":
 		return validateEvidenceAttempt(operation, objects, outputs)
 	case "canonicalize":
-		if operation.Outcome == "canonical" && !bytes.Equal(inputs[0], outputs[0]) {
-			return errors.New("canonicalize changed canonical value")
+		_, semanticErr := transformSemanticKind(inputs[0])
+		if operation.Outcome == "invalid-input" {
+			if semanticErr == nil || len(outputs) != 0 {
+				return errors.New("canonicalize rejected a valid semantic value")
+			}
+			return nil
+		}
+		if semanticErr != nil || len(outputs) != 1 || !bytes.Equal(inputs[0], outputs[0]) {
+			return errors.New("canonicalize changed or accepted an invalid value")
 		}
 	case "hash":
+		if operation.Outcome == "invalid-input" {
+			if _, semanticErr := transformSemanticKind(inputs[0]); semanticErr == nil || len(outputs) != 0 {
+				return errors.New("hash rejected a valid semantic value")
+			}
+			return nil
+		}
+		if len(outputs) != 1 {
+			return errors.New("hash result arity")
+		}
 		kind, value, err := decodeTransformAtom(outputs[0])
 		if err != nil || kind != "digest" || value != digestBytes(inputs[0]) {
 			return errors.New("hash result mismatch")
@@ -402,6 +419,34 @@ func validateTransformAtom(kind string, value any) error {
 			id, ok := jsonInteger(row)
 			if !ok || id < 0 || id >= transformschema.MaxNodes || id <= last {
 				return errors.New("noncanonical id-set atom")
+			}
+			last = id
+		}
+	case "scoped-id", "scoped-id-set":
+		row, ok := value.([]any)
+		if !ok || len(row) != 2 {
+			return errors.New("scoped id atom")
+		}
+		digest, ok := row[0].(string)
+		if !ok || !digestString(digest) {
+			return errors.New("scoped id forest digest")
+		}
+		if kind == "scoped-id" {
+			n, ok := jsonInteger(row[1])
+			if !ok || n < -1 || n >= transformschema.MaxNodes {
+				return errors.New("scoped id value")
+			}
+			break
+		}
+		ids, ok := row[1].([]any)
+		last := -1
+		if !ok || len(ids) > 6 {
+			return errors.New("scoped id-set value")
+		}
+		for _, item := range ids {
+			id, ok := jsonInteger(item)
+			if !ok || id < 0 || id >= transformschema.MaxNodes || id <= last {
+				return errors.New("noncanonical scoped id-set")
 			}
 			last = id
 		}

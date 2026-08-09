@@ -31,7 +31,9 @@ type transformLifecycleState struct {
 	acquireEdits    []transformschema.Edit
 	acquireCompare  int
 	programs        []reconstructedProgram
+	batchVerified   bool
 	trainingCases   map[string]transformfixturecore.TrainingCase
+	trainingOrder   []transformfixturecore.TrainingCase
 	afterEvidence   []TransformOperation
 	pendingCompare  []TransformOperation
 }
@@ -53,6 +55,7 @@ func newTransformLifecycleState(policy string, training []byte) (*transformLifec
 	}
 	for _, item := range fixture.Cases {
 		state.trainingCases[digestBytes(item.Before)] = item
+		state.trainingOrder = append(state.trainingOrder, item)
 	}
 	return state, nil
 }
@@ -86,7 +89,7 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 			return false, err
 		}
 	}
-	if err := requireFactorComparisons(partial, phase, trace, objects); err != nil {
+	if err := s.requireFactorComparisons(partial, phase, trace, objects); err != nil {
 		return false, err
 	}
 	if phase == "locality" {
@@ -108,6 +111,9 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 	}
 	requiresProgramScans := phase != "target" && !(phase == "scope" && partial.Targets == "definition") && !(phase == "old-guard" && partial.Targets == "definition")
 	if requiresProgramScans {
+		if len(scans) != 4 {
+			return false, fmt.Errorf("factor observed %d complete program scans in %s, want 4", len(scans), phase)
+		}
 		covered := map[string]bool{}
 		for _, forest := range scans {
 			encoded, _ := forest.CanonicalJSON()
@@ -134,24 +140,63 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 	return exact, nil
 }
 
-func requireFactorComparisons(partial transformschema.Partial, phase string, trace []TransformOperation, objects map[string][]byte) error {
-	wantKind, minimum := "", 4
-	definitionNormalization := (phase == "scope" || phase == "old-guard") && partial.Targets == "definition"
-	switch {
-	case definitionNormalization:
-		wantKind, minimum = "enum", 1
-	case phase == "target":
-		wantKind = "enum"
-	case phase == "anchor":
-		wantKind = "id"
-	case phase == "locality":
-		wantKind, minimum = "id", 1
-	case phase == "scope" || phase == "old-guard":
-		wantKind = "id-set"
-	default:
-		return errors.New("unsupported factor comparison phase")
+func (s *transformLifecycleState) requireFactorComparisons(partial transformschema.Partial, phase string, trace []TransformOperation, objects map[string][]byte) error {
+	atom := func(kind string, value any) []byte { return mustJSON([]any{"transform-atom/v1", kind, value}) }
+	scopedAtom := func(kind string, forest transformschema.Forest, value any) []byte {
+		encoded, _ := forest.CanonicalJSON()
+		return atom("scoped-"+kind, []any{digestBytes(encoded), value})
 	}
-	count := 0
+	type pair struct{ left, right []byte }
+	var expected []pair
+	definitionNormalization := (phase == "scope" || phase == "old-guard") && partial.Targets == "definition"
+	if definitionNormalization {
+		canonical := "local"
+		candidate := partial.ReferenceScope
+		if phase == "old-guard" {
+			canonical, candidate = "any", partial.OldGuard
+		}
+		expected = append(expected, pair{atom("enum", candidate), atom("enum", canonical)})
+	} else if phase == "locality" {
+		for _, item := range s.trainingOrder {
+			if item.Kind != "abstain" {
+				continue
+			}
+			forest, err := transformschema.ParseForest(item.Before)
+			if err != nil {
+				return err
+			}
+			requests := lifecycleNodesOfKind(forest, "request")
+			if len(requests) != 1 {
+				continue
+			}
+			definition, ok := lifecycleNodeByID(forest, requests[0].Target)
+			if ok {
+				expected = append(expected, pair{scopedAtom("id", forest, requests[0].Parent), scopedAtom("id", forest, definition.Parent)})
+			}
+		}
+	} else {
+		for _, program := range s.programs {
+			request, definitionID, editedReferences, signature, err := lifecycleProgramFacts(program)
+			if err != nil {
+				return err
+			}
+			switch phase {
+			case "target":
+				expected = append(expected, pair{atom("enum", partial.Targets), atom("enum", signature)})
+			case "anchor":
+				expected = append(expected, pair{scopedAtom("id", program.before, resolveLifecycleAnchor(program.before, request, partial.Anchor)), scopedAtom("id", program.before, definitionID)})
+			case "scope":
+				expected = append(expected,
+					pair{scopedAtom("id-set", program.before, projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, "equals-from")), scopedAtom("id-set", program.before, editedReferences)},
+					pair{scopedAtom("id-set", program.before, projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, "any")), scopedAtom("id-set", program.before, editedReferences)})
+			case "old-guard":
+				expected = append(expected, pair{scopedAtom("id-set", program.before, projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, partial.OldGuard)), scopedAtom("id-set", program.before, editedReferences)})
+			default:
+				return errors.New("unsupported factor comparison phase")
+			}
+		}
+	}
+	matched := 0
 	nodes := 0
 	for _, operation := range trace {
 		if operation.Operation == "node" {
@@ -160,14 +205,25 @@ func requireFactorComparisons(partial transformschema.Partial, phase string, tra
 		if operation.Operation != "compare" || len(operation.Inputs) != 2 || len(operation.Outputs) != 1 {
 			continue
 		}
-		leftKind, _, leftErr := decodeTransformAtom(objects[operation.Inputs[0]])
-		rightKind, _, rightErr := decodeTransformAtom(objects[operation.Inputs[1]])
-		if leftErr == nil && rightErr == nil && leftKind == wantKind && rightKind == wantKind {
-			count++
+		isExpectedPair := false
+		for _, want := range expected {
+			if bytes.Equal(objects[operation.Inputs[0]], want.left) && bytes.Equal(objects[operation.Inputs[1]], want.right) {
+				isExpectedPair = true
+				break
+			}
+		}
+		if isExpectedPair {
+			if matched >= len(expected) {
+				return fmt.Errorf("%s factor contains extra authenticated comparison", phase)
+			}
+			if !bytes.Equal(objects[operation.Inputs[0]], expected[matched].left) || !bytes.Equal(objects[operation.Inputs[1]], expected[matched].right) {
+				return fmt.Errorf("%s factor comparisons are reordered at %d", phase, matched)
+			}
+			matched++
 		}
 	}
-	if count < minimum {
-		return fmt.Errorf("%s factor %s has %d %s comparisons, want at least %d", phase, partial.Anchor, count, wantKind, minimum)
+	if matched != len(expected) {
+		return fmt.Errorf("%s factor authenticated %d/%d ordered comparisons", phase, matched, len(expected))
 	}
 	if definitionNormalization && nodes != 0 {
 		return fmt.Errorf("%s definition-only normalization inspected examples", phase)
@@ -175,8 +231,50 @@ func requireFactorComparisons(partial transformschema.Partial, phase string, tra
 	return nil
 }
 
+func lifecycleProgramFacts(program reconstructedProgram) (transformschema.Node, int, []int, string, error) {
+	byID := map[int]transformschema.Node{}
+	var request *transformschema.Node
+	for _, node := range program.before.Nodes {
+		byID[node.ID] = node
+		if node.Kind == "request" {
+			copy := node
+			request = &copy
+		}
+	}
+	if request == nil {
+		return transformschema.Node{}, -1, nil, "", errors.New("program lacks request")
+	}
+	definitionID := -1
+	definition, reference := false, false
+	var references []int
+	for _, edit := range program.edits {
+		node, ok := byID[edit.Target]
+		if !ok {
+			return transformschema.Node{}, -1, nil, "", errors.New("program edit target absent")
+		}
+		if node.Kind == "definition" {
+			definition, definitionID = true, node.ID
+		} else if node.Kind == "reference" {
+			reference, definitionID = true, node.Target
+			references = append(references, node.ID)
+		}
+	}
+	slices.Sort(references)
+	signature := "definition+references"
+	if definition && !reference {
+		signature = "definition"
+	} else if reference && !definition {
+		signature = "references"
+	}
+	return *request, definitionID, references, signature, nil
+}
+
 func requireTargetObservations(trace []TransformOperation, programs []reconstructedProgram, objects map[string][]byte) error {
-	observed := map[string]bool{}
+	type observation struct {
+		forest string
+		id     int
+	}
+	var observed []observation
 	for _, operation := range trace {
 		if operation.Operation != "node" || operation.Outcome != "ok" || len(operation.Inputs) != 2 {
 			continue
@@ -184,17 +282,19 @@ func requireTargetObservations(trace []TransformOperation, programs []reconstruc
 		_, value, err := decodeTransformAtom(objects[operation.Inputs[1]])
 		id, ok := jsonInteger(value)
 		if err == nil && ok {
-			observed[operation.Inputs[0]+fmt.Sprintf("/%d", id)] = true
+			observed = append(observed, observation{operation.Inputs[0], id})
 		}
 	}
+	var expected []observation
 	for _, program := range programs {
 		forestBytes, _ := program.before.CanonicalJSON()
 		forestDigest := digestBytes(forestBytes)
 		for _, edit := range program.edits {
-			if !observed[forestDigest+fmt.Sprintf("/%d", edit.Target)] {
-				return errors.New("target factor omitted an edited-node observation")
-			}
+			expected = append(expected, observation{forestDigest, edit.Target})
 		}
+	}
+	if !slices.Equal(observed, expected) {
+		return errors.New("target factor edited-node observations are missing, extra, or reordered")
 	}
 	return nil
 }
@@ -523,7 +623,7 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 			return s.observeClosure(operation, objects)
 		}
 		if objectVersion(objects[operation.Inputs[0]], "transform-program-batch/v1") && operation.Phase == "acquire" {
-			if len(s.programs) != 4 || s.acquireBefore != "" || s.acquireAfter != "" || len(s.acquireEdits) != 0 || s.acquireCompare != 0 {
+			if s.batchVerified || len(s.programs) != 4 || s.acquireBefore != "" || s.acquireAfter != "" || len(s.acquireEdits) != 0 || s.acquireCompare != 0 {
 				return errors.New("program batch verified before four complete acquisitions")
 			}
 			batch, err := transformfixturecore.ParseProgramBatch(objects[operation.Inputs[0]])
@@ -561,22 +661,38 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 			if expectedErr != nil || actualErr != nil || !bytes.Equal(expectedBytes, actualBytes) {
 				return errors.New("program batch differs from promoted programs")
 			}
+			s.batchVerified = true
 			return nil
 		}
 		if objectVersion(objects[operation.Inputs[0]], "transform-schema/v1") && operation.Phase == "freeze" {
 			kind, value, err := decodeTransformAtom(objects[operation.Outputs[0]])
 			boolean, ok := value.(bool)
-			if err != nil || kind != "boolean" || !ok || !boolean || operation.Outcome != "verified" || s.frozenArtifact != "" && s.frozenArtifact != operation.Inputs[0] {
+			schema, schemaErr := transformschema.ParseSchema(objects[operation.Inputs[0]])
+			survivor, survivorOK := s.partials[s.survivor]
+			production := s.policy == string(NousRefine) || s.policy == string(NoEqualityGuard)
+			exactAssembly := schemaErr == nil
+			if production {
+				exactAssembly = survivorOK && survivor.Stage == 5 && len(s.closures) == 5 && schemaErr == nil && schema.Anchor == survivor.Anchor && schema.Targets == survivor.Targets && schema.ReferenceScope == survivor.ReferenceScope && schema.OldGuard == survivor.OldGuard && schema.Locality == survivor.Locality
+			}
+			if err != nil || kind != "boolean" || !ok || !boolean || operation.Outcome != "verified" || s.frozenArtifact != "" || !exactAssembly {
 				return errors.New("invalid frozen schema verification")
 			}
 			s.frozenArtifact = operation.Inputs[0]
+			return nil
 		}
+		return errors.New("unsupported verify input or phase")
 	case "terminal":
 		if s.pendingAttach >= 0 || len(s.pendingCompare) != 0 || len(s.afterEvidence) != 0 {
 			return errors.New("terminal precedes application evidence attachment")
 		}
 		if len(operation.Inputs) != 1 || !oneOfString(objectWireVersion(objects[operation.Inputs[0]]), "transform-closure/v1", "transform-schema/v1", "transform-store-boundary/v1") {
 			return errors.New("terminal input is not a closure, schema, or store boundary")
+		}
+		if len(s.programs) == 4 && !s.batchVerified {
+			return errors.New("terminal precedes exact program-batch verification")
+		}
+		if oneOfString(s.policy, string(PositiveLGG), string(ConcreteReplay)) && !s.batchVerified {
+			return errors.New("acquisition-backed baseline lacks batch verification")
 		}
 		if s.policy == string(NousRefine) || s.policy == string(NoEqualityGuard) {
 			switch operation.Outcome {

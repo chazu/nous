@@ -16,67 +16,28 @@ import (
 
 func init() {
 	registerVocabularyWords("transformschema", map[string]builtinFn{
-		"ts-forest-valid?":        bTSForestValid,
-		"ts-schema-apply":         bTSSchemaApply,
-		"ts-program-apply":        bTSProgramApply,
-		"ts-refine":               bTSRefine,
-		"ts-candidate-allocate":   bTSCandidateAllocate,
-		"ts-output-compare":       bTSOutputCompare,
-		"ts-digest":               bTSDigest,
-		"ts-node-facts":           bTSNodeFacts,
-		"ts-parent-facts":         bTSParentFacts,
-		"ts-target":               bTSTarget,
-		"ts-make-edit":            bTSMakeEdit,
-		"ts-make-program":         bTSMakeProgram,
-		"ts-program-edits":        bTSProgramEdits,
-		"ts-make-schema":          bTSMakeSchema,
-		"ts-close-stage":          bTSCloseStage,
-		"ts-freeze-schema":        bTSFreezeSchema,
-		"ts-verify-program-batch": bTSVerifyProgramBatch,
-		"ts-eq":                   bTSEqual,
-		"ts-id-eq":                bTSIDEqual,
-		"ts-id-set-eq":            bTSIDSetEqual,
-		"ts-factor-result":        bTSFactorResult,
-		"ts-meter":                bTSMeter,
+		"ts-forest-valid?":      bTSForestValid,
+		"ts-schema-apply":       bTSSchemaApply,
+		"ts-program-apply":      bTSProgramApply,
+		"ts-refine":             bTSRefine,
+		"ts-candidate-allocate": bTSCandidateAllocate,
+		"ts-output-compare":     bTSOutputCompare,
+		"ts-digest":             bTSDigest,
+		"ts-node-facts":         bTSNodeFacts,
+		"ts-parent-facts":       bTSParentFacts,
+		"ts-target":             bTSTarget,
+		"ts-make-edit":          bTSMakeEdit,
+		"ts-make-program":       bTSMakeProgram,
+		"ts-program-edits":      bTSProgramEdits,
+		"ts-make-schema":        bTSMakeSchema,
+		"ts-close-stage":        bTSCloseStage,
+		"ts-freeze-schema":      bTSFreezeSchema,
+		"ts-eq":                 bTSEqual,
+		"ts-id-eq":              bTSIDEqual,
+		"ts-id-set-eq":          bTSIDSetEqual,
+		"ts-factor-result":      bTSFactorResult,
+		"ts-meter":              bTSMeter,
 	})
-}
-
-func bTSVerifyProgramBatch(vm *VM) error {
-	value := vm.pop()
-	if value.Kind() != VString || vm.Store == nil {
-		vm.push(Nil())
-		return nil
-	}
-	experiment := vm.Store.Get(value.AsString())
-	if experiment == nil {
-		vm.push(Nil())
-		return nil
-	}
-	batch := transformfixturecore.ProgramBatch{}
-	for _, name := range experiment.GetStrings("programUnits") {
-		program := vm.Store.Get(name)
-		if program == nil {
-			vm.push(Nil())
-			return nil
-		}
-		example := vm.Store.Get(program.GetString("example"))
-		if example == nil {
-			vm.push(Nil())
-			return nil
-		}
-		before := []byte(example.GetString("before"))
-		batch.Rows = append(batch.Rows, transformfixturecore.ProgramRow{Token: example.GetString("token"), BeforeDigest: transformDigest(before), Program: []byte(program.GetString("program"))})
-	}
-	encoded, err := batch.CanonicalJSON()
-	if err != nil {
-		vm.push(Nil())
-		return nil
-	}
-	if err := recordTransformAtPhase(vm, "acquire", "verify", "verified", 11, [][]byte{encoded}, [][]byte{transformAtom("boolean", true)}); err != nil {
-		return err
-	}
-	vm.push(StringVal(string(encoded)))
-	return nil
 }
 
 func bTSEqual(vm *VM) error {
@@ -115,14 +76,25 @@ func bTSIDSetEqual(vm *VM) error {
 }
 
 func typedTransformEqual(vm *VM, kind string) error {
-	right, left := vm.pop(), vm.pop()
+	right, left, forestValue := vm.pop(), vm.pop(), vm.pop()
+	if forestValue.Kind() != VString {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	forest, err := transformschema.ParseForest([]byte(forestValue.AsString()))
+	if err != nil {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	canonicalForest, _ := forest.CanonicalJSON()
+	forestDigest := transformDigest(canonicalForest)
 	encode := func(value Value) ([]byte, bool) {
 		switch kind {
 		case "id":
 			if value.Kind() != VInt || value.AsInt() < -1 || value.AsInt() >= transformschema.MaxNodes {
 				return nil, false
 			}
-			return boundedTransformComparisonAtom(kind, value.AsInt())
+			return boundedTransformComparisonAtom("scoped-id", []any{forestDigest, value.AsInt()})
 		case "id-set":
 			if value.Kind() != VList {
 				return nil, false
@@ -139,7 +111,7 @@ func typedTransformEqual(vm *VM, kind string) error {
 				}
 				ids[index] = id
 			}
-			return boundedTransformComparisonAtom(kind, ids)
+			return boundedTransformComparisonAtom("scoped-id-set", []any{forestDigest, ids})
 		}
 		return nil, false
 	}
@@ -356,6 +328,31 @@ func TransformMeterSnapshot(token string) ([]TransformMeterRecord, error) {
 	m.Lock()
 	defer m.Unlock()
 	return slices.Clone(m.records), nil
+}
+
+// RecordTransformProgramBatchVerification is an orchestration-only adapter.
+// It is intentionally not registered as a CUE word: the closed acquisition
+// barrier serializes its four promoted rows without returning the batch to the
+// policy VM.
+func RecordTransformProgramBatchVerification(token string, batch []byte) error {
+	transformMeters.Lock()
+	m := transformMeters.items[token]
+	transformMeters.Unlock()
+	if m == nil {
+		return errors.New("unknown transformation meter")
+	}
+	if _, err := transformfixturecore.ParseProgramBatch(batch); err != nil {
+		return err
+	}
+	m.Lock()
+	defer m.Unlock()
+	charge := transformLifecycleCharges[11]
+	if m.reserved || m.work+charge >= transformLifecycleWorkCap {
+		return errors.New("program batch verification outside closed acquisition budget")
+	}
+	m.records = append(m.records, TransformMeterRecord{Category: 11, Operation: "verify", Phase: "acquire", Outcome: "verified", Inputs: [][]byte{slices.Clone(batch)}, Outputs: [][]byte{transformAtom("boolean", true)}})
+	m.work += charge
+	return nil
 }
 
 func chargeTransform(token, operation, subject, object, outcome string, category int) error {

@@ -473,10 +473,20 @@ func auditPolicyOutcome(c policyCurriculum, heldoutBytes, scorerBytes []byte, ou
 }
 
 func programBatch(run acquisitionRun) ([]byte, error) {
+	return programBatchFromStore(run.Store, run.Programs)
+}
+
+func programBatchFromStore(store *unit.Store, programs []string) ([]byte, error) {
 	batch := transformfixturecore.ProgramBatch{}
-	for _, name := range run.Programs {
-		program := run.Store.Get(name)
-		example := run.Store.Get(program.GetString("example"))
+	for _, name := range programs {
+		program := store.Get(name)
+		if program == nil {
+			return nil, errors.New("program unit is absent")
+		}
+		example := store.Get(program.GetString("example"))
+		if example == nil {
+			return nil, errors.New("program example is absent")
+		}
 		before := []byte(example.GetString("before"))
 		digest := sha256.Sum256(before)
 		batch.Rows = append(batch.Rows, transformfixturecore.ProgramRow{

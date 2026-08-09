@@ -8,26 +8,19 @@ import (
 
 func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 	manifest := digestBytes([]byte("manifest"))
-	sink, err := newTransformTranscriptSink(7, string(PositiveLGG), "0123456789abcdef", manifest)
+	sink, err := newTransformTranscriptSink(7, string(BoundedPBE), "0123456789abcdef", manifest)
 	if err != nil {
-		t.Fatal(err)
-	}
-	atom, err := sink.Admit([]byte(`["transform-atom/v1","boolean",true]`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sink.Emit(TransformOperation{"verify", "freeze", []string{atom}, []string{atom}, "verified", 11}); err != nil {
 		t.Fatal(err)
 	}
 	boundary, err := sink.Admit([]byte(`["transform-store-boundary/v1","freeze","0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	terminal, err := sink.Admit([]byte(`["transform-terminal/v1","completed",2,0,1]`))
+	terminal, err := sink.Admit([]byte(`["transform-terminal/v1","no-discovery",1,0,0]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.Emit(TransformOperation{"terminal", "terminal", []string{boundary}, []string{terminal}, "completed", 11}); err != nil {
+	if err := sink.Emit(TransformOperation{"terminal", "terminal", []string{boundary}, []string{terminal}, "no-discovery", 11}); err != nil {
 		t.Fatal(err)
 	}
 	bundle, err := sink.Bundle()
@@ -38,7 +31,7 @@ func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 	if err != nil || reduced.Vector != bundle.Vector || reduced.Work != bundle.Work {
 		t.Fatalf("reduced=%+v err=%v", reduced, err)
 	}
-	if reduced.Terminal != "completed" || reduced.Applications != 0 || !equalTransformObjects(reduced.Objects, bundle.Objects) {
+	if reduced.Terminal != "no-discovery" || reduced.Applications != 0 || !equalTransformObjects(reduced.Objects, bundle.Objects) {
 		t.Fatalf("reducer did not reconstruct terminal/object state: %+v", reduced)
 	}
 	inflated, err := decodeTransformGzip(bundle.Gzip)
@@ -49,7 +42,7 @@ func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 		t.Fatal("accepted concatenated gzip members")
 	}
 	corrupt := bytes.Clone(bundle.Raw)
-	corrupt[bytes.Index(corrupt, []byte("verified"))] = 'x'
+	corrupt[bytes.Index(corrupt, []byte("no-discovery"))] = 'x'
 	if _, err := reduceTransformTranscript(corrupt, bundle.Objects, manifest); err == nil {
 		t.Fatal("accepted corrupted transcript")
 	}
@@ -84,7 +77,7 @@ func TestTransformEvidenceAttachmentIsImmediateAndSingleUse(t *testing.T) {
 		return sink, atom
 	}
 	sink, atom := newSink()
-	if err := sink.Emit(TransformOperation{"verify", "freeze", []string{atom}, []string{atom}, "verified", 11}); err != nil {
+	if err := sink.Emit(TransformOperation{"compare", "target", []string{atom, atom}, []string{atom}, "true", 3}); err != nil {
 		t.Fatal(err)
 	}
 	attempt, _ := sink.Admit([]byte(`["transform-evidence-attempt/v1","attached","atom",true,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]`))
@@ -96,7 +89,7 @@ func TestTransformEvidenceAttachmentIsImmediateAndSingleUse(t *testing.T) {
 		t.Fatal("accepted second attachment")
 	}
 	sink, atom = newSink()
-	if err := sink.Emit(TransformOperation{"verify", "freeze", []string{atom}, []string{atom}, "verified", 11}); err != nil {
+	if err := sink.Emit(TransformOperation{"compare", "target", []string{atom, atom}, []string{atom}, "true", 3}); err != nil {
 		t.Fatal(err)
 	}
 	prior := sink.lastObject
@@ -225,5 +218,39 @@ func TestReducerRejectsSemanticallyForgedObjectEvidence(t *testing.T) {
 	}
 	if _, err := reduceTransformTranscript(bundle.Raw, bundle.Objects, manifest); err == nil {
 		t.Fatal("reducer accepted forged node facts")
+	}
+}
+
+func TestReducerAcceptsOnlyExactInvalidInputSemantics(t *testing.T) {
+	invalid := []byte(`["unknown-transform-wire/v1"]`)
+	edit := []byte(`["set-value/v1",0,"x"]`)
+	objects := map[string][]byte{digestBytes(invalid): invalid, digestBytes(edit): edit}
+	for _, operation := range []TransformOperation{
+		{Operation: "canonicalize", Phase: "acquire", Inputs: []string{digestBytes(invalid)}, Outcome: "invalid-input", Category: 6},
+		{Operation: "hash", Phase: "acquire", Inputs: []string{digestBytes(invalid)}, Outcome: "invalid-input", Category: 7},
+		{Operation: "edit-apply", Phase: "acquire", Inputs: []string{digestBytes(invalid), digestBytes(edit)}, Outcome: "invalid-input", Category: 5},
+	} {
+		if err := validateTransformSemantics(operation, objects); err != nil {
+			t.Fatalf("%s invalid-input semantics: %v", operation.Operation, err)
+		}
+		forged := operation
+		forged.Outcome = map[string]string{"canonicalize": "canonical", "hash": "hashed", "edit-apply": "applied"}[operation.Operation]
+		forged.Outputs = []string{digestBytes(invalid)}
+		if err := validateTransformSemantics(forged, objects); err == nil {
+			t.Fatalf("%s accepted invalid input as successful", operation.Operation)
+		}
+	}
+}
+
+func TestLifecycleRejectsUnsupportedVerifyWire(t *testing.T) {
+	state, err := newTransformLifecycleState(string(BoundedPBE), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boolean := []byte(`["transform-atom/v1","boolean",true]`)
+	objects := map[string][]byte{digestBytes(boolean): boolean}
+	operation := TransformOperation{Operation: "verify", Phase: "freeze", Inputs: []string{digestBytes(boolean)}, Outputs: []string{digestBytes(boolean)}, Outcome: "verified", Category: 11}
+	if err := state.observe(operation, objects); err == nil {
+		t.Fatal("accepted verify over an unsupported boolean wire")
 	}
 }

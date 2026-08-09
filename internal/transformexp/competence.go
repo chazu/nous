@@ -66,7 +66,11 @@ func runTransformCompetence(domainsDir string) (CompetenceReport, error) {
 		return report, err
 	}
 	report.Microcases = len(microcases) / 2
-	report.Passed = report.Forests == 351 && report.SchemaApplications == 25272 && report.ProgramApplications == 7020 && report.Microcases == 14
+	oracleUniverse, oracleErr := transformoracle.AuditCompetenceUniverse()
+	if oracleErr != nil {
+		return report, oracleErr
+	}
+	report.Passed = report.Forests == 351 && report.SchemaApplications == 25272 && report.ProgramApplications == 7020 && report.Microcases == 14 && oracleUniverse.Forests == report.Forests && oracleUniverse.SchemaApplications == report.SchemaApplications && oracleUniverse.ProgramApplications == report.ProgramApplications
 	if !report.Passed {
 		return report, fmt.Errorf("competence cardinality mismatch: %+v", report)
 	}
@@ -278,7 +282,9 @@ func runTransformMicrocases(domainsDir string) (map[string][]byte, error) {
 			right, _ := (transformschema.Schema{"request-target", "references", "global", "any", "none"}).CanonicalJSON()
 			higher, _ := (transformschema.Schema{"first-local", "definition+references", "global", "equals-from", "required"}).CanonicalJSON()
 			tier, tierErr := transformbaseline.MinimumDescriptionTier([][]byte{higher, right, left})
-			completeTier := tierErr == nil && len(tier) == 2 && bytes.Equal(tier[0], left) && bytes.Equal(tier[1], right)
+			oracleTier, oracleTierErr := transformoracle.AuditMinimumDescriptionTier([][]byte{higher, right, left})
+			_, pbeErr := transformbaseline.BoundedPBE(c.Training)
+			completeTier := pbeErr == nil && tierErr == nil && oracleTierErr == nil && len(tier) == 2 && bytes.Equal(tier[0], left) && bytes.Equal(tier[1], right) && slices.EqualFunc(tier, oracleTier, bytes.Equal)
 			return completeTier && partial.Stage == 5 && barriers == 5 && closures == 5
 		}},
 		{"application-prefixes", []any{"standalone", "driver", "byte-identical"}, func() bool {

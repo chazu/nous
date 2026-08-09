@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"testing"
+
+	"github.com/chazu/nous/internal/transformfixturecore"
 )
 
 func TestCommittedResultsReconstructEveryPolicyScoreAndArtifact(t *testing.T) {
@@ -69,5 +71,40 @@ func TestCommittedResultsReconstructEveryPolicyScoreAndArtifact(t *testing.T) {
 				t.Fatal("heldout commitment is not deterministic")
 			}
 		})
+	}
+}
+
+func TestCommittedResultsRejectHeldoutInputPermutation(t *testing.T) {
+	c, err := makeCurriculum(0, 8, 841001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := decodePolicyView(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := executePolicy("../../domains", view, c.Ordinal, NousRefine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldout, err := decodeHeldoutInputs(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err = executeHeldoutInputs(view, heldout, outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := transformfixturecore.ParseHeldout(heldout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.Cases[0].Before, fixture.Cases[1].Before = fixture.Cases[1].Before, fixture.Cases[0].Before
+	permuted, err := fixture.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconstructHeldoutResults(outcome.Transcript.Raw, outcome.Transcript.Objects, permuted); err == nil {
+		t.Fatal("accepted heldout results whose application inputs belong to different committed tokens")
 	}
 }

@@ -87,6 +87,15 @@ func runAcquisitionConfigured(domainsDir string, trainingBytes []byte, token str
 		if len(eng.VM.DeletedUnits) != 0 {
 			return acquisitionRun{}, fmt.Errorf("deleted units")
 		}
+		if task.UnitName == experiment.Name && task.SlotName == "tsAcquire" && experiment.GetString("terminal") == "" && experiment.GetBool("tsAcquired") && len(experiment.GetStrings("programUnits")) == 4 {
+			batch, batchErr := programBatchFromStore(store, experiment.GetStrings("programUnits"))
+			if batchErr != nil {
+				return acquisitionRun{}, fmt.Errorf("serialize closed acquisition batch: %w", batchErr)
+			}
+			if recordErr := dsl.RecordTransformProgramBatchVerification(meterToken, batch); recordErr != nil {
+				return acquisitionRun{}, fmt.Errorf("record closed acquisition batch: %w", recordErr)
+			}
+		}
 		popped++
 	}
 	records, err := dsl.TransformMeterSnapshot(meterToken)

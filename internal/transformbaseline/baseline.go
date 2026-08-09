@@ -50,6 +50,9 @@ func BoundedPBE(trainingBytes []byte) (Result, error) {
 }
 
 func BoundedPBEMetered(trainingBytes []byte) (Result, []Event, error) {
+	if !auditMinimumTieRetention() {
+		return Result{}, nil, errors.New("minimum-description tie retention self-audit")
+	}
 	training, err := transformfixturecore.ParseTraining(trainingBytes)
 	if err != nil {
 		return Result{}, nil, err
@@ -78,18 +81,24 @@ func MinimumDescriptionTier(candidates [][]byte) ([][]byte, error) {
 		parsed[index] = value
 	}
 	slices.SortFunc(parsed, compareSchema)
-	if len(parsed) == 0 {
-		return nil, nil
+	result, _, err := enumerate(transformfixturecore.Training{}, parsed, true, false)
+	return result.Ties, err
+}
+
+func retainMinimumCandidate(result *Result, foundCost *int, candidate schema) {
+	encoded := encodeSchema(candidate)
+	if *foundCost < 0 {
+		*foundCost = description(candidate)
+		result.Schema = encoded
 	}
-	minimum := description(parsed[0])
-	var result [][]byte
-	for _, candidate := range parsed {
-		if description(candidate) != minimum {
-			break
-		}
-		result = append(result, encodeSchema(candidate))
-	}
-	return result, nil
+	result.Ties = append(result.Ties, encoded)
+}
+
+func auditMinimumTieRetention() bool {
+	candidates := []schema{{"request-target", "definition", "local", "equals-from", "none"}, {"request-target", "references", "global", "any", "none"}, {"first-local", "definition+references", "global", "equals-from", "required"}}
+	slices.SortFunc(candidates, compareSchema)
+	result, _, err := enumerate(transformfixturecore.Training{}, candidates, true, false)
+	return err == nil && len(result.Ties) == 2 && bytes.Equal(result.Ties[0], encodeSchema(candidates[0])) && bytes.Equal(result.Ties[1], encodeSchema(candidates[1]))
 }
 
 func RandomPBEMetered(trainingBytes []byte, seed1, seed2 uint64) (Result, []Event, error) {
@@ -199,12 +208,7 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 			}
 		}
 		if exact {
-			encoded := encodeSchema(candidate)
-			if foundCost < 0 {
-				foundCost = description(candidate)
-				result.Schema = encoded
-			}
-			result.Ties = append(result.Ties, encoded)
+			retainMinimumCandidate(&result, &foundCost, candidate)
 			if !retainTier {
 				break
 			}

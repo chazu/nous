@@ -62,6 +62,7 @@ func ExecuteDevelopment(repoRoot, domainsDir string) (protectedReport, error) {
 	if _, err := persistPreparedFixtures(authority.Root, "development", curricula); err != nil {
 		return protectedReport{}, err
 	}
+	eraseCurriculaTruth(curricula)
 	evidence, err := buildCommittedDevelopmentEvidence(authority)
 	if err != nil {
 		return protectedReport{}, err
@@ -114,6 +115,7 @@ func ExecuteValidation(repoRoot, domainsDir string) (report protectedReport, ret
 	if err != nil {
 		return protectedReport{}, err
 	}
+	eraseCurriculaTruth(curricula)
 	if err := startAttempt(authority.Root, receipt, "", fixtureRoot); err != nil {
 		return protectedReport{}, err
 	}
@@ -197,9 +199,7 @@ func ExecuteLocked(repoRoot, domainsDir, unlockToken string) (report protectedRe
 		root[index] = 0
 	}
 	root = nil
-	for index := range curricula {
-		curricula[index].Seed = 0
-	}
+	eraseCurriculaTruth(curricula)
 	evidence, err := buildCommittedLockedEvidence(authority)
 	if err != nil {
 		return protectedReport{}, err
@@ -216,6 +216,24 @@ func ExecuteLocked(repoRoot, domainsDir, unlockToken string) (report protectedRe
 		return protectedReport{}, err
 	}
 	return report, nil
+}
+
+func eraseCurriculaTruth(curricula []curriculum) {
+	for index := range curricula {
+		curricula[index].Seed = 0
+		curricula[index].SeedCommitment = ""
+		curricula[index].AcceptedAttempt = 0
+		eraseBytes(curricula[index].Latent)
+		curricula[index].Latent = nil
+		for expected := range curricula[index].Expected {
+			eraseBytes(curricula[index].Expected[expected].Output)
+			curricula[index].Expected[expected] = expectedCase{}
+		}
+		curricula[index].Expected = nil
+		curricula[index].GeneratorLedger = acceptanceLedger{}
+		eraseBytes(curricula[index].Scorer)
+		curricula[index].Scorer = nil
+	}
 }
 
 func pairedRows(rows []PolicyReportRow, curricula int) ([]pairedTransformRow, error) {
@@ -896,11 +914,12 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	if err != nil || rootErr != nil || !bytes.Equal(rebuiltCompetence, committedCompetenceRoot) {
 		return fmt.Errorf("%s competence root does not reconstruct from case leaves", panel)
 	}
+	replayedReport, exhaustiveErr := runTransformCompetence(filepath.Join(authority.Root, "domains"))
 	replayedCompetence, replayErr := runTransformMicrocases(filepath.Join(authority.Root, "domains"))
-	if replayErr != nil || len(replayedCompetence) != len(competenceLeaves) {
+	if exhaustiveErr != nil || replayErr != nil || replayedReport != competence || len(replayedCompetence) != len(competenceLeaves) {
 		return fmt.Errorf("%s competence microcases do not replay", panel)
 	}
-	competenceGate := report.Payload.Competence == (CompetenceReport{351, 25272, 7020, 14, true}) && len(replayedCompetence) == len(competenceLeaves)
+	competenceGate := report.Payload.Competence == (CompetenceReport{351, 25272, 7020, 14, true}) && replayedReport == report.Payload.Competence && len(replayedCompetence) == len(competenceLeaves)
 	for name, value := range replayedCompetence {
 		if !bytes.Equal(value, competenceLeaves[name]) {
 			return fmt.Errorf("%s competence microcase changed: %s", panel, name)
@@ -917,6 +936,9 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 		return fmt.Errorf("%s report row/limitation cardinality mismatch", panel)
 	}
 	oracleParityGate := true
+	var generatorRows, oracleRows []any
+	generatorDiagnostics := AcceptanceDiagnostics{Exact: true}
+	oracleDiagnostics := AcceptanceDiagnostics{Exact: true}
 	for ordinal := 0; ordinal < wantRows/len(empiricalPolicies); ordinal++ {
 		training, trainingErr := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
 		heldout, heldoutErr := read(fmt.Sprintf("fixtures/%03d/heldout.json", ordinal))
@@ -924,11 +946,32 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 		if trainingErr != nil || heldoutErr != nil || scorerErr != nil {
 			return fmt.Errorf("%s acceptance fixtures %d do not decode", panel, ordinal)
 		}
+		scorerView, scorerViewErr := decodeScorerBytes(scorer)
+		trainingView, trainingViewErr := transformfixturecore.ParseTraining(training)
+		heldoutView, heldoutViewErr := transformfixturecore.ParseHeldout(heldout)
+		generator, generatorErr := generatorAcceptanceMatrix(trainingView, heldoutView, scorerView.Expected, scorerView.Latent)
+		eraseScorerView(&scorerView)
 		audit, auditErr := transformoracle.AuditAcceptance(training, heldout, scorer)
-		if auditErr != nil || audit.Applications != 72*16 || audit.Work != 109161 || !digestString(audit.MatrixSHA256) || !audit.Accepted {
+		if scorerViewErr != nil || trainingViewErr != nil || heldoutViewErr != nil || generatorErr != nil || auditErr != nil || generator.Applications != 72*16 || generator.Work != 109161 || !digestString(generator.MatrixSHA256) || !generator.Accepted || audit.Applications != generator.Applications || audit.Work != generator.Work || audit.MatrixSHA256 != generator.MatrixSHA256 || audit.Accepted != generator.Accepted {
 			oracleParityGate = false
 			return fmt.Errorf("%s acceptance matrix %d does not independently reconstruct", panel, ordinal)
 		}
+		generatorDiagnostics.Curricula++
+		generatorDiagnostics.Applications += generator.Applications
+		generatorDiagnostics.Work += generator.Work
+		oracleDiagnostics.Curricula++
+		oracleDiagnostics.Applications += audit.Applications
+		oracleDiagnostics.Work += audit.Work
+		generatorRows = append(generatorRows, []any{ordinal, generator.Applications, generator.Work, generator.MatrixSHA256, generator.Accepted})
+		oracleRows = append(oracleRows, []any{ordinal, audit.Applications, audit.Work, audit.MatrixSHA256, audit.Accepted})
+	}
+	generatorDiagnostics.RootSHA256 = digestBytes(mustJSON([]any{"transform-generator-acceptance-ledgers/v1", generatorRows}))
+	oracleDiagnostics.RootSHA256 = digestBytes(mustJSON([]any{"transform-oracle-acceptance-ledgers/v1", oracleRows}))
+	generatorEvidence, generatorEvidenceErr := read("acceptance/generator.json")
+	oracleEvidence, oracleEvidenceErr := read("acceptance/oracle.json")
+	if generatorEvidenceErr != nil || oracleEvidenceErr != nil || generatorDiagnostics != report.Payload.GeneratorAcceptance || oracleDiagnostics != report.Payload.OracleAcceptance || !bytes.Equal(generatorEvidence, acceptanceDiagnosticsBytes("generator", generatorDiagnostics)) || !bytes.Equal(oracleEvidence, acceptanceDiagnosticsBytes("oracle", oracleDiagnostics)) {
+		oracleParityGate = false
+		return fmt.Errorf("%s acceptance diagnostics do not reconstruct", panel)
 	}
 	for index, row := range report.Payload.Rows {
 		ordinal, policyIndex := index/len(empiricalPolicies), index%len(empiricalPolicies)
@@ -1176,6 +1219,12 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		score, scoreErr := scoreCommittedHeldout(results, scorer, terminal)
 		if scorerErr != nil || resultErr != nil || scoreErr != nil || digestBytes(results) != heldoutDigest {
 			return fmt.Errorf("%s %s heldout evidence does not reconstruct: %s", panel, role, key)
+		}
+		if requiresPrograms {
+			programAudit, programAuditErr := transformoracle.AuditPolicy(trainingFixture, heldoutFixture, nil, trainingPrograms)
+			if programAuditErr != nil || !programAudit.ProgramsExact {
+				return fmt.Errorf("%s %s independent program oracle rejects: %s", panel, role, key)
+			}
 		}
 		if terminal == "completed" {
 			var schemaBytes, batchBytes []byte

@@ -73,6 +73,9 @@ func reconstructHeldoutResults(raw []byte, objects map[string][]byte, heldoutByt
 		}
 		pending += lifecycleCharges[operation.Category]
 		if operation.Operation == "schema-application" || operation.Operation == "replay-application" {
+			if len(observations) >= len(heldout.Cases) || len(operation.Inputs) != 2 || operation.Inputs[0] != digestBytes(heldout.Cases[len(observations)].Before) {
+				return nil, errors.New("heldout application input differs from committed queue")
+			}
 			terminal, output, err := decodeCommittedApplication(operation, objects)
 			if err != nil {
 				return nil, err

@@ -61,6 +61,10 @@ type AcceptanceDiagnostics struct {
 	Exact        bool   `json:"exact"`
 }
 
+func acceptanceDiagnosticsBytes(role string, diagnostics AcceptanceDiagnostics) []byte {
+	return mustJSON([]any{"transform-acceptance-diagnostics/v1", role, diagnostics.Curricula, diagnostics.Applications, diagnostics.Work, diagnostics.RootSHA256, diagnostics.Exact})
+}
+
 type panelArtifacts struct {
 	Primary         map[string]TransformTranscriptBundle
 	Audit           map[string]TransformTranscriptBundle

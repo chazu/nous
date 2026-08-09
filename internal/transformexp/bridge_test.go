@@ -30,7 +30,7 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 3794 {
+	if len(run.MeterRecords) != 3655 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
 	closures, frozen, batches := 0, 0, 0
@@ -124,6 +124,56 @@ func TestReducerRejectsForgedStageClosure(t *testing.T) {
 		return
 	}
 	t.Fatal("transcript contained no closure")
+}
+
+func TestReducerRequiresProgramBatchBeforeTerminal(t *testing.T) {
+	c, err := makeCurriculum(0, 8, 841001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runAcquisition("../../domains", c.Training, "batch-omission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := transcriptFromAcquisition(run, 0, NousRefine, "0123456789abcdef", digestBytes([]byte("batch omission manifest")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := newTransformLifecycleState(string(NousRefine), c.Training)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped := false
+	scanner := bufio.NewScanner(bytes.NewReader(bundle.Raw))
+	for scanner.Scan() {
+		event, parseErr := parseTransformEvent(scanner.Bytes())
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		operation, parseErr := parseTransformOperation(bundle.Objects[event.Object])
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if operation.Operation == "verify" && operation.Phase == "acquire" && objectVersion(bundle.Objects[operation.Inputs[0]], "transform-program-batch/v1") {
+			skipped = true
+		}
+		err := state.observe(operation, bundle.Objects)
+		if skipped && operation.Operation == "verify" && operation.Phase == "acquire" {
+			// Model a transcript in which the batch proof was not retained without
+			// perturbing the sequence numbers used by later certificates.
+			state.batchVerified = false
+		}
+		if operation.Operation == "terminal" {
+			if err == nil || !skipped {
+				t.Fatalf("terminal err=%v skipped=%v", err, skipped)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("operation %s before terminal: %v", operation.Operation, err)
+		}
+	}
+	t.Fatal("transcript contained no terminal")
 }
 
 func assertRefinementProvenance(t *testing.T, run acquisitionRun) {

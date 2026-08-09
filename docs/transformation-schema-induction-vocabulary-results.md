@@ -1,7 +1,8 @@
 # Transformation-schema induction vocabulary: implementation and trial record
 
-Status: **v2 implementation-review revision 2; revision 1 was rejected, v1 was
-closed unexecuted, and no v2 protected panel has run**
+Status: **v2 implementation-review revision 3; revisions 1 and 2 were
+unanimously rejected, v1 was closed unexecuted, and no v2 protected panel has
+run**
 
 This document records Vocabulary 2 of the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) as it
@@ -60,7 +61,8 @@ input, output, and operation objects. The trace now authenticates:
 
 - concrete edit discovery and application;
 - complete ascending per-node output comparison for each acquired program,
-  followed by ordinary acquire-time verification of the exact four-row batch;
+  followed by orchestration-owned acquire-time serialization and verification
+  of the exact four-row batch after the closed acquisition barrier;
 - all 13 partial-candidate allocations and 12 refinement-parent edges;
 - semantic facts and predicates used to evaluate each factor;
 - exactly five canonical closure objects, including every alternative,
@@ -87,14 +89,28 @@ boolean claim. The reducer reconstructs that claim afterward from the four
 acquired programs and explicit local observations. It does not return an
 answer to the VM or alter candidate selection. Definition-only scope and guard
 normalization uses one enum comparison, explicit `redundant-noncanonical`
-closure status, and no example scan.
+closure status, and no example scan. ID and ID-set comparisons are typed and
+scoped by the canonical forest digest, so equal integer node IDs from different
+examples cannot satisfy one another's proof. The reducer requires the exact
+case-bound operands, counts, and order for target, anchor, scope, old-guard,
+locality, and normalization evidence.
 
 Committed protected evidence is checked more strongly than the in-memory safe
 trial. The verifier rebuilds the exact evidence graph and competence root from
 Git blobs, then independently derives each execution row's frozen artifact,
 eight held-out outcomes, correctness bit vector, false-application count,
-nonmatching work, family assignment, and premanifest fixture bindings. Report
-and execution-manifest agreement alone is not accepted as evidence.
+nonmatching work, family assignment, and premanifest fixture bindings. Each
+held-out application input digest must match the corresponding committed case,
+not merely its position in an eight-row result stream. Report and
+execution-manifest agreement alone is not accepted as evidence.
+
+Generator and oracle acceptance diagnostics are distinct committed evidence
+leaves and protected-payload fields. Committed verification independently
+recomputes both ledgers from persisted fixtures, checks exact application/work
+counts and matrix roots, and compares each canonical diagnostic leaf. Persisted
+development, validation, and locked curricula are scrubbed of seed commitment,
+accepted attempt, latent schema, expected outputs, generation ledger, and
+scorer bytes before policy execution begins.
 
 Store-backed policies persist their actual canonical CUE Store, not a summary.
 Independent verification reruns the exact acquisition configuration and
@@ -125,7 +141,11 @@ closure rejection, committed score/artifact reconstruction for every policy,
 receipt and repository attacks, actual Store replay, public locked-statistics
 reconstruction, and the source-authority call graph including test files.
 
-The competence suite also passed its frozen exhaustive bounds:
+The competence suite also passed its frozen exhaustive bounds. A second
+implementation in `internal/transformoracle` independently enumerates and
+executes the same finite forest, program, and schema universes, and the
+committed verifier reruns the full production and oracle paths rather than
+trusting the recorded cardinalities:
 
 | Check | Count |
 | --- | ---: |
@@ -135,9 +155,9 @@ The competence suite also passed its frozen exhaustive bounds:
 | Committed executable microcases | 14 |
 
 The 14 cases now include an actual zero-request forest, execution of ordinary
-acquisition with all four destination program-unit names preoccupied, and a
-direct audit of the bounded PBE minimum-description tier routine retaining
-every canonical equal-cost candidate.
+acquisition with all four destination program-unit names preoccupied, and the
+actual bounded-PBE enumeration/retention path cross-checked against an
+independent oracle ranking of its minimum-description tier.
 
 ## Adversarial implementation review history
 
@@ -155,9 +175,27 @@ rejected implementation revision 1 at
   freeze evidence; and
 - competence labels broader than their executable checks.
 
-Revision 2 addresses those findings and remains a candidate until all three
-reviewers accept the same exact commit. No protected command was run while
-repairing either revision.
+Architecture, semantics, and experimental-validity reviewers then unanimously
+rejected revision 2 at
+`55925784755bb186f5b98857e1fabfe52ef87e20`. Their remaining blockers were:
+
+- persisted protected curricula retained truth-bearing generator, latent,
+  expected-output, and acceptance fields;
+- generator/oracle acceptance diagnostics were not committed evidence, while
+  noncompleted Store-backed rows did not receive an independent program audit;
+- the competence and minimum-tier checks reused production enumeration or a
+  helper rather than the actual bounded-PBE path plus an independent oracle;
+- factor evidence counted atom kinds but did not authenticate exact operands,
+  order, or case identity, and invalid-operation/verify closure remained loose;
+- batch verification was exposed as a whole-experiment CUE capability and was
+  not terminal-required; and
+- held-out reconstruction trusted positional result assignment without
+  authenticating each application input.
+
+Revision 3 addresses those findings and remains a candidate until all three
+reviewers accept the same exact commit. Regression tests cover batch-proof
+omission, unsupported verify wires, malformed-operation semantics, and held-out
+input rebinding. No protected command was run while repairing any revision.
 
 The repository-wide suite was also run on this implementation-review
 candidate. It completed every other listed package, including
