@@ -105,42 +105,73 @@ func TestCUEBridgeExhaustsFourColorSubstitutionsEdgeMasksAndAuthority(t *testing
 		t.Fatal(err)
 	}
 	ordinal := 0
-	for blocked := 0; blocked < 4; blocked++ {
-		for escape := 0; escape < 4; escape++ {
-			for only := 0; only < 4; only++ {
-				if blocked == escape || blocked == only || escape == only {
-					continue
-				}
-				for edgeMask := 0; edgeMask < 8; edgeMask++ {
-					problem := nogoods.Problem{Version: nogoods.ProblemVersion, ColorAliases: []string{"c0", "c1", "c2", "c3"}, Variables: []nogoods.Variable{{Alias: "a", Domain: sortedTestPair(blocked, escape)}, {Alias: "x", Domain: sortedTestPair(blocked, only)}, {Alias: "y", Domain: sortedTestPair(blocked, only)}}}
-					for bit, edge := range []nogoods.Edge{{Left: 0, Right: 1}, {Left: 0, Right: 2}, {Left: 1, Right: 2}} {
-						if edgeMask&(1<<bit) != 0 {
-							problem.Edges = append(problem.Edges, edge)
-						}
+	for anchor := 0; anchor < 3; anchor++ {
+		others := []int{}
+		for variable := 0; variable < 3; variable++ {
+			if variable != anchor {
+				others = append(others, variable)
+			}
+		}
+		for blocked := 0; blocked < 4; blocked++ {
+			for escape := 0; escape < 4; escape++ {
+				for only := 0; only < 4; only++ {
+					if blocked == escape || blocked == only || escape == only {
+						continue
 					}
-					encoded, encodeErr := problem.CanonicalJSON()
-					if encodeErr != nil {
-						t.Fatal(encodeErr)
-					}
-					decision := nogoods.Literal{Variable: 0, Color: blocked}
-					for name, execution := range map[string]*BridgeExecution{"authorized": authorized, "parsed-only": parsedOnly} {
-						disposition, considerErr := execution.Consider(encoded, decision)
-						if considerErr != nil {
-							t.Fatalf("case %d %s: %v", ordinal, name, considerErr)
+					for edgeMask := 0; edgeMask < 8; edgeMask++ {
+						variables := make([]nogoods.Variable, 3)
+						variables[anchor] = nogoods.Variable{Alias: fmt.Sprintf("v%d", anchor), Domain: sortedTestPair(blocked, escape)}
+						for _, variable := range others {
+							variables[variable] = nogoods.Variable{Alias: fmt.Sprintf("v%d", variable), Domain: sortedTestPair(blocked, only)}
 						}
-						want := name == "authorized" && edgeMask == 7
-						if got := disposition.Status == "propose-prune"; got != want {
-							t.Fatalf("case %d %s mask=%d proposal=%v want %v", ordinal, name, edgeMask, got, want)
+						problem := nogoods.Problem{Version: nogoods.ProblemVersion, ColorAliases: []string{"c0", "c1", "c2", "c3"}, Variables: variables}
+						motifEdges := []nogoods.Edge{
+							sortedTestEdge(anchor, others[0]),
+							sortedTestEdge(anchor, others[1]),
+							sortedTestEdge(others[0], others[1]),
 						}
-						ordinal++
+						for bit, edge := range motifEdges {
+							if edgeMask&(1<<bit) != 0 {
+								problem.Edges = append(problem.Edges, edge)
+							}
+						}
+						slices.SortFunc(problem.Edges, func(left, right nogoods.Edge) int {
+							if left.Left != right.Left {
+								return left.Left - right.Left
+							}
+							return left.Right - right.Right
+						})
+						encoded, encodeErr := problem.CanonicalJSON()
+						if encodeErr != nil {
+							t.Fatal(encodeErr)
+						}
+						decision := nogoods.Literal{Variable: anchor, Color: blocked}
+						for name, execution := range map[string]*BridgeExecution{"authorized": authorized, "parsed-only": parsedOnly} {
+							disposition, considerErr := execution.Consider(encoded, decision)
+							if considerErr != nil {
+								t.Fatalf("case %d %s: %v", ordinal, name, considerErr)
+							}
+							want := name == "authorized" && edgeMask == 7
+							if got := disposition.Status == "propose-prune"; got != want {
+								t.Fatalf("case %d %s anchor=%d mask=%d proposal=%v want %v", ordinal, name, anchor, edgeMask, got, want)
+							}
+							ordinal++
+						}
 					}
 				}
 			}
 		}
 	}
-	if ordinal != 384 {
+	if ordinal != 1152 {
 		t.Fatalf("authority/mask cases = %d", ordinal)
 	}
+}
+
+func sortedTestEdge(left, right int) nogoods.Edge {
+	if left > right {
+		left, right = right, left
+	}
+	return nogoods.Edge{Left: left, Right: right}
 }
 
 func sortedTestPair(left, right int) []int {

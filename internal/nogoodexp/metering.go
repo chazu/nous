@@ -3,6 +3,7 @@ package nogoodexp
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/nogoodbaseline"
@@ -148,31 +149,223 @@ func bridgeTranscript(taskOrdinal uint32, disposition Disposition) ([]Transcript
 
 func auditTrainingMeter(run TrainingRun) error {
 	counts := meterOperationCounts(run.MeterRecords)
+	candidates := len(run.Store.Examples("NogoodCandidate")) - 1
+	refinements := len(run.Store.Examples("NogoodRefinement")) - 1
+	bindings := len(run.Store.Examples("NogoodBinding")) - 1
+	results := len(run.Store.Examples("NogoodResult")) - 1
+	evidence := len(run.Store.Examples("NogoodEvidence")) - 1
+	proofs := len(run.Store.Examples("NogoodPromotionProof")) - 1
+	selectionAttempts := run.TasksPopped - 2*candidates - 2
 	want := map[string]int{
-		"agenda-dequeue":          run.TasksPopped,
-		"candidate-write":         len(run.Store.Examples("NogoodCandidate")) - 1,
-		"refinement-record-write": len(run.Store.Examples("NogoodRefinement")) - 1,
-		"binding-write":           len(run.Store.Examples("NogoodBinding")) - 1,
-		"result-write":            len(run.Store.Examples("NogoodResult")) - 1,
-		"evidence-write":          len(run.Store.Examples("NogoodEvidence")) - 1,
-		"promotion-proof-write":   len(run.Store.Examples("NogoodPromotionProof")) - 1,
+		"candidate-proposal": 1, "candidate-write": candidates, "semantic-key-read": 1 + refinements,
+		"refinement-proposal": refinements, "refinement-record-write": refinements,
+		"agenda-enqueue": 2 + 3*candidates, "agenda-dequeue": run.TasksPopped,
+		"problem-read": evidence, "decision-variable-read": evidence, "decision-color-read": evidence,
+		"binding-proposal": evidence, "binding-write": bindings,
+		"artifact-read": bindings, "mask-bit-check": 3 * bindings, "edge-read": 3 * bindings,
+		"completion-construct": results, "domain-read-x": results, "domain-read-y": results, "inequality-check": 3 * results,
+		"result-write": results, "result-read": results, "evidence-write": evidence,
+		"expected-key-check": results, "actual-key-check": results, "key-set-equality": evidence, "completion-count-check": evidence, "barrier-write": evidence,
+		"selection-evidence-read": candidates * selectionAttempts, "selection-comparison": candidates * selectionAttempts,
+		"expected-mask-check": candidates * selectionAttempts, "actual-mask-check": candidates * selectionAttempts,
+		"mask-set-equality": selectionAttempts, "candidate-count-check": selectionAttempts, "complete-count-check": selectionAttempts, "selection-barrier-write": selectionAttempts,
+		"tie-record-write": 1, "selection-record-write": 1,
+		"promotion-completion": proofs, "promotion-proof-write": proofs, "expected-promotion-check": proofs, "actual-promotion-check": proofs,
+		"promotion-count-check": 1, "promotion-conflict-check": 1, "promotion-barrier-write": 1,
+		"artifact-freeze-write": 1, "provenance-write": 1, "boundary-write": 1,
+	}
+	for _, operation := range engineDispatchOperations {
+		want[operation] = run.TasksPopped
+	}
+	if len(counts) != len(want) {
+		return fmt.Errorf("training meter has %d operation kinds, reconstructed ledger requires %d", len(counts), len(want))
 	}
 	for operation, expected := range want {
 		if counts[operation] != expected {
 			return fmt.Errorf("training meter %s=%d, authoritative store requires %d", operation, counts[operation], expected)
 		}
 	}
-	candidateCount := len(run.Store.Examples("NogoodCandidate")) - 1
-	if counts["selection-evidence-read"] < candidateCount || counts["selection-evidence-read"]%candidateCount != 0 {
-		return fmt.Errorf("training selection reads %d do not reconcile with %d candidates", counts["selection-evidence-read"], candidateCount)
-	}
-	for _, operation := range engineDispatchOperations {
-		if counts[operation] != run.TasksPopped {
-			return fmt.Errorf("training dispatch meter %s=%d, want %d", operation, counts[operation], run.TasksPopped)
-		}
-	}
-	if counts["expected-promotion-check"] != 24 || counts["actual-promotion-check"] != 24 || counts["promotion-count-check"] != 1 || counts["promotion-conflict-check"] != 1 {
+	if proofs != 24 {
 		return fmt.Errorf("training promotion meter does not cover the sealed 24-case boundary")
+	}
+	return auditTrainingMeterTuples(run)
+}
+
+func auditTrainingMeterTuples(run TrainingRun) error {
+	completionKeys := map[string]bool{}
+	for _, resultName := range run.Store.Examples("NogoodResult") {
+		if resultName == "NogoodResult" {
+			continue
+		}
+		result := run.Store.Get(resultName)
+		completionKeys[fmt.Sprintf("completion:%d:%d", result.GetInt("xColor"), result.GetInt("yColor"))] = true
+	}
+	for _, record := range run.MeterRecords {
+		if record.Outcome != "ok" {
+			return fmt.Errorf("training meter has non-ok tuple outcome %q", record.Outcome)
+		}
+		switch record.Operation {
+		case "candidate-proposal":
+			if !run.Store.IsA(record.Subject, "NogoodLearningExperiment") || !run.Store.IsA(record.Object, "NogoodCandidate") {
+				return fmt.Errorf("training candidate proposal tuple is retargeted")
+			}
+		case "candidate-write":
+			if run.Store.Get(record.Subject) == nil || !run.Store.IsA(record.Object, "NogoodCandidate") {
+				return fmt.Errorf("training candidate write tuple is retargeted")
+			}
+		case "semantic-key-read", "refinement-proposal":
+			if run.Store.Get(record.Subject) == nil || !strings.HasPrefix(record.Object, "mask:") {
+				return fmt.Errorf("training refinement key tuple is retargeted")
+			}
+		case "refinement-record-write":
+			if !run.Store.IsA(record.Subject, "NogoodCandidate") || !run.Store.IsA(record.Object, "NogoodRefinement") {
+				return fmt.Errorf("training refinement tuple is retargeted")
+			}
+		case "agenda-enqueue", "agenda-dequeue":
+			if run.Store.Get(record.Subject) == nil || !slices.Contains([]string{"ngStart", "ngRefine", "ngEvaluate", "ngSelect", "ngPromote"}, record.Object) {
+				return fmt.Errorf("training agenda tuple is retargeted")
+			}
+		case "problem-read":
+			if !run.Store.IsA(record.Subject, "NogoodTrainingExample") || record.Object != "problem" {
+				return fmt.Errorf("training problem-read tuple is retargeted")
+			}
+		case "decision-variable-read":
+			if !run.Store.IsA(record.Subject, "NogoodTrainingExample") || record.Object != "decisionVariable" {
+				return fmt.Errorf("training decision-variable tuple is retargeted")
+			}
+		case "decision-color-read":
+			if !run.Store.IsA(record.Subject, "NogoodTrainingExample") || record.Object != "decisionColor" {
+				return fmt.Errorf("training decision-color tuple is retargeted")
+			}
+		case "domain-read-x", "domain-read-y", "completion-construct":
+			if !run.Store.IsA(record.Subject, "NogoodBinding") || !completionKeys[record.Object] {
+				return fmt.Errorf("training completion tuple is retargeted")
+			}
+		case "result-read":
+			if !run.Store.IsA(record.Subject, "NogoodEvidence") || !run.Store.IsA(record.Object, "NogoodResult") {
+				return fmt.Errorf("training result-read tuple is retargeted")
+			}
+		case "result-write":
+			if !run.Store.IsA(record.Subject, "NogoodBinding") || !run.Store.IsA(record.Object, "NogoodResult") {
+				return fmt.Errorf("training result-write tuple is retargeted")
+			}
+		case "binding-proposal", "binding-write":
+			if !run.Store.IsA(record.Subject, "NogoodCandidate") || !run.Store.IsA(record.Object, "NogoodBinding") {
+				return fmt.Errorf("training binding tuple is retargeted")
+			}
+		case "evidence-write":
+			if !run.Store.IsA(record.Subject, "NogoodCandidate") || !run.Store.IsA(record.Object, "NogoodEvidence") {
+				return fmt.Errorf("training evidence tuple is retargeted")
+			}
+		case "promotion-proof-write":
+			if !run.Store.IsA(record.Subject, "NogoodPromotionCase") || !run.Store.IsA(record.Object, "NogoodPromotionProof") {
+				return fmt.Errorf("training promotion tuple is retargeted")
+			}
+		case "artifact-read":
+			if !run.Store.IsA(record.Subject, "NogoodCandidate") || record.Object != "mask" {
+				return fmt.Errorf("training artifact-read tuple is retargeted")
+			}
+		case "mask-bit-check":
+			if !run.Store.IsA(record.Subject, "NogoodCandidate") || !slices.Contains([]string{"bit:0", "bit:1", "bit:2"}, record.Object) {
+				return fmt.Errorf("training mask-bit tuple is retargeted")
+			}
+		case "edge-read":
+			if !run.Store.IsA(record.Subject, "NogoodTrainingExample") || !slices.Contains([]string{"a-x", "a-y", "x-y"}, record.Object) {
+				return fmt.Errorf("training edge-read tuple is retargeted")
+			}
+		case "inequality-check":
+			if !run.Store.IsA(record.Subject, "NogoodBinding") || !slices.Contains([]string{"a-x", "a-y", "x-y"}, record.Object) {
+				return fmt.Errorf("training inequality tuple is retargeted")
+			}
+		case "expected-key-check", "actual-key-check":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || !completionKeys[record.Object] {
+				return fmt.Errorf("training evidence-key tuple is retargeted")
+			}
+		case "key-set-equality":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || record.Object != "expected-actual" {
+				return fmt.Errorf("training evidence equality tuple is retargeted")
+			}
+		case "completion-count-check":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || record.Object != "completionCount" {
+				return fmt.Errorf("training completion count tuple is retargeted")
+			}
+		case "barrier-write":
+			if !run.Store.IsA(record.Subject, "NogoodCandidate") || !run.Store.IsA(record.Object, "NogoodEvidenceBarrier") {
+				return fmt.Errorf("training barrier tuple is retargeted")
+			}
+		case "selection-evidence-read", "selection-comparison":
+			if !run.Store.IsA(record.Subject, "NogoodLearningExperiment") || !run.Store.IsA(record.Object, "NogoodCandidate") {
+				return fmt.Errorf("training selection tuple is retargeted")
+			}
+		case "expected-mask-check", "actual-mask-check":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || !strings.HasPrefix(record.Object, "mask:") {
+				return fmt.Errorf("training selection mask tuple is retargeted")
+			}
+		case "mask-set-equality":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || record.Object != "expected-actual" {
+				return fmt.Errorf("training mask equality tuple is retargeted")
+			}
+		case "candidate-count-check", "complete-count-check":
+			wantObject := "candidateCount"
+			if record.Operation == "complete-count-check" {
+				wantObject = "completeCount"
+			}
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || record.Object != wantObject {
+				return fmt.Errorf("training selection count tuple is retargeted")
+			}
+		case "selection-barrier-write":
+			if !run.Store.IsA(record.Subject, "NogoodLearningExperiment") || !run.Store.IsA(record.Object, "NogoodEvidenceBarrier") {
+				return fmt.Errorf("training selection barrier tuple is retargeted")
+			}
+		case "tie-record-write":
+			if !run.Store.IsA(record.Subject, "NogoodSelection") || record.Object != "exactCandidates" {
+				return fmt.Errorf("training tie tuple is retargeted")
+			}
+		case "selection-record-write":
+			if !run.Store.IsA(record.Subject, "NogoodLearningExperiment") || !run.Store.IsA(record.Object, "NogoodSelection") {
+				return fmt.Errorf("training selection record tuple is retargeted")
+			}
+		case "promotion-completion":
+			if !run.Store.IsA(record.Subject, "NogoodPromotionCase") || record.Object != "only-only" {
+				return fmt.Errorf("training promotion completion tuple is retargeted")
+			}
+		case "expected-promotion-check", "actual-promotion-check":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || !run.Store.IsA(record.Object, "NogoodPromotionCase") {
+				return fmt.Errorf("training promotion boundary tuple is retargeted")
+			}
+		case "promotion-count-check":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || record.Object != "proofCount" {
+				return fmt.Errorf("training promotion count tuple is retargeted")
+			}
+		case "promotion-conflict-check":
+			if !run.Store.IsA(record.Subject, "NogoodEvidenceBarrier") || record.Object != "conflictCount" {
+				return fmt.Errorf("training promotion conflict tuple is retargeted")
+			}
+		case "promotion-barrier-write":
+			if !run.Store.IsA(record.Subject, "NogoodLearningExperiment") || !run.Store.IsA(record.Object, "NogoodEvidenceBarrier") {
+				return fmt.Errorf("training promotion barrier tuple is retargeted")
+			}
+		case "artifact-freeze-write":
+			if !run.Store.IsA(record.Subject, "NogoodSelection") || !run.Store.IsA(record.Object, "NogoodArtifact") {
+				return fmt.Errorf("training artifact freeze tuple is retargeted")
+			}
+		case "provenance-write":
+			if !run.Store.IsA(record.Subject, "NogoodArtifact") || record.Object != nogoodfixtureAuthority {
+				return fmt.Errorf("training provenance tuple is retargeted")
+			}
+		case "boundary-write":
+			if !run.Store.IsA(record.Subject, "NogoodArtifact") || !run.Store.IsA(record.Object, "NogoodEvidenceBarrier") {
+				return fmt.Errorf("training boundary tuple is retargeted")
+			}
+		default:
+			if slices.Contains(engineDispatchOperations, record.Operation) {
+				if record.Object != record.Operation || !strings.Contains(record.Subject, ".") {
+					return fmt.Errorf("training engine dispatch tuple is retargeted")
+				}
+				continue
+			}
+			return fmt.Errorf("training meter contains unaudited operation %q", record.Operation)
+		}
 	}
 	return nil
 }
@@ -190,6 +383,13 @@ func auditBridgeMeter(disposition Disposition) error {
 		return err
 	}
 	counts := meterOperationCounts(disposition.MeterRecords)
+	expectedRecords, err := reconstructBridgeMeter(disposition)
+	if err != nil {
+		return err
+	}
+	if err := compareMeterMultiset(disposition.MeterRecords, expectedRecords); err != nil {
+		return fmt.Errorf("bridge meter reconstruction: %w", err)
+	}
 	for _, operation := range engineDispatchOperations {
 		if counts[operation] != disposition.TasksPopped {
 			return fmt.Errorf("bridge dispatch meter %s=%d, want %d", operation, counts[operation], disposition.TasksPopped)

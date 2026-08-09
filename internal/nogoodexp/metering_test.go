@@ -41,3 +41,52 @@ func TestMeterRejectsRecordsThatDoNotReconcileWithOccurrenceStore(t *testing.T) 
 		t.Fatal("meter accepted an omitted operation")
 	}
 }
+
+func TestMeterRejectsTrainingAndResumeOmissionsAndTupleRetargeting(t *testing.T) {
+	training, err := RunTraining("../../domains")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, record := range training.MeterRecords {
+		if record.Operation == "problem-read" {
+			training.MeterRecords = append(training.MeterRecords[:index:index], training.MeterRecords[index+1:]...)
+			break
+		}
+	}
+	if _, err := acquisitionTranscript(training, nil); err == nil {
+		t.Fatal("training meter accepted an omitted problem read")
+	}
+
+	artifact, authority := learnedArtifact(t)
+	tasks, err := nogoodfixture.Panel("development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume, err := ConsiderPrune("../../domains", tasks[56].ProblemJSON, tasks[56].Decision, &artifact, &authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, record := range resume.MeterRecords {
+		if record.Operation == "domain-read" {
+			resume.MeterRecords = append(resume.MeterRecords[:index:index], resume.MeterRecords[index+1:]...)
+			break
+		}
+	}
+	if _, err := bridgeTranscript(56, resume); err == nil {
+		t.Fatal("resume meter accepted an omitted domain read")
+	}
+
+	proposal, err := ConsiderPrune("../../domains", tasks[0].ProblemJSON, tasks[0].Decision, &artifact, &authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range proposal.MeterRecords {
+		if proposal.MeterRecords[index].Operation == "completion-domain-read" {
+			proposal.MeterRecords[index].Object = "arbitrary"
+			break
+		}
+	}
+	if _, err := bridgeTranscript(0, proposal); err == nil {
+		t.Fatal("proposal meter accepted a retargeted completion-domain read")
+	}
+}

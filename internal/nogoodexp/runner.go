@@ -213,6 +213,11 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			return TaskOutcome{}, nil, bridgeErr
 		}
 		disposition = d.Status
+		resetPreflight := slices.Clone(emptyBridge.preflight)
+		for index := range resetPreflight {
+			resetPreflight[index].TaskOrdinal = uint32(task.Ordinal)
+		}
+		events = appendEvents(events, resetPreflight)
 		bridgeEvents, meterErr := bridgeTranscript(uint32(task.Ordinal), d)
 		if meterErr != nil {
 			return TaskOutcome{}, nil, meterErr

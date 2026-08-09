@@ -44,4 +44,11 @@ func TestCompletePolicyMatrixOnUtilitySmokePanel(t *testing.T) {
 			t.Fatalf("learned control disposition = %#v", outcome)
 		}
 	}
+	noArtifact := execution.Policies[slices.Index(RequiredPolicies, "no-artifact")]
+	reset := execution.Policies[slices.Index(RequiredPolicies, "reset")]
+	for index := range smoke {
+		if got, want := reset.Tasks[index].Work, noArtifact.Tasks[index].Work+54; got != want {
+			t.Fatalf("reset task %d work = %d, want fresh-profile work %d", smoke[index].Ordinal, got, want)
+		}
+	}
 }
