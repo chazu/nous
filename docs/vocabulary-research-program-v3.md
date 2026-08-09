@@ -1,6 +1,6 @@
 # Vocabulary research program, Part 3
 
-Status: revision 3, under adversarial review.
+Status: revision 4, under adversarial review.
 
 Revision record:
 
@@ -14,8 +14,12 @@ Revision record:
   accepted with four lane-plan concerns; and
 - revision 3 resolves those concerns in the umbrella by freezing preference
   semantics, materialized nogood certification, the guarded-commutativity V1
-  claim, and hierarchical endpoint rules. It has no implementation authority
-  until a new adversarial review accepts it.
+  claim, and hierarchical endpoint rules; it was accepted with one remaining
+  invariant-endpoint ambiguity; and
+- revision 4 removes that second primary-claim path and precisely distinguishes
+  passive/public Part 3 invariant refinement from Part 2's active hidden-probe
+  macro-F1 hypothesis. It has no implementation authority until a new
+  adversarial review accepts it.
 
 Part 3 is a destination-independent curriculum for improving Nous one
 reasoning operation at a time. It does not amend, resume, or claim completion
@@ -124,7 +128,7 @@ plan:
 | `domains/nogoods`, seed authority `part3/nogoods/v1` | Part 2 scheduling and failure minimization | learns universally scoped negative constraints in a public finite CSP; it does not learn a scheduling priority rule or minimize a failing artifact |
 | `domains/transformschema`, seed authority `part3/transformschema/v1` | Part 2 spatial puzzles and existing configuration repair | anti-unifies explicit typed term-edit programs; it has no grids, perception grammar, Kubernetes objects, or protected configuration fixtures |
 | `domains/actionrelations`, seed authority `part3/actionrelations/v1` | terminated Part 2 Phase 9 | learns guarded relations over a fully public deterministic action algebra and uses charged local diamond certificates; it has no hidden SUT, concurrency history, linearizability checker, or schedule-priority program |
-| `domains/invariantrefine`, seed authority `part3/invariantrefine/v1` | terminated Part 2 Phase 4 | revises formulas against a fixed public trace corpus; it has no teacher, active probes, hidden machine, probe policy, or Part 2 macro-F1 hypothesis |
+| `domains/invariantrefine`, seed authority `part3/invariantrefine/v1` | terminated Part 2 Phase 4 | revises formulas against a fixed public trace corpus; it has no teacher, active probes, hidden machine, probe policy, or Part 2 active-probe macro-F1 hypothesis; reuse of the metric name does not reuse Part 2's hidden machine, probe budget, baseline, fixtures, or phase identity |
 | `domains/macrolib`, seed authority `part3/macrolib/v1` | Part 2 spatial concepts and equality saturation | compresses an explicit corpus of solved typed programs into expansion-equivalent macros; it has no grids, e-graphs, rewrite scheduler, or terminal extractor |
 | `domains/abduction`, seed authority `part3/abduction/v1` | terminally invalid Part 2 Phase 2 | performs passive model-based diagnosis over a fully public component model and fixed observations; it has no causal hypotheses, interventions, hidden teacher, query responses, acquisition rule, replay, or protected receipt |
 | `domains/preferences`, seed authority `part3/preferences/v1` | implemented iterated games | learns a contextual partial preference over an already verified frontier; it does not discover the frontier or treat preference as dominance |
@@ -702,10 +706,11 @@ Mechanical validity requires exact formula semantics and no false
 `bounded-verified` classification. The single primary endpoint is held-out
 macro F1 over the frozen formula-class denominator under one fixed total
 lifecycle-work budget. Soundness, useful-property recall, formula complexity,
-and raw work categories are secondary. A separate search-advantage claim is
-permitted only if its preregistration adds an accuracy-noninferiority gate and
-then uses lifecycle work as its sole primary endpoint. Reports distinguish
-observed, bounded-verified, refuted, and undetermined status.
+and raw work categories are secondary. V1 authorizes no separate
+search-advantage primary claim; a lifecycle-work-primary experiment would
+require a separately versioned and accepted Part 3 amendment and cannot coexist
+with this macro-F1 V1 hypothesis. Reports distinguish observed,
+bounded-verified, refuted, and undetermined status.
 
 ### Main risks and non-claims
 
