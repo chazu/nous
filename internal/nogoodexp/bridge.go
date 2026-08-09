@@ -318,6 +318,9 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 				return Disposition{}, err
 			}
 		}
+		if err := auditProposalOccurrence(result); err != nil {
+			return Disposition{}, err
+		}
 	} else if status == "concrete-prune" {
 		memo := store.Get(result.Memo)
 		checks := [6]bool{
@@ -360,6 +363,41 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	}
 	result.MeterRecords = records
 	return result, nil
+}
+
+func auditProposalOccurrence(result Disposition) error {
+	store := result.Store
+	if store == nil {
+		return fmt.Errorf("proposal occurrence store is missing")
+	}
+	required := map[string]int{
+		"NogoodRequest": 1, "NogoodRoleCandidate": 2, "NogoodPairProposal": 1, "NogoodBinding": 1,
+		"NogoodCompletion": 1, "NogoodCertificate": 1, "NogoodEvidenceBarrier": 1,
+		"NogoodPruneProposal": 1, "NogoodDisposition": 1, "NogoodArtifact": 1,
+	}
+	for category, expected := range required {
+		if got := len(store.Examples(category)) - 1; got != expected {
+			return fmt.Errorf("proposal occurrence has %d %s units, want %d", got, category, expected)
+		}
+	}
+	request, artifact, binding := store.Get(result.Request), store.Get(result.Artifact), store.Get(result.Binding)
+	completion, certificate := store.Get(result.Completion), store.Get(result.Certificate)
+	barrier, proposal := store.Get(result.Barrier), store.Get(result.Proposal)
+	if request == nil || artifact == nil || binding == nil || completion == nil || certificate == nil || barrier == nil || proposal == nil {
+		return fmt.Errorf("proposal occurrence references a missing unit")
+	}
+	if completion.GetString("binding") != binding.Name || certificate.GetString("artifact") != artifact.Name || certificate.GetString("binding") != binding.Name || certificate.GetString("completion") != completion.Name || certificate.GetString("request") != request.Name ||
+		proposal.GetString("request") != request.Name || proposal.GetString("artifact") != artifact.Name || proposal.GetString("binding") != binding.Name || proposal.GetString("completion") != completion.Name || proposal.GetString("certificate") != certificate.Name || proposal.GetString("barrier") != barrier.Name {
+		return fmt.Errorf("proposal occurrence reference graph is inconsistent")
+	}
+	referenceDigest, err := dsl.UnitSetDigest(store, []string{result.Request, result.Artifact, result.Binding, result.Completion, result.Certificate, result.Barrier, result.Proposal})
+	if err != nil || referenceDigest != proposal.GetString("referencedUnitSetDigest") || referenceDigest != barrier.GetString("referencedUnitSetDigest") {
+		return fmt.Errorf("proposal occurrence unit-set digest is inconsistent")
+	}
+	if !slices.Equal(barrier.GetStrings("predicateKeys"), []string{"predicate-problem", "predicate-guard", "predicate-mask", "predicate-conflict", "predicate-certificate", "predicate-authority", "predicate-frozen", "predicate-schema", "predicate-guard-version", "predicate-artifact-digest", "predicate-evidence-digest", "predicate-promotion-digest", "predicate-provenance-digest", "predicate-request-digest", "predicate-target-digest", "predicate-decision-digest", "predicate-assignment-digest", "predicate-reduced-domain-digest"}) || slices.Contains(barrier.GetStrings("predicateOutcomeKeys"), "false") {
+		return fmt.Errorf("proposal occurrence evidence barrier is incomplete")
+	}
+	return nil
 }
 
 func cloneStore(source *unit.Store) *unit.Store {

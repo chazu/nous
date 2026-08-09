@@ -1,6 +1,7 @@
 package nogoodfixture
 
 import (
+	"bytes"
 	"slices"
 	"testing"
 
@@ -96,6 +97,31 @@ func TestPromotionCasesCoverAllInjectiveColorSubstitutions(t *testing.T) {
 		conflict, err := nogoods.EvaluateCompletion(problem, nogoods.FullMask, testCase.Binding, testCase.Completion)
 		if err != nil || !conflict {
 			t.Fatalf("promotion[%d] conflict = %v, %v", ordinal, conflict, err)
+		}
+	}
+}
+
+func TestCompetencePanelsHaveFrozenCaseOrderAndDisjointAliases(t *testing.T) {
+	wantKinds := []string{"full", "external-context", "missing-0", "missing-1", "missing-2", "wrong-decision", "pair-domain-three", "duplicate-completion", "missing-0-1", "missing-0-2", "missing-1-2", "anchor-domain-three", "unequal-pair-domains", "cross-decision", "stale-target", "color-position-audit"}
+	for _, panel := range []string{"development", "validation"} {
+		cases, err := Competence(panel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCount := 8
+		if panel == "validation" {
+			wantCount = 16
+		}
+		if len(cases) != wantCount {
+			t.Fatalf("%s competence cases = %d", panel, len(cases))
+		}
+		for ordinal, competenceCase := range cases {
+			if competenceCase.Ordinal != ordinal || competenceCase.Kind != wantKinds[ordinal] {
+				t.Fatalf("%s case %d = %#v", panel, ordinal, competenceCase)
+			}
+			if string(competenceCase.ProblemJSON) == "" || bytes.Contains(competenceCase.ProblemJSON, []byte("ta")) || bytes.Contains(competenceCase.ProblemJSON, []byte("tc")) {
+				t.Fatalf("%s case %d leaked training aliases", panel, ordinal)
+			}
 		}
 	}
 }
