@@ -11,6 +11,7 @@ import (
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/transformbaseline"
 	"github.com/chazu/nous/internal/transformfixturecore"
+	"github.com/chazu/nous/internal/transformoracle"
 	"github.com/chazu/nous/internal/unit"
 )
 
@@ -41,10 +42,14 @@ type PolicyOutcome struct {
 	TasksPopped           int
 	Transcript            TransformTranscriptBundle
 	HeldoutStoreUnchanged bool
+	OracleParity          bool
+	ProgramsExact         bool
+	TrainingExact         bool
 	acquisition           *acquisitionRun
 	baselineEvents        []transformbaseline.Event
 	heldoutObservations   []heldoutObservation
 	frozenReplayBatch     []byte
+	frozenPrograms        []byte
 }
 
 type heldoutObservation struct {
@@ -66,10 +71,13 @@ func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (Policy
 			return out, err
 		}
 		out.Terminal, out.TasksPopped, out.TrainingWork = run.Terminal, run.TasksPopped, len(run.MeterRecords)
+		if out.Terminal == "" {
+			out.Terminal = "no-discovery"
+		}
 		out.acquisition = &run
 		if run.Artifact != "" {
 			out.Schema = []byte(run.Store.Get(run.Artifact).GetString("schema"))
-			out.Applications = 8
+			out.frozenPrograms, _ = programBatch(run)
 		}
 	case PositiveLGG, ConcreteReplay:
 		run, err := runAcquisitionConfigured(domainsDir, c.Training, policyToken(c, policy), func(store *unit.Store) {
@@ -83,6 +91,7 @@ func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (Policy
 		if err != nil {
 			return out, err
 		}
+		out.frozenPrograms = bytes.Clone(batch)
 		if policy == PositiveLGG {
 			learned, events, err := transformbaseline.PositiveLGGMetered(c.Training, batch)
 			if err != nil {
@@ -129,6 +138,7 @@ func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (Policy
 			}
 			out.Transcript = transcript
 			out.TrainingWork = int(out.Transcript.Work)
+			out.Applications = out.Transcript.Applications
 		} else if len(out.baselineEvents) != 0 {
 			transcript, transcriptErr := transcriptFromBaselineEvents(out.baselineEvents, c, policy, out.Terminal, nil)
 			if transcriptErr != nil {
@@ -136,6 +146,7 @@ func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (Policy
 			}
 			out.Transcript = transcript
 			out.TrainingWork = int(transcript.Work)
+			out.Applications = transcript.Applications
 			out.baselineEvents = nil
 		}
 		return out, nil
@@ -181,6 +192,7 @@ func scoreSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (Po
 			return out, err
 		}
 		out.TrainingWork = int(out.Transcript.Work)
+		out.Applications = out.Transcript.Applications
 		out.baselineEvents = nil
 	}
 	return out, nil
@@ -254,6 +266,7 @@ func scoreProductionSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOu
 	}
 	out.HeldoutStoreUnchanged = bytes.Equal(storeBefore, storeAfter)
 	out.TrainingWork = int(out.Transcript.Work)
+	out.Applications = out.Transcript.Applications
 	return out, err
 }
 
@@ -303,8 +316,8 @@ func scoreReplayHeldout(c policyCurriculum, heldoutBytes []byte, out PolicyOutco
 		return out, err
 	}
 	out.TrainingWork = int(out.Transcript.Work)
+	out.Applications = out.Transcript.Applications
 	out.baselineEvents = nil
-	out.frozenReplayBatch = nil
 	return out, nil
 }
 
@@ -376,7 +389,41 @@ func scorePolicyOutcome(scorer scorerCurriculum, out PolicyOutcome) (PolicyOutco
 	if len(out.heldoutObservations) != 0 && len(out.heldoutObservations) != len(scorer.Expected) {
 		return out, fmt.Errorf("heldout observation count mismatch")
 	}
-	out.heldoutObservations = nil
+	return out, nil
+}
+
+func auditPolicyOutcome(c policyCurriculum, heldoutBytes, scorerBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {
+	if out.Terminal != "completed" {
+		out.OracleParity, out.ProgramsExact, out.TrainingExact = true, true, true
+		return out, nil
+	}
+	schema, batch := out.Schema, out.frozenPrograms
+	if out.Policy == ConcreteReplay {
+		schema, batch = nil, out.frozenReplayBatch
+	}
+	audit, err := transformoracle.AuditPolicy(c.Training, heldoutBytes, schema, batch)
+	if err != nil {
+		return out, err
+	}
+	if len(audit.Heldout) != len(out.heldoutObservations) {
+		return out, errors.New("oracle heldout observation count mismatch")
+	}
+	for index, observation := range audit.Heldout {
+		actual := out.heldoutObservations[index]
+		if observation.Token != actual.Token || observation.Terminal != actual.Terminal || !bytes.Equal(observation.Output, actual.Output) {
+			return out, fmt.Errorf("oracle heldout disagreement at %d", index)
+		}
+	}
+	score, err := transformoracle.AuditScore(scorerBytes, audit.Heldout)
+	if err != nil {
+		return out, err
+	}
+	if score.Correct != out.HeldoutCorrect || score.CorrectBits != out.HeldoutCorrectBits || score.FalseApplications != out.FalseApplications {
+		return out, errors.New("oracle score disagreement")
+	}
+	out.OracleParity = true
+	out.ProgramsExact = audit.ProgramsExact
+	out.TrainingExact = audit.TrainingExact
 	return out, nil
 }
 

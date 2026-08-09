@@ -38,6 +38,12 @@ type SafePanelReport struct {
 	DualExecutionEqual    bool               `json:"dual_execution_equal"`
 	TranscriptHashesEqual bool               `json:"transcript_hashes_equal"`
 	MechanicallyValid     bool               `json:"mechanically_valid"`
+	Conservation          bool               `json:"conservation"`
+	OracleParity          bool               `json:"oracle_parity"`
+	ProgramsExact         bool               `json:"programs_exact"`
+	ApplicationsExact     bool               `json:"applications_exact"`
+	ArtifactFrozen        bool               `json:"artifact_frozen"`
+	HeldoutSealed         bool               `json:"heldout_sealed"`
 	Limitations           []string           `json:"limitations"`
 }
 
@@ -73,7 +79,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	if len(curricula) == 0 {
 		return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("empty panel")
 	}
-	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true}
+	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true, Conservation: true, OracleParity: true, ProgramsExact: true, ApplicationsExact: true, ArtifactFrozen: true, HeldoutSealed: true}
 	artifacts := panelArtifacts{Primary: map[string]TransformTranscriptBundle{}, Audit: map[string]TransformTranscriptBundle{}}
 	paired := make([]pairedTransformRow, len(curricula))
 	for index, c := range curricula {
@@ -106,6 +112,14 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
+			primaryScorerBytes, err := scorerFixtureBytes(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			outcome, err = auditPolicyOutcome(primaryView, primaryHeldout, primaryScorerBytes, outcome)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
 			auditView, err := decodePolicyView(c)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
@@ -130,12 +144,35 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
-			if outcome.Terminal != audit.Terminal || outcome.Applications != audit.Applications || outcome.HeldoutCorrect != audit.HeldoutCorrect || outcome.HeldoutCorrectBits != audit.HeldoutCorrectBits || outcome.FalseApplications != audit.FalseApplications || outcome.NonmatchingWork != audit.NonmatchingWork || !bytes.Equal(outcome.Schema, audit.Schema) {
+			auditScorerBytes, err := scorerFixtureBytes(c)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			audit, err = auditPolicyOutcome(auditView, auditHeldout, auditScorerBytes, audit)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, err
+			}
+			if outcome.Terminal != audit.Terminal || outcome.Applications != audit.Applications || outcome.HeldoutCorrect != audit.HeldoutCorrect || outcome.HeldoutCorrectBits != audit.HeldoutCorrectBits || outcome.FalseApplications != audit.FalseApplications || outcome.NonmatchingWork != audit.NonmatchingWork || outcome.OracleParity != audit.OracleParity || outcome.ProgramsExact != audit.ProgramsExact || !bytes.Equal(outcome.Schema, audit.Schema) {
 				report.DualExecutionEqual = false
 			}
 			if !bytes.Equal(outcome.Transcript.Raw, audit.Transcript.Raw) || !bytes.Equal(outcome.Transcript.Gzip, audit.Transcript.Gzip) || !equalTransformObjects(outcome.Transcript.Objects, audit.Transcript.Objects) {
 				report.TranscriptHashesEqual = false
 			}
+			manifestDigest := policyManifestDigest(primaryView, policy)
+			primaryReduced, err := reduceTransformTranscript(outcome.Transcript.Raw, outcome.Transcript.Objects, manifestDigest)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("primary transcript reduction curriculum %d policy %s: %w", c.Ordinal, policy, err)
+			}
+			auditReduced, err := reduceTransformTranscript(audit.Transcript.Raw, audit.Transcript.Objects, manifestDigest)
+			if err != nil {
+				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("audit transcript reduction curriculum %d policy %s: %w", c.Ordinal, policy, err)
+			}
+			report.Conservation = report.Conservation && primaryReduced.Vector == outcome.Transcript.Vector && primaryReduced.Work == outcome.Transcript.Work && primaryReduced.Terminal == outcome.Terminal && auditReduced.Vector == audit.Transcript.Vector && auditReduced.Work == audit.Transcript.Work && auditReduced.Terminal == audit.Terminal
+			report.ApplicationsExact = report.ApplicationsExact && primaryReduced.Applications == outcome.Applications && auditReduced.Applications == audit.Applications
+			report.OracleParity = report.OracleParity && outcome.OracleParity && audit.OracleParity
+			report.ProgramsExact = report.ProgramsExact && outcome.ProgramsExact && audit.ProgramsExact
+			report.ArtifactFrozen = report.ArtifactFrozen && (outcome.Terminal != "completed" || policy == ConcreteReplay && len(outcome.frozenReplayBatch) != 0 || policy != ConcreteReplay && len(outcome.Schema) != 0)
+			report.HeldoutSealed = report.HeldoutSealed && (outcome.Terminal != "completed" || policy != NousRefine && policy != NoEqualityGuard || outcome.HeldoutStoreUnchanged)
 			key := fmt.Sprintf("%s/%03d", policy, c.Ordinal)
 			artifacts.Primary[key] = outcome.Transcript
 			artifacts.Audit[key] = audit.Transcript
@@ -174,7 +211,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	}
 	report.Limitations = []string{"evidence graph and protected repository authority are not yet implemented", "safe runner is not protected-panel evidence"}
 	slices.Sort(report.Limitations)
-	report.MechanicallyValid = false
+	report.MechanicallyValid = report.DualExecutionEqual && report.TranscriptHashesEqual && report.Conservation && report.OracleParity && report.ProgramsExact && report.ApplicationsExact && report.ArtifactFrozen && report.HeldoutSealed
 	return report, artifacts, nil
 }
 

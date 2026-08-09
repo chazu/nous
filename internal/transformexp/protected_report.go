@@ -67,28 +67,36 @@ func newProtectedReport(panel, implementationCommit string, evidence panelEviden
 	if err != nil {
 		return protectedReport{}, err
 	}
+	for _, gate := range gates {
+		if !gate {
+			classification = "invalid"
+			break
+		}
+	}
 	return protectedReport{classification, digestBytes(payloadBytes), payload}, nil
 }
 
 func protectedGates(implementationCommit string, evidence panelEvidence) [12]bool {
 	manifest := validateManifest() == nil && bytes.Equal(evidence.Report.Manifest, []byte(PreregisteredManifestJSON))
-	transcripts, conservation, applications := evidence.Report.TranscriptHashesEqual, true, true
+	transcripts, conservation, applications := evidence.Report.TranscriptHashesEqual, evidence.Report.Conservation, evidence.Report.ApplicationsExact
 	for _, row := range evidence.Report.Rows {
 		transcripts = transcripts && len(row.TranscriptSHA256) == 64
 		conservation = conservation && row.Work > 0
 		applications = applications && row.Applications >= 0 && row.Applications <= ApplicationsPerPolicy
 	}
-	programs := len(evidence.Files) > len(evidence.Report.Rows)*4
-	artifacts := len(evidence.Files["fixture-root.json"]) != 0 && len(evidence.Files["primary/execution-manifest.json"]) != 0 && len(evidence.Files["audit/execution-manifest.json"]) != 0
+	programs := evidence.Report.ProgramsExact
+	artifacts := evidence.Report.ArtifactFrozen
 	scorers := 0
 	for name := range evidence.Files {
 		if len(name) > len("/scorer.json") && name[len(name)-len("/scorer.json"):] == "/scorer.json" {
 			scorers++
 		}
 	}
-	heldoutSealed := scorers == len(evidence.Report.Rows)/len(empiricalPolicies)
+	heldoutSealed := evidence.Report.HeldoutSealed && scorers == len(evidence.Report.Rows)/len(empiricalPolicies)
 	sourceAuthority := len(implementationCommit) == 40 && len(evidence.Files["review-authority.json"]) != 0
-	return [12]bool{manifest, evidence.Report.Competence.Passed, evidence.Report.DualExecutionEqual, transcripts, conservation, evidence.Report.Competence.Passed, programs, applications, artifacts, heldoutSealed, sourceAuthority, len(evidence.EvidenceGraph) != 0}
+	rebuiltGraph, graphErr := canonicalEvidenceRoot("transform-evidence-graph/v1", evidence.Report.Panel, evidence.Files)
+	evidenceGraph := graphErr == nil && bytes.Equal(rebuiltGraph, evidence.EvidenceGraph) && digestBytes(rebuiltGraph) == evidence.Report.EvidenceGraphDigest
+	return [12]bool{manifest, evidence.Report.Competence.Passed, evidence.Report.DualExecutionEqual, transcripts, conservation, evidence.Report.OracleParity, programs, applications, artifacts, heldoutSealed, sourceAuthority, evidenceGraph}
 }
 
 func protectedClassification(panel string, inference transformInference, power transformPower) (string, error) {
