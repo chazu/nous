@@ -31,6 +31,49 @@ type Result struct {
 	Edits    [][2]any
 }
 
+func ApplyProgram(forestBytes, programBytes []byte) ([]byte, error) {
+	f, err := parseForest(forestBytes)
+	if err != nil {
+		return nil, err
+	}
+	v, err := decode(programBytes)
+	if err != nil {
+		return nil, err
+	}
+	row, ok := v.([]any)
+	if !ok || len(row) != 2 || row[0] != "concrete-program/v1" {
+		return nil, ErrInvalid
+	}
+	edits, ok := row[1].([]any)
+	if !ok || len(edits) < 1 || len(edits) > 4 {
+		return nil, ErrInvalid
+	}
+	positions := map[int]int{}
+	for i, n := range f.nodes {
+		positions[n.id] = i
+	}
+	previous := -1
+	for _, raw := range edits {
+		edit, ok := raw.([]any)
+		if !ok || len(edit) != 3 || edit[0] != "set-value/v1" {
+			return nil, ErrInvalid
+		}
+		target, targetOK := integer(edit[1])
+		value, valueOK := edit[2].(string)
+		position, exists := positions[target]
+		if !targetOK || !valueOK || !exists || target <= previous || !lower(value) || !oneOf(f.nodes[position].kind, "definition", "reference") || f.nodes[position].value == value {
+			return nil, ErrInvalid
+		}
+		f.nodes[position].value = value
+		previous = target
+	}
+	canonical, err := json.Marshal(v)
+	if err != nil || !bytes.Equal(canonical, programBytes) {
+		return nil, ErrInvalid
+	}
+	return encodeForest(f)
+}
+
 func Apply(forestBytes, schemaBytes []byte) (Result, error) {
 	f, err := parseForest(forestBytes)
 	if err != nil {
