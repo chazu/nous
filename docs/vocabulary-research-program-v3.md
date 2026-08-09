@@ -404,6 +404,17 @@ The experiment does not claim competitive SAT/CSP solving.
 Part 3 borrows the question—can conflict knowledge prevent repeated failure?—
 not their complete solvers.
 
+### Recorded outcome
+
+The frozen `nogoods/v2` development panel produced a mechanically valid
+`valid-null` result. The learned artifact safely reduced work on the reusable
+cohort, but acquisition and nonmatching-case costs prevented a lifecycle gain;
+the preregistered power estimate was `0 / 2,000`, so validation and locked
+execution were not authorized. See the
+[constraint and nogood learning result record](constraint-nogood-learning-vocabulary-results.md)
+for the evidence, exact metrics, and interpretation. This result remains fixed
+while the research program proceeds to Vocabulary 2.
+
 ## Vocabulary 2: transformation-schema induction
 
 ### Marginal reasoning gain
