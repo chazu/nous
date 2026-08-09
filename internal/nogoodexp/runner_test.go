@@ -2,7 +2,9 @@ package nogoodexp
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"slices"
 	"testing"
 
@@ -53,6 +55,47 @@ func TestCompletePolicyMatrixOnUtilitySmokePanel(t *testing.T) {
 		if got, want := reset.Tasks[index].Work, noArtifact.Tasks[index].Work+54; got != want {
 			t.Fatalf("reset task %d work = %d, want fresh-profile work %d", smoke[index].Ordinal, got, want)
 		}
+	}
+}
+
+func TestCommittedBridgeResumeGoldenMicrotrace(t *testing.T) {
+	artifact, authority := learnedArtifact(t)
+	tasks, err := nogoodfixture.DevelopmentPanel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := tasks[56]
+	bridge, err := NewBridgeExecution("../../domains", &artifact, &authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disposition, err := bridge.Consider(task.ProblemJSON, task.Decision)
+	if err != nil || disposition.Status != "resume" {
+		t.Fatalf("bridge disposition=%q err=%v", disposition.Status, err)
+	}
+	events, err := bridgeTranscript(uint32(task.Ordinal), disposition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := nogoodbaseline.MACCBJResume(task.ProblemJSON, nogoodbaseline.Literal{Variable: task.Decision.Variable, Color: task.Decision.Color})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuation, err := baselineTranscript(uint32(task.Ordinal), resumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events = appendEvents(events, continuation)
+	bundle, err := EncodeTranscript(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(bundle.Raw)
+	gotDigest := hex.EncodeToString(digest[:])
+	wantVector := [12]int64{3, 29, 17, 190, 54, 204, 33, 10, 0, 6, 2, 43}
+	const wantDigest = "b156af32c596e1a5b74658e0c6065ee6a0e8049bf56dffd1cedac8de8a79e4d9"
+	if bundle.Vector != wantVector || gotDigest != wantDigest {
+		t.Fatalf("bridge resume golden drift vector=%v digest=%s", bundle.Vector, gotDigest)
 	}
 }
 

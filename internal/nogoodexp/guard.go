@@ -311,6 +311,9 @@ func authorizeRepository(repoRoot, domainsDir string) (repositoryAuthority, erro
 			return repositoryAuthority{}, fmt.Errorf("implementation review manifest omits protected path %s", path)
 		}
 	}
+	if err := verifyReviewedFilesystemInputs(root, manifest.ProtectedPaths); err != nil {
+		return repositoryAuthority{}, err
+	}
 	for path, wantDigest := range manifest.ProtectedPaths {
 		if filepath.IsAbs(path) || strings.Contains(path, "..") || len(wantDigest) != 64 {
 			return repositoryAuthority{}, fmt.Errorf("invalid protected path entry %q", path)
@@ -345,7 +348,7 @@ func requiredProtectedPaths(repoRoot string) ([]string, error) {
 		if path == "" || path == ReviewManifestPath {
 			continue
 		}
-		if strings.HasSuffix(path, ".go") || strings.HasSuffix(path, ".cue") || path == "go.mod" || path == "go.sum" || path == "mise.toml" || path == "docs/constraint-nogood-learning-vocabulary-plan.md" || path == "docs/vocabulary-research-program-v3.md" {
+		if reviewedSourceInput(path) || path == "mise.toml" || path == "docs/constraint-nogood-learning-vocabulary-plan.md" || path == "docs/vocabulary-research-program-v3.md" {
 			paths = append(paths, path)
 		}
 	}
@@ -354,6 +357,44 @@ func requiredProtectedPaths(repoRoot string) ([]string, error) {
 		return nil, fmt.Errorf("protected source surface is empty")
 	}
 	return paths, nil
+}
+
+func reviewedSourceInput(path string) bool {
+	if path == "go.mod" || path == "go.sum" {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go", ".cue", ".mod", ".sum", ".work", ".s", ".asm", ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".h", ".hh", ".hpp", ".f", ".for", ".f90", ".syso", ".swig", ".swigcxx":
+		return true
+	default:
+		return false
+	}
+}
+
+func verifyReviewedFilesystemInputs(repoRoot string, protected map[string]string) error {
+	return filepath.WalkDir(repoRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if entry.IsDir() && (relative == ".git" || relative == ".nous") {
+			return filepath.SkipDir
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("reviewed filesystem contains forbidden symlink %s", relative)
+		}
+		if entry.IsDir() || !reviewedSourceInput(relative) {
+			return nil
+		}
+		if _, reviewed := protected[relative]; !reviewed {
+			return fmt.Errorf("compiler/runtime input is absent from reviewed source surface: %s", relative)
+		}
+		return nil
+	})
 }
 
 func claimAttempt(authority repositoryAuthority, panel, rootDigest string) (*AttemptReceipt, error) {

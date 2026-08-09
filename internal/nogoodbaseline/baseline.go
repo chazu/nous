@@ -142,8 +142,8 @@ func macCBJ(data []byte, decision Literal, prepared bool) (Result, error) {
 		}
 	}
 	var failure map[int]bool
-	if !s.assignedEdgesConsistent(decision.Variable) {
-		failure = map[int]bool{decision.Variable: true}
+	if assignedFailure := s.assignedEdgeFailure(decision.Variable); assignedFailure != nil {
+		failure = assignedFailure
 	} else {
 		queue := s.initialQueue(decision.Variable)
 		failure = s.ac3(queue)
@@ -161,8 +161,11 @@ func macCBJ(data []byte, decision Literal, prepared bool) (Result, error) {
 		// All root failure origins are normalized to the distinguished literal;
 		// no recursive conflict may escape the empty caller prefix.
 		s.materializeExactNogood(map[int]bool{decision.Variable: true})
-		if failure != nil {
-			s.meter.charge(7, "root-project", decision.Variable)
+		projected := cloneSet(failure)
+		delete(projected, decision.Variable)
+		s.meter.charge(7, "root-project", decision.Variable)
+		if len(projected) != 0 {
+			return Result{}, fmt.Errorf("root failure projected outside empty caller prefix: %v", sortedSetMembers(projected))
 		}
 	}
 	s.finishRoot(&result, decision, rootDomains, rootExplanations)
@@ -224,9 +227,7 @@ func (s *solver) search() ([]int, map[int]bool) {
 				s.meter.charge(5, "domain-empty-check", variable)
 			}
 		}
-		if !s.assignedEdgesConsistent(variable) {
-			failure := s.assignedNeighborSet(variable)
-			failure[variable] = true
+		if failure := s.assignedEdgeFailure(variable); failure != nil {
 			s.materializeExactNogood(failure)
 			s.restore(domains, explanations, assignment)
 			for _, member := range sortedSetMembers(failure) {
@@ -305,6 +306,7 @@ func (s *solver) materializeExactNogood(failure map[int]bool) {
 		fmt.Fprintf(&key, "%08d=%08d;", literal.Variable, literal.Color)
 	}
 	semanticKey := key.String()
+	s.meter.charge(12, "nogood-store-lookup", len(literals))
 	if _, exists := s.nogoods[semanticKey]; exists {
 		return
 	}
@@ -457,33 +459,31 @@ func (s *solver) neighbors(variable int) []int {
 	}
 	return out
 }
-func (s *solver) assignedEdgesConsistent(variable int) bool {
+func (s *solver) assignedEdgeFailure(variable int) map[int]bool {
 	for _, neighbor := range s.neighbors(variable) {
 		if s.assignment[neighbor] >= 0 {
 			s.meter.charge(4, "assigned-inequality", variable, s.assignment[variable], neighbor, s.assignment[neighbor])
 			if s.assignment[neighbor] == s.assignment[variable] {
-				return false
+				return map[int]bool{variable: true, neighbor: true}
 			}
 		}
 	}
-	return true
+	return nil
 }
-func (s *solver) assignedNeighborSet(variable int) map[int]bool {
-	out := map[int]bool{}
-	for _, n := range s.neighbors(variable) {
-		if s.assignment[n] >= 0 {
-			out[n] = true
-		}
-	}
-	return out
+
+func (s *solver) assignedEdgesConsistent(variable int) bool {
+	return s.assignedEdgeFailure(variable) == nil
 }
+
 func (s *solver) completeConsistent() bool {
 	for i, c := range s.assignment {
+		s.meter.charge(2, "complete-domain-read", i, c)
 		if c < 0 || !contains(s.p.Variables[i].Domain, c) {
 			return false
 		}
 	}
 	for _, e := range s.p.Edges {
+		s.meter.charge(4, "complete-inequality", e.Left, s.assignment[e.Left], e.Right, s.assignment[e.Right])
 		if s.assignment[e.Left] == s.assignment[e.Right] {
 			return false
 		}
