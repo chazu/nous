@@ -74,3 +74,19 @@ func TestTransformLocalFactsAndMeter(t *testing.T) {
 		t.Fatalf("records=%v err=%v", records, err)
 	}
 }
+
+func TestTransformRefineReturnsCanonicalChildBytes(t *testing.T) {
+	root, _ := (transformschema.Partial{}).CanonicalJSON()
+	vm := &VM{stack: []Value{StringVal(string(root)), StringVal("definition")}}
+	if err := bTSRefine(vm); err != nil {
+		t.Fatal(err)
+	}
+	child := vm.pop()
+	if child.Kind() != VString {
+		t.Fatalf("child kind=%v", child.Kind())
+	}
+	partial, err := transformschema.ParsePartial([]byte(child.AsString()))
+	if err != nil || partial.Stage != 1 || partial.Targets != "definition" {
+		t.Fatalf("partial=%+v err=%v", partial, err)
+	}
+}

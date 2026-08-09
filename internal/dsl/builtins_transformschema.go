@@ -176,34 +176,26 @@ func bTSProgramApply(vm *VM) error {
 
 func bTSRefine(vm *VM) error {
 	value, partialValue := vm.pop(), vm.pop()
-	if value.Kind() != VString || partialValue.Kind() != VList {
+	if value.Kind() != VString || partialValue.Kind() != VString {
 		vm.push(Nil())
 		return nil
 	}
-	items := partialValue.AsList()
-	if len(items) != 6 {
+	p, err := transformschema.ParsePartial([]byte(partialValue.AsString()))
+	if err != nil {
 		vm.push(Nil())
 		return nil
 	}
-	values := make([]string, 5)
-	if items[0].Kind() != VInt {
-		vm.push(Nil())
-		return nil
-	}
-	for i := range values {
-		if items[i+1].Kind() != VString {
-			vm.push(Nil())
-			return nil
-		}
-		values[i] = items[i+1].AsString()
-	}
-	p := transformschema.Partial{Stage: items[0].AsInt(), Targets: values[0], Anchor: values[1], ReferenceScope: values[2], OldGuard: values[3], Locality: values[4]}
 	next, err := p.Refine(value.AsString())
 	if err != nil {
 		vm.push(Nil())
 		return nil
 	}
-	vm.push(ListVal([]Value{IntVal(next.Stage), StringVal(next.Targets), StringVal(next.Anchor), StringVal(next.ReferenceScope), StringVal(next.OldGuard), StringVal(next.Locality)}))
+	encoded, err := next.CanonicalJSON()
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(string(encoded)))
 	return nil
 }
 

@@ -81,6 +81,34 @@ func TestSchemaUniverseAndRefinementEdges(t *testing.T) {
 	}
 }
 
+func TestPartialCanonicalRoundTripAndStrictness(t *testing.T) {
+	p := Partial{}
+	for _, value := range []string{"definition+references", "request-target", "global", "any", "required"} {
+		var err error
+		p, err = p.Refine(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := p.CanonicalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := ParsePartial(encoded)
+		if err != nil || got != p {
+			t.Fatalf("partial=%+v got=%+v err=%v", p, got, err)
+		}
+	}
+	for _, bad := range [][]byte{
+		[]byte(`["transform-partial/v1",0,"definition","","","",""]`),
+		[]byte(`["transform-partial/v1",1,"bogus","","","",""]`),
+		[]byte(`["transform-partial/v1",0,"","","","",""] `),
+	} {
+		if _, err := ParsePartial(bad); err == nil {
+			t.Fatalf("accepted %s", bad)
+		}
+	}
+}
+
 func TestProgramRejectsNoOpAndDuplicateTargets(t *testing.T) {
 	f := sampleForest()
 	if _, err := (Program{Edits: []Edit{{1, "old"}}}).Apply(f); err == nil {

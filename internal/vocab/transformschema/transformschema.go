@@ -500,6 +500,34 @@ func (p Partial) CanonicalJSON() ([]byte, error) {
 	return json.Marshal([]any{PartialVersion, p.Stage, p.Targets, p.Anchor, p.ReferenceScope, p.OldGuard, p.Locality})
 }
 
+func ParsePartial(data []byte) (Partial, error) {
+	v, err := decodeOne(data)
+	if err != nil {
+		return Partial{}, err
+	}
+	r, ok := v.([]any)
+	if !ok || len(r) != 7 || r[0] != PartialVersion {
+		return Partial{}, ErrInvalid
+	}
+	stage, ok := exactInt(r[1])
+	if !ok {
+		return Partial{}, ErrInvalid
+	}
+	fields := [5]string{}
+	for i := range fields {
+		fields[i], ok = r[i+2].(string)
+		if !ok {
+			return Partial{}, ErrInvalid
+		}
+	}
+	p := Partial{stage, fields[0], fields[1], fields[2], fields[3], fields[4]}
+	canonical, err := p.CanonicalJSON()
+	if err != nil || !bytes.Equal(canonical, data) {
+		return Partial{}, ErrInvalid
+	}
+	return p, nil
+}
+
 func decodeOne(data []byte) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()

@@ -17,11 +17,18 @@ type acquisitionRun struct {
 	Terminal     string
 	Programs     []string
 	Candidates   []string
+	Root         string
+	Edges        []string
+	Artifact     string
 	TasksPopped  int
 	MeterRecords []dsl.TransformMeterRecord
 }
 
 func runAcquisition(domainsDir string, trainingBytes []byte, token string) (acquisitionRun, error) {
+	return runAcquisitionConfigured(domainsDir, trainingBytes, token, nil)
+}
+
+func runAcquisitionConfigured(domainsDir string, trainingBytes []byte, token string, configure func(*unit.Store)) (acquisitionRun, error) {
 	training, err := transformfixturecore.ParseTraining(trainingBytes)
 	if err != nil {
 		return acquisitionRun{}, err
@@ -33,6 +40,9 @@ func runAcquisition(domainsDir string, trainingBytes []byte, token string) (acqu
 	seed.DomainsDir = previous
 	if err != nil {
 		return acquisitionRun{}, err
+	}
+	if configure != nil {
+		configure(store)
 	}
 	experiment := unit.New("TS.Experiment." + token)
 	experiment.Set("isA", []string{"TransformLearningExperiment", "Anything"})
@@ -83,5 +93,15 @@ func runAcquisition(domainsDir string, trainingBytes []byte, token string) (acqu
 	if err != nil {
 		return acquisitionRun{}, err
 	}
-	return acquisitionRun{store, experiment.GetString("terminal"), experiment.GetStrings("programUnits"), experiment.GetStrings("candidateUnits"), popped, records}, nil
+	return acquisitionRun{
+		Store:        store,
+		Terminal:     experiment.GetString("terminal"),
+		Programs:     experiment.GetStrings("programUnits"),
+		Candidates:   experiment.GetStrings("candidateUnits"),
+		Root:         experiment.GetString("rootCandidate"),
+		Edges:        experiment.GetStrings("edgeUnits"),
+		Artifact:     experiment.GetString("artifactUnit"),
+		TasksPopped:  popped,
+		MeterRecords: records,
+	}, nil
 }
