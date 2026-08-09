@@ -159,6 +159,11 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 func (s *transformLifecycleState) requireFactorComparisons(partial transformschema.Partial, phase string, trace []TransformOperation, objects map[string][]byte) error {
 	atom := func(kind string, value any) []byte { return mustJSON([]any{"transform-atom/v1", kind, value}) }
 	type pair struct{ left, right []byte }
+	for index, operation := range trace {
+		if operation.Phase != phase {
+			return fmt.Errorf("%s factor operation %d is relabeled %s", phase, index, operation.Phase)
+		}
+	}
 	definitionNormalization := (phase == "scope" || phase == "old-guard") && partial.Targets == "definition"
 	if definitionNormalization {
 		canonical := "local"
@@ -167,19 +172,19 @@ func (s *transformLifecycleState) requireFactorComparisons(partial transformsche
 			canonical, candidate = "any", partial.OldGuard
 		}
 		expected := pair{atom("enum", candidate), atom("enum", canonical)}
-		matched, nodes := 0, 0
+		matched, observations := 0, 0
 		for _, operation := range trace {
-			if operation.Operation == "node" {
-				nodes++
+			if oneOfString(operation.Operation, "node", "parent", "target") {
+				observations++
 			}
 			if operation.Operation == "compare" && len(operation.Inputs) == 2 && bytes.Equal(objects[operation.Inputs[0]], expected.left) && bytes.Equal(objects[operation.Inputs[1]], expected.right) {
 				matched++
 			}
 		}
-		if nodes != 0 || matched != 1 {
-			return fmt.Errorf("%s definition-only normalization has nodes=%d comparisons=%d", phase, nodes, matched)
+		if observations != 0 || matched != 1 {
+			return fmt.Errorf("%s definition-only normalization has observations=%d comparisons=%d", phase, observations, matched)
 		}
-		return nil
+		return requireFactorAggregate(trace, 1, objects)
 	}
 	if phase == "target" {
 		return requireTargetFactorProvenance(partial, trace, s.programs, objects)
@@ -187,6 +192,11 @@ func (s *transformLifecycleState) requireFactorComparisons(partial transformsche
 	blocks, err := completeFactorScanBlocks(trace, objects)
 	if err != nil || len(blocks) != 4 {
 		return fmt.Errorf("%s factor scan blocks: %w", phase, err)
+	}
+	for _, operation := range trace[:blocks[0].start] {
+		if oneOfString(operation.Operation, "node", "parent", "target") {
+			return fmt.Errorf("%s factor has structural evidence before its first row", phase)
+		}
 	}
 	expectedByBlock := make([][]pair, 4)
 	wantKind := "id"
@@ -230,15 +240,25 @@ func (s *transformLifecycleState) requireFactorComparisons(partial transformsche
 			end = blocks[index+1].start
 		}
 		var actual []pair
-		for _, operation := range trace[block.start:end] {
+		lastObservation, firstTypedComparison := -1, -1
+		for offset, operation := range trace[block.start:end] {
+			if oneOfString(operation.Operation, "node", "parent", "target") {
+				lastObservation = offset
+			}
 			if operation.Operation != "compare" || len(operation.Inputs) != 2 || len(operation.Outputs) != 1 {
 				continue
 			}
 			leftKind, _, leftErr := decodeTransformAtom(objects[operation.Inputs[0]])
 			rightKind, _, rightErr := decodeTransformAtom(objects[operation.Inputs[1]])
 			if leftErr == nil && rightErr == nil && leftKind == wantKind && rightKind == wantKind {
+				if firstTypedComparison < 0 {
+					firstTypedComparison = offset
+				}
 				actual = append(actual, pair{objects[operation.Inputs[0]], objects[operation.Inputs[1]]})
 			}
+		}
+		if len(actual) != 0 && firstTypedComparison <= lastObservation {
+			return fmt.Errorf("%s row %d comparison precedes its final structural observation", phase, index)
 		}
 		if len(actual) != len(expectedByBlock[index]) {
 			forestBytes, _ := block.forest.CanonicalJSON()
@@ -257,7 +277,11 @@ func (s *transformLifecycleState) requireFactorComparisons(partial transformsche
 			return fmt.Errorf("%s row %d observations: %w", phase, index, err)
 		}
 	}
-	return nil
+	totalExpected := 0
+	for _, expected := range expectedByBlock {
+		totalExpected += len(expected)
+	}
+	return requireFactorAggregate(trace, totalExpected, objects)
 }
 
 type factorEvidenceStep struct {
@@ -293,6 +317,8 @@ func requireTargetFactorProvenance(partial transformschema.Partial, trace []Tran
 				return errors.New("target observation has invalid forest/id source")
 			}
 			actual = append(actual, factorEvidenceStep{operation: "node", forest: forest, id: id})
+		case "parent", "target":
+			return fmt.Errorf("target factor contains extra %s observation", operation.Operation)
 		case "compare":
 			if len(operation.Inputs) != 2 {
 				continue
@@ -313,6 +339,30 @@ func requireTargetFactorProvenance(partial transformschema.Partial, trace []Tran
 		if actual[index].operation != expected[index].operation || actual[index].forest != expected[index].forest || actual[index].id != expected[index].id || !bytes.Equal(actual[index].left, expected[index].left) || !bytes.Equal(actual[index].right, expected[index].right) {
 			return fmt.Errorf("target provenance differs at step %d", index)
 		}
+	}
+	return requireFactorAggregate(trace, len(programs), objects)
+}
+
+func requireFactorAggregate(trace []TransformOperation, stageComparisons int, objects map[string][]byte) error {
+	comparisons := 0
+	for _, operation := range trace {
+		if operation.Operation == "compare" {
+			comparisons++
+		}
+	}
+	if comparisons != stageComparisons+1 || len(trace) == 0 {
+		return fmt.Errorf("factor comparisons=%d, want %d stage plus one aggregate", comparisons, stageComparisons)
+	}
+	aggregate := trace[len(trace)-1]
+	if aggregate.Operation != "compare" || len(aggregate.Inputs) != 2 || len(aggregate.Outputs) != 1 || aggregate.Outputs[0] != aggregate.Inputs[0] {
+		return errors.New("factor aggregate comparison is not the final proof operation")
+	}
+	leftKind, leftValue, leftErr := decodeTransformAtom(objects[aggregate.Inputs[0]])
+	rightKind, rightValue, rightErr := decodeTransformAtom(objects[aggregate.Inputs[1]])
+	left, leftOK := leftValue.(bool)
+	right, rightOK := rightValue.(bool)
+	if leftErr != nil || rightErr != nil || leftKind != "boolean" || rightKind != "boolean" || !leftOK || !rightOK || !right || aggregate.Outcome != map[bool]string{true: "true", false: "false"}[left] {
+		return errors.New("factor aggregate comparison does not bind claimed boolean to true")
 	}
 	return nil
 }

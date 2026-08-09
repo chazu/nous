@@ -1,6 +1,6 @@
 # Transformation-schema induction vocabulary: implementation and trial record
 
-Status: **v2 implementation-review revision 4; revisions 1 through 3 were
+Status: **v2 implementation-review revision 5; revisions 1 through 4 were
 rejected, v1 was closed unexecuted, and no v2 protected panel has run**
 
 This document records Vocabulary 2 of the
@@ -105,14 +105,14 @@ held-out application input digest must match the corresponding committed case,
 not merely its position in an eight-row result stream. Report and
 execution-manifest agreement alone is not accepted as evidence.
 
-Generator and oracle acceptance diagnostics are distinct committed evidence
-leaves and inputs to the frozen oracle-parity gate; the exact preregistered
-14-field protected payload remains unchanged. Committed verification
-independently recomputes both ledgers from persisted fixtures, checks exact
-application/work counts and matrix roots, and compares each canonical
-diagnostic leaf. Persisted development, validation, and locked curricula are
-scrubbed of seed commitment, accepted attempt, latent schema, expected outputs,
-generation ledger, and scorer bytes before policy execution begins.
+Generator and oracle acceptance diagnostics are independently recomputed from
+the already authorized committed fixture leaves and feed the frozen
+oracle-parity gate; they add neither a new evidence-graph leaf nor a protected
+payload field. Committed verification checks exact application/work counts and
+the independently derived matrix roots. Persisted development, validation, and
+locked curricula are scrubbed of seed commitment, accepted attempt, latent
+schema, expected outputs, generation ledger, and scorer bytes before policy
+execution begins.
 
 Store-backed policies persist their actual canonical CUE Store, not a summary.
 Independent verification reruns the exact acquisition configuration and
@@ -204,14 +204,27 @@ atom kinds were outside the frozen grammar, comparisons were not yet bound to
 their source observation blocks, and closure verification was not freeze-phase
 bound.
 
-Revision 4 restores the exact protected and atom wires, retains acceptance
-diagnostics as evidence leaves and oracle-parity gate inputs, binds factor
-proofs to exact ordered row observations, and makes closure verification
-freeze-only. Regression tests cover batch-proof omission, unsupported verify
-wires, malformed-operation semantics, held-out input rebinding, out-of-grammar
-atom kinds, detached target comparisons, and acquire-phase closure forgery. It
-remains a candidate until all three reviewers accept the same exact commit. No
-protected command was run while repairing any revision.
+Revision 4 at `47171ba786582addb93d75938b08e497990b7a17`
+restored the exact protected and atom wires, bound factor proofs to row
+observations, and made closure verification freeze-only. Architecture accepted
+revision 3 but had not yet returned on revision 4. Experimental validity found
+one remaining exact-plan violation: the acceptance diagnostics had moved from
+the payload into two unauthorized evidence-graph leaves. Semantics found that
+non-target comparisons could still precede their observations, structural
+prefix evidence escaped block checks, normalization could inspect parents or
+targets, and factor operations could be relabeled across legal phases.
+
+Revision 5 removes the unauthorized leaves while recomputing the same
+diagnostics directly from authorized fixtures for the oracle-parity gate. It
+also phase-binds every proof operation, rejects all structural normalization
+observations and pre-block prefixes, requires each row's typed comparisons to
+follow its final prescribed observation, and permits no other factor comparison
+besides the one final aggregate claim. Existing regression tests cover
+batch-proof omission, unsupported verify wires, malformed-operation semantics,
+held-out input rebinding, out-of-grammar atom kinds, detached target
+comparisons, and acquire-phase closure forgery. It remains a candidate until
+all three reviewers accept the same exact commit. No protected command was run
+while repairing any revision.
 
 The repository-wide suite was also run on this implementation-review
 candidate. It completed every other listed package, including

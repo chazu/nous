@@ -92,8 +92,6 @@ func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][
 		return panelEvidence{}, err
 	}
 	files["competence/root.json"] = competenceRoot
-	files["acceptance/generator.json"] = acceptanceDiagnosticsBytes("generator", report.GeneratorAcceptance)
-	files["acceptance/oracle.json"] = acceptanceDiagnosticsBytes("oracle", report.OracleAcceptance)
 	graph, err := canonicalEvidenceRoot("transform-evidence-graph/v2", panel, files)
 	if err != nil {
 		return panelEvidence{}, err

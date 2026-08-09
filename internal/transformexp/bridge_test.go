@@ -31,7 +31,7 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 3539 {
+	if len(run.MeterRecords) != 1793 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
 	closures, frozen, batches := 0, 0, 0
@@ -248,6 +248,21 @@ func TestTargetFactorProofBindsComparisonsToProgramObservations(t *testing.T) {
 			if err := requireTargetFactorProvenance(partial, forged, state.programs, bundle.Objects); err == nil {
 				t.Fatal("accepted target comparisons detached from their program observations")
 			}
+			parentIndex := slices.IndexFunc(state.history, func(item TransformOperation) bool { return item.Operation == "parent" })
+			if parentIndex < 0 {
+				t.Fatal("history contained no valid parent observation")
+			}
+			extraParent := state.history[parentIndex]
+			extraParent.Phase = "target"
+			withParent := append(slices.Clone(trace[:len(trace)-1]), extraParent, trace[len(trace)-1])
+			if err := requireTargetFactorProvenance(partial, withParent, state.programs, bundle.Objects); err == nil {
+				t.Fatal("accepted extra target-phase parent observation")
+			}
+			extraComparison := trace[slices.IndexFunc(trace, func(item TransformOperation) bool { return item.Operation == "compare" })]
+			withComparison := append(slices.Clone(trace[:len(trace)-1]), extraComparison, trace[len(trace)-1])
+			if err := requireTargetFactorProvenance(partial, withComparison, state.programs, bundle.Objects); err == nil {
+				t.Fatal("accepted extra target-phase comparison")
+			}
 			return
 		}
 		if err := state.observe(operation, bundle.Objects); err != nil {
@@ -255,6 +270,98 @@ func TestTargetFactorProofBindsComparisonsToProgramObservations(t *testing.T) {
 		}
 	}
 	t.Fatal("transcript contained no target factor evidence")
+}
+
+func TestFactorProofRejectsReorderedPrefixNormalizationAndPhaseForgeries(t *testing.T) {
+	c, err := makeCurriculum(0, 0, 841001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runAcquisition("../../domains", c.Training, "factor-forgeries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := transcriptFromAcquisition(run, 0, NousRefine, "0123456789abcdef", digestBytes([]byte("factor forgeries manifest")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := newTransformLifecycleState(string(NousRefine), c.Training)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reordered, prefix, wrongPhase, normalization := false, false, false, false
+	var validParent TransformOperation
+	scanner := bufio.NewScanner(bytes.NewReader(bundle.Raw))
+	for scanner.Scan() {
+		event, _ := parseTransformEvent(scanner.Bytes())
+		operation, _ := parseTransformOperation(bundle.Objects[event.Object])
+		if operation.Operation == "parent" && validParent.Operation == "" {
+			validParent = operation
+		}
+		if operation.Operation == "evidence-link" && state.activeCandidate != "" && state.factorStart >= 0 {
+			partial := state.partials[state.activeCandidate]
+			trace := slices.Clone(state.history[state.factorStart:])
+			if operation.Phase == "anchor" && !reordered {
+				comparisonIndex := -1
+				for index, item := range trace {
+					if item.Operation != "compare" || len(item.Inputs) != 2 {
+						continue
+					}
+					leftKind, _, _ := decodeTransformAtom(bundle.Objects[item.Inputs[0]])
+					rightKind, _, _ := decodeTransformAtom(bundle.Objects[item.Inputs[1]])
+					if leftKind == "id" && rightKind == "id" {
+						comparisonIndex = index
+						break
+					}
+				}
+				if comparisonIndex < 0 {
+					t.Fatal("anchor trace contained no typed comparison")
+				}
+				comparison := trace[comparisonIndex]
+				without := append(slices.Clone(trace[:comparisonIndex]), trace[comparisonIndex+1:]...)
+				firstNode := slices.IndexFunc(without, func(item TransformOperation) bool { return item.Operation == "node" })
+				forged := append(slices.Clone(without[:firstNode+1]), comparison)
+				forged = append(forged, without[firstNode+1:]...)
+				if err := state.requireFactorComparisons(partial, "anchor", forged, bundle.Objects); err == nil {
+					t.Fatal("accepted anchor comparison before its source observations")
+				}
+				reordered = true
+
+				extra := trace[slices.IndexFunc(trace, func(item TransformOperation) bool {
+					if item.Operation != "node" {
+						return false
+					}
+					_, id, ok := operationForestID(item, bundle.Objects)
+					return ok && id == 1
+				})]
+				if err := state.requireFactorComparisons(partial, "anchor", append([]TransformOperation{extra}, trace...), bundle.Objects); err == nil {
+					t.Fatal("accepted structural evidence before the first complete row scan")
+				}
+				prefix = true
+
+				relabeled := slices.Clone(trace)
+				relabeled[0].Phase = "scope"
+				if err := state.requireFactorComparisons(partial, "anchor", relabeled, bundle.Objects); err == nil {
+					t.Fatal("accepted factor evidence relabeled to another legal phase")
+				}
+				wrongPhase = true
+			}
+			if operation.Phase == "scope" && partial.Targets == "definition" && !normalization && validParent.Operation != "" {
+				inspection := validParent
+				inspection.Phase = "scope"
+				if err := state.requireFactorComparisons(partial, "scope", append(trace, inspection), bundle.Objects); err == nil {
+					t.Fatal("accepted definition normalization that inspected parent evidence")
+				}
+				normalization = true
+			}
+		}
+		if err := state.observe(operation, bundle.Objects); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !reordered || !prefix || !wrongPhase || !normalization {
+		t.Fatalf("forgery coverage reordered=%v prefix=%v phase=%v normalization=%v", reordered, prefix, wrongPhase, normalization)
+	}
 }
 
 func assertRefinementProvenance(t *testing.T, run acquisitionRun) {
