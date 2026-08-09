@@ -1,12 +1,15 @@
 package nogoodexp
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 
 	"github.com/chazu/nous/internal/nogoodbaseline"
 	"github.com/chazu/nous/internal/nogoodfixture"
 	"github.com/chazu/nous/internal/nogoodoracle"
+	"github.com/chazu/nous/internal/vocab/nogoods"
 )
 
 var RequiredPolicies = []string{
@@ -57,6 +60,23 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 	if err != nil {
 		return PanelExecution{}, err
 	}
+	trainingFixtures, err := nogoodfixture.Training()
+	if err != nil {
+		return PanelExecution{}, err
+	}
+	trainingMemoKey, err := concreteMemoKey(trainingFixtures[0].ProblemJSON, trainingFixtures[0].Decision)
+	if err != nil {
+		return PanelExecution{}, err
+	}
+	for _, task := range tasks {
+		key, keyErr := concreteMemoKey(task.ProblemJSON, task.Decision)
+		if keyErr != nil {
+			return PanelExecution{}, keyErr
+		}
+		if key == trainingMemoKey {
+			return PanelExecution{}, fmt.Errorf("held-out task %d matched the concrete training memo", task.Ordinal)
+		}
+	}
 	corrupted := artifact
 	corrupted.Mask = 5
 	corrupted.Digest = artifactDigest(corrupted)
@@ -74,7 +94,6 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 	}{
 		"mac-cbj-empty":    {},
 		"no-artifact":      {},
-		"reset":            {},
 		"concrete-memo":    {},
 		"nous-generalized": {&artifact, &authority},
 		"corrupted":        {&corrupted, &authority},
@@ -89,7 +108,10 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 		}
 		bridges[policy] = bridge
 	}
-	acquisition := acquisitionTranscript(training, bridges["nous-generalized"].preflight)
+	acquisition, err := acquisitionTranscript(training, bridges["nous-generalized"].preflight)
+	if err != nil {
+		return PanelExecution{}, err
+	}
 	if work := transcriptWork(acquisition); work > 2000 {
 		return PanelExecution{}, fmt.Errorf("acquisition work %d exceeds cap", work)
 	}
@@ -102,7 +124,7 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 			policyEvents = appendEvents(policyEvents, acquisition)
 		}
 		for _, task := range tasks {
-			outcome, events, err := runPolicyTask(domainsDir, policy, task, artifact, authority, bridges[policy])
+			outcome, events, err := runPolicyTask(domainsDir, policy, task, artifact, authority, bridges[policy], trainingMemoKey)
 			if err != nil {
 				return PanelExecution{}, fmt.Errorf("%s task %d: %w", policy, task.Ordinal, err)
 			}
@@ -123,7 +145,7 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 	return execution, nil
 }
 
-func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact FrozenArtifact, authority ArtifactAuthority, bridge *BridgeExecution) (TaskOutcome, []TranscriptEvent, error) {
+func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact FrozenArtifact, authority ArtifactAuthority, bridge *BridgeExecution, trainingMemoKey string) (TaskOutcome, []TranscriptEvent, error) {
 	decision := nogoodbaseline.Literal{Variable: task.Decision.Variable, Color: task.Decision.Color}
 	oracle, err := nogoodoracle.Enumerate(task.ProblemJSON, nogoodoracle.Literal(decision))
 	if err != nil {
@@ -157,17 +179,57 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			return TaskOutcome{}, nil, bridgeErr
 		}
 		disposition = d.Status
-		localAcquisition := acquisitionTranscript(training, freshBridge.preflight)
+		localAcquisition, acquisitionErr := acquisitionTranscript(training, freshBridge.preflight)
+		if acquisitionErr != nil {
+			return TaskOutcome{}, nil, acquisitionErr
+		}
 		for index := range localAcquisition {
 			localAcquisition[index].TaskOrdinal = uint32(task.Ordinal)
 		}
 		events = appendEvents(events, localAcquisition)
-		events = appendEvents(events, bridgeTranscript(uint32(task.Ordinal), d))
+		bridgeEvents, meterErr := bridgeTranscript(uint32(task.Ordinal), d)
+		if meterErr != nil {
+			return TaskOutcome{}, nil, meterErr
+		}
+		events = appendEvents(events, bridgeEvents)
 		if d.Status == "propose-prune" {
+			finalEvents, finalErr := learnedPruneTerminalEvents(uint32(task.Ordinal))
+			if finalErr != nil {
+				return TaskOutcome{}, nil, finalErr
+			}
+			events = appendEvents(events, finalEvents)
 			result = nogoodbaseline.Result{Satisfied: false}
 		} else {
 			result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
 		}
+	case "reset":
+		training, trainErr := RunTraining(domainsDir)
+		if trainErr != nil {
+			return TaskOutcome{}, nil, trainErr
+		}
+		emptyBridge, bridgeErr := NewBridgeExecution(domainsDir, nil, nil)
+		if bridgeErr != nil {
+			return TaskOutcome{}, nil, bridgeErr
+		}
+		d, bridgeErr := emptyBridge.Consider(task.ProblemJSON, task.Decision)
+		if bridgeErr != nil {
+			return TaskOutcome{}, nil, bridgeErr
+		}
+		disposition = d.Status
+		localAcquisition, acquisitionErr := acquisitionTranscript(training, emptyBridge.preflight)
+		if acquisitionErr != nil {
+			return TaskOutcome{}, nil, acquisitionErr
+		}
+		for index := range localAcquisition {
+			localAcquisition[index].TaskOrdinal = uint32(task.Ordinal)
+		}
+		events = appendEvents(events, localAcquisition)
+		bridgeEvents, meterErr := bridgeTranscript(uint32(task.Ordinal), d)
+		if meterErr != nil {
+			return TaskOutcome{}, nil, meterErr
+		}
+		events = appendEvents(events, bridgeEvents)
+		result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
 	default:
 		if bridge == nil {
 			return TaskOutcome{}, nil, fmt.Errorf("missing bridge execution")
@@ -177,9 +239,29 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			return TaskOutcome{}, nil, bridgeErr
 		}
 		disposition = d.Status
-		events = appendEvents(events, bridgeTranscript(uint32(task.Ordinal), d))
+		bridgeEvents, meterErr := bridgeTranscript(uint32(task.Ordinal), d)
+		if meterErr != nil {
+			return TaskOutcome{}, nil, meterErr
+		}
+		events = appendEvents(events, bridgeEvents)
+		if policy == "concrete-memo" {
+			key, keyErr := concreteMemoKey(task.ProblemJSON, task.Decision)
+			if keyErr != nil {
+				return TaskOutcome{}, nil, keyErr
+			}
+			outcome := "miss"
+			if key == trainingMemoKey {
+				outcome = "hit"
+			}
+			events = append(events, TranscriptEvent{Category: 12, Code: 17, TaskOrdinal: uint32(task.Ordinal), Operands: [8]TranscriptOperand{ID("memo:" + key[:16]), OptionalID("training:" + trainingMemoKey[:16]), ID("lookup"), ID(outcome), Omitted(), Omitted(), Omitted(), Omitted()}})
+		}
 		prune := d.Status == "propose-prune" && policy == "nous-generalized"
 		if prune {
+			finalEvents, finalErr := learnedPruneTerminalEvents(uint32(task.Ordinal))
+			if finalErr != nil {
+				return TaskOutcome{}, nil, finalErr
+			}
+			events = appendEvents(events, finalEvents)
 			result = nogoodbaseline.Result{Satisfied: false}
 		} else {
 			result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
@@ -213,6 +295,48 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 		return TaskOutcome{}, nil, fmt.Errorf("learned prune work %d exceeds hard cap", work)
 	}
 	return TaskOutcome{Ordinal: task.Ordinal, Cohort: string(task.Cohort), Satisfied: result.Satisfied, Witness: slices.Clone(result.Witness), Disposition: disposition, Work: work, Vector: vector, PruneSound: pruneSound}, events, nil
+}
+
+func learnedPruneTerminalEvents(taskOrdinal uint32) ([]TranscriptEvent, error) {
+	source := []nogoodbaseline.Event{
+		{Category: 3, Transition: "prune-root-restore"},
+		{Category: 5, Transition: "prune-domain-restore"},
+		{Category: 11, Transition: "terminal-no-solution"},
+		{Category: 12, Transition: "omitted-prefix-record"},
+		{Category: 12, Transition: "terminal-record-write"},
+	}
+	return baselineTranscript(taskOrdinal, nogoodbaseline.Result{Events: source})
+}
+
+func concreteMemoKey(problemJSON []byte, decision nogoods.Literal) (string, error) {
+	problem, err := nogoods.ParseProblem(problemJSON)
+	if err != nil {
+		return "", err
+	}
+	variables := make([]string, len(problem.Variables))
+	for index, variable := range problem.Variables {
+		variables[index] = variable.Alias
+	}
+	sort.Strings(variables)
+	colors := slices.Clone(problem.ColorAliases)
+	sort.Strings(colors)
+	decisions := append(slices.Clone(problem.Assignment), decision)
+	sort.Slice(decisions, func(i, j int) bool { return decisions[i].Variable < decisions[j].Variable })
+	literals := make([][2]string, len(decisions))
+	for index, literal := range decisions {
+		literals[index] = [2]string{problem.Variables[literal.Variable].Alias, problem.ColorAliases[literal.Color]}
+	}
+	material := struct {
+		Target    string      `json:"target"`
+		Variables []string    `json:"variables"`
+		Colors    []string    `json:"colors"`
+		Decisions [][2]string `json:"decisions"`
+	}{digestBytes(problemJSON), variables, colors, literals}
+	encoded, err := json.Marshal(material)
+	if err != nil {
+		return "", err
+	}
+	return digestBytes(encoded), nil
 }
 
 func containsOracleWitness(solutions [][]int, witness []int) bool {

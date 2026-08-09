@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/nogoodfixture"
 	"github.com/chazu/nous/internal/seed"
@@ -17,10 +18,11 @@ import (
 const TrainingTaskCap = 2000
 
 type TrainingRun struct {
-	Store       *unit.Store
-	TasksPopped int
-	Terminal    string
-	Artifact    string
+	Store        *unit.Store
+	TasksPopped  int
+	Terminal     string
+	Artifact     string
+	MeterRecords []dsl.NogoodMeterRecord
 }
 
 func RunTraining(domainsDir string) (TrainingRun, error) {
@@ -43,6 +45,12 @@ func RunTraining(domainsDir string) (TrainingRun, error) {
 
 	experiment := unit.New("NG.Training.Experiment")
 	experiment.Set("isA", []string{"NogoodLearningExperiment", "Anything"})
+	meterToken := "ngm:training:part3-nogoods-v1"
+	if err := dsl.RegisterNogoodMeter(meterToken); err != nil {
+		return TrainingRun{}, err
+	}
+	defer dsl.UnregisterNogoodMeter(meterToken)
+	experiment.Set("meterToken", meterToken)
 	var exampleNames []string
 	for _, task := range training {
 		name := fmt.Sprintf("NG.Training.Example.%d", task.Ordinal)
@@ -86,6 +94,9 @@ func RunTraining(domainsDir string) (TrainingRun, error) {
 		return TrainingRun{}, fmt.Errorf("initialize nogood VM: %w", err)
 	}
 	ag.Push(&agenda.Task{Priority: 900, UnitName: experiment.Name, SlotName: "ngStart", Reasons: []string{"Begin bounded nogood acquisition"}})
+	if err := dsl.ChargeNogoodMeter(meterToken, "training-initial-enqueue", 12, 1); err != nil {
+		return TrainingRun{}, err
+	}
 	popped := 0
 	for ag.Len() > 0 {
 		if popped >= TrainingTaskCap {
@@ -96,9 +107,15 @@ func RunTraining(domainsDir string) (TrainingRun, error) {
 		if task == nil {
 			return TrainingRun{}, fmt.Errorf("agenda length was nonzero but Pop returned nil")
 		}
+		if err := dsl.ChargeNogoodMeter(meterToken, "training-task-dequeue", 12, 1); err != nil {
+			return TrainingRun{}, err
+		}
 		eng.WorkOnTask(task)
 		if len(eng.VM.DeletedUnits) != 0 {
 			return TrainingRun{}, fmt.Errorf("nogood heuristic deleted units")
+		}
+		if err := dsl.ChargeNogoodMeter(meterToken, "training-engine-dispatch", 12, 22); err != nil {
+			return TrainingRun{}, err
 		}
 		popped++
 	}
@@ -107,5 +124,9 @@ func RunTraining(domainsDir string) (TrainingRun, error) {
 	if terminal == "" {
 		return TrainingRun{}, fmt.Errorf("training ended without a terminal")
 	}
-	return TrainingRun{Store: store, TasksPopped: popped, Terminal: terminal, Artifact: artifact}, nil
+	records, err := dsl.NogoodMeterSnapshot(meterToken)
+	if err != nil {
+		return TrainingRun{}, err
+	}
+	return TrainingRun{Store: store, TasksPopped: popped, Terminal: terminal, Artifact: artifact, MeterRecords: records}, nil
 }

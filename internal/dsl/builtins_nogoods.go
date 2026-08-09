@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/chazu/nous/internal/unit"
 	nogoods "github.com/chazu/nous/internal/vocab/nogoods"
@@ -18,6 +20,7 @@ func init() {
 		"ng-problem-valid?":        bNGProblemValid,
 		"ng-semantic-key":          bNGSemanticKey,
 		"ng-domain-has?":           bNGDomainHas,
+		"ng-domain-values":         bNGDomainValues,
 		"ng-edge-has?":             bNGEdgeHas,
 		"ng-refine-mask":           bNGRefineMask,
 		"ng-guard-matches?":        bNGGuardMatches,
@@ -28,7 +31,115 @@ func init() {
 		"ng-digest-list":           bNGDigestList,
 		"ng-digest-record":         bNGDigestRecord,
 		"ng-unit-set-digest":       bNGUnitSetDigest,
+		"ng-meter":                 bNGMeter,
+		"ng-meter-n":               bNGMeterN,
 	})
+}
+
+// NogoodMeterRecord is emitted at the semantic operation site by the CUE
+// heuristic. The verifier owns the opaque capability and only exposes an
+// append operation to the vocabulary.
+type NogoodMeterRecord struct {
+	Category  uint8
+	Operation string
+}
+
+type nogoodMeter struct {
+	mu      sync.Mutex
+	records []NogoodMeterRecord
+}
+
+var nogoodMeters = struct {
+	sync.Mutex
+	items map[string]*nogoodMeter
+}{items: make(map[string]*nogoodMeter)}
+
+func RegisterNogoodMeter(token string) error {
+	if token == "" {
+		return errors.New("empty nogood meter token")
+	}
+	nogoodMeters.Lock()
+	defer nogoodMeters.Unlock()
+	if _, exists := nogoodMeters.items[token]; exists {
+		return errors.New("duplicate nogood meter token")
+	}
+	nogoodMeters.items[token] = &nogoodMeter{}
+	return nil
+}
+
+func UnregisterNogoodMeter(token string) {
+	nogoodMeters.Lock()
+	delete(nogoodMeters.items, token)
+	nogoodMeters.Unlock()
+}
+
+func NogoodMeterSnapshot(token string) ([]NogoodMeterRecord, error) {
+	nogoodMeters.Lock()
+	meter := nogoodMeters.items[token]
+	nogoodMeters.Unlock()
+	if meter == nil {
+		return nil, errors.New("unknown nogood meter capability")
+	}
+	meter.mu.Lock()
+	defer meter.mu.Unlock()
+	return append([]NogoodMeterRecord(nil), meter.records...), nil
+}
+
+func ngCharge(token, operation string, category, count int) error {
+	if category < 1 || category > 12 || count < 1 || count > 64 || operation == "" {
+		return errors.New("invalid nogood meter event")
+	}
+	nogoodMeters.Lock()
+	meter := nogoodMeters.items[token]
+	nogoodMeters.Unlock()
+	if meter == nil {
+		return errors.New("unknown nogood meter capability")
+	}
+	meter.mu.Lock()
+	defer meter.mu.Unlock()
+	for index := 0; index < count; index++ {
+		name := operation
+		if count > 1 {
+			name = fmt.Sprintf("%s:%02d", operation, index)
+		}
+		meter.records = append(meter.records, NogoodMeterRecord{Category: uint8(category), Operation: name})
+	}
+	return nil
+}
+
+// ChargeNogoodMeter records adapter-side semantic operations against the same
+// verifier-owned capability used by the CUE heuristic.
+func ChargeNogoodMeter(token, operation string, category, count int) error {
+	return ngCharge(token, operation, category, count)
+}
+
+func bNGMeter(vm *VM) error {
+	operation, operationOK := ngString(vm.pop())
+	category, categoryOK := ngInt(vm.pop())
+	token, tokenOK := ngString(vm.pop())
+	if !operationOK || !categoryOK || !tokenOK {
+		return errors.New("invalid nogood meter operands")
+	}
+	if err := ngCharge(token, operation, category, 1); err != nil {
+		return err
+	}
+	vm.push(BoolVal(true))
+	return nil
+}
+
+func bNGMeterN(vm *VM) error {
+	count, countOK := ngInt(vm.pop())
+	operation, operationOK := ngString(vm.pop())
+	category, categoryOK := ngInt(vm.pop())
+	token, tokenOK := ngString(vm.pop())
+	if !countOK || !operationOK || !categoryOK || !tokenOK {
+		return errors.New("invalid nogood meter operands")
+	}
+	if err := ngCharge(token, operation, category, count); err != nil {
+		return err
+	}
+	vm.push(BoolVal(true))
+	return nil
 }
 
 func bNGDigestRecord(vm *VM) error {
@@ -180,6 +291,21 @@ func bNGDomainHas(vm *VM) error {
 	variable, variableOK := ngInt(vm.pop())
 	problem, problemOK := ngProblem(vm.pop())
 	vm.push(BoolVal(problemOK && variableOK && colorOK && problem.DomainContains(variable, color)))
+	return nil
+}
+
+func bNGDomainValues(vm *VM) error {
+	variable, variableOK := ngInt(vm.pop())
+	problem, problemOK := ngProblem(vm.pop())
+	if !problemOK || !variableOK || variable < 0 || variable >= len(problem.Variables) {
+		vm.push(Nil())
+		return nil
+	}
+	values := make([]Value, len(problem.Variables[variable].Domain))
+	for index, color := range problem.Variables[variable].Domain {
+		values[index] = IntVal(color)
+	}
+	vm.push(ListVal(values))
 	return nil
 }
 

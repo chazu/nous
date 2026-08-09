@@ -17,6 +17,7 @@ type Disposition struct {
 	Status, Request, Artifact, Binding, Completion, Certificate, Barrier, Proposal string
 	TasksPopped                                                                    int
 	Store                                                                          *unit.Store
+	MeterRecords                                                                   []dsl.NogoodMeterRecord
 }
 
 type BridgeExecution struct {
@@ -28,7 +29,7 @@ type BridgeExecution struct {
 	preflight   []TranscriptEvent
 }
 
-const committedBridgeProfileHash = "23fab58512b8b167fe3851b034722ac419307cd6b89aaf48dfc87bc962b2dfa4"
+const committedBridgeProfileHash = "ba7cd20055d0f2775e8ef0f30f396ca36d7a2512150ec1bb96623c69772311d3"
 
 func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *ArtifactAuthority) (*BridgeExecution, error) {
 	store := unit.NewStore()
@@ -39,7 +40,7 @@ func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *
 	if err != nil {
 		return nil, err
 	}
-	profileHash, err := auditBridgeProfile(store)
+	profileHash, preflightChecks, err := auditBridgeProfile(store)
 	if err != nil {
 		return nil, err
 	}
@@ -53,24 +54,26 @@ func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *
 		copyArtifact := *artifact
 		artifact = &copyArtifact
 	}
-	return &BridgeExecution{base: store, profileHash: profileHash, artifact: artifact, authority: authority, nextRequest: 1, preflight: profilePreflightTranscript(profileHash)}, nil
+	return &BridgeExecution{base: store, profileHash: profileHash, artifact: artifact, authority: authority, nextRequest: 1, preflight: profilePreflightTranscript(profileHash, preflightChecks)}, nil
 }
 
-func profilePreflightTranscript(profileHash string) []TranscriptEvent {
-	events := make([]TranscriptEvent, 0, 54)
-	for counter := int32(1); counter <= 54; counter++ {
-		events = append(events, TranscriptEvent{Category: 12, Code: 16, TaskOrdinal: 0xffffffff, Operands: [8]TranscriptOperand{ID("NG-H-ConsiderPrune"), OptionalID(""), Number(counter), ID("profile-preflight:" + profileHash[:16]), ID("ok"), Omitted(), Omitted(), Omitted()}})
+func profilePreflightTranscript(profileHash string, checks []string) []TranscriptEvent {
+	events := make([]TranscriptEvent, 0, len(checks))
+	for index, operation := range checks {
+		events = append(events, TranscriptEvent{Category: 12, Code: 16, TaskOrdinal: 0xffffffff, Operands: [8]TranscriptOperand{ID("NG-H-ConsiderPrune"), OptionalID(operation), Number(int32(index + 1)), ID("profile-preflight:" + profileHash[:16]), ID("ok"), Omitted(), Omitted(), Omitted()}})
 	}
 	return events
 }
 
-func auditBridgeProfile(store *unit.Store) (string, error) {
+func auditBridgeProfile(store *unit.Store) (string, []string, error) {
+	checks := []string{"examples:Heuristic"}
 	if got := store.Examples("Heuristic"); !slices.Equal(got, []string{"Heuristic", "NG-H-ConsiderPrune"}) {
-		return "", fmt.Errorf("unexpected bridge heuristic profile %v", got)
+		return "", nil, fmt.Errorf("unexpected bridge heuristic profile %v", got)
 	}
 	category, lane := store.Get("Heuristic"), store.Get("NG-H-ConsiderPrune")
+	checks = append(checks, "identity:Heuristic", "identity:NG-H-ConsiderPrune")
 	if category == nil || lane == nil {
-		return "", fmt.Errorf("missing bridge profile unit")
+		return "", nil, fmt.Errorf("missing bridge profile unit")
 	}
 	profile := struct {
 		StoreDigest string            `json:"store_digest"`
@@ -79,7 +82,7 @@ func auditBridgeProfile(store *unit.Store) (string, error) {
 	}{Programs: map[string]string{}, Shape: map[string]bool{}}
 	storeBytes, err := store.CanonicalJSON()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	profile.StoreDigest = digestBytes(storeBytes)
 	for _, entry := range []struct {
@@ -88,17 +91,28 @@ func auditBridgeProfile(store *unit.Store) (string, error) {
 	}{{"Heuristic", category}, {"NG-H-ConsiderPrune", lane}} {
 		for _, slot := range append(unit.IfPartSlots(), unit.ThenPartSlots()...) {
 			program := entry.u.GetString(slot)
+			checks = append(checks, "slot-read:"+entry.name+"."+slot)
 			key := entry.name + "." + slot
 			profile.Shape[key] = program != ""
+			checks = append(checks, "slot-shape:"+key)
 			if program != "" {
-				profile.Programs[key] = digestBytes([]byte(program))
+				// Source reads and hashes are intentionally separate audited
+				// operations from the shape read above.
+				source := entry.u.GetString(slot)
+				checks = append(checks, "source-read:"+key)
+				profile.Programs[key] = digestBytes([]byte(source))
+				checks = append(checks, "source-hash:"+key)
 			}
 		}
 	}
+	checks = append(checks, "compare:store-digest", "compare:profile-shape", "compare:source-digests")
 	if len(profile.Programs) != 2 || profile.Programs["NG-H-ConsiderPrune.ifWorkingOnTask"] == "" || profile.Programs["NG-H-ConsiderPrune.thenCompute"] == "" {
-		return "", fmt.Errorf("bridge program shape drifted")
+		return "", nil, fmt.Errorf("bridge program shape drifted")
 	}
-	return digestJSON(profile), nil
+	if len(checks) != 54 {
+		return "", nil, fmt.Errorf("bridge preflight performed %d checks, want 54", len(checks))
+	}
+	return digestJSON(profile), checks, nil
 }
 
 func ConsiderPrune(domainsDir string, problemJSON []byte, decision nogoods.Literal, artifact *FrozenArtifact, authority *ArtifactAuthority) (Disposition, error) {
@@ -145,6 +159,19 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	}{execution.profileHash, targetDigest, decisionDigest, assignmentDigest, immutableDigest, reducedDigest, conflictDigest, artifactStoreDigest, requestNumber}
 	requestDigest := digestJSON(requestMaterial)
 	requestName := fmt.Sprintf("NG.Request.%08d.%s", requestNumber, requestDigest[:16])
+	meterToken := "ngm:bridge:" + requestDigest
+	if err := dsl.RegisterNogoodMeter(meterToken); err != nil {
+		return Disposition{}, err
+	}
+	defer dsl.UnregisterNogoodMeter(meterToken)
+	for _, charge := range []struct {
+		category, count int
+		operation       string
+	}{{2, 1, "root-domain-read"}, {3, 2, "root-propose-bind"}, {5, 2, "root-delete-check"}} {
+		if err := dsl.ChargeNogoodMeter(meterToken, charge.operation, charge.category, charge.count); err != nil {
+			return Disposition{}, err
+		}
+	}
 	request := unit.New(requestName)
 	request.Set("isA", []string{"NogoodRequest", "Anything"})
 	request.Set("problem", string(problemJSON))
@@ -171,10 +198,14 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	request.Set("acceptedPromotionDigest", acceptedPromotionDigest)
 	request.Set("acceptedProvenanceDigest", acceptedProvenanceDigest)
 	request.Set("requestDigest", requestDigest)
+	request.Set("meterToken", meterToken)
 	for index, variable := range problem.Variables {
 		request.Set(fmt.Sprintf("domain%d", index), slices.Clone(variable.Domain))
 	}
 	store.Put(request)
+	if err := dsl.ChargeNogoodMeter(meterToken, "request-write", 12, 1); err != nil {
+		return Disposition{}, err
+	}
 
 	ag := agenda.New()
 	eng := engine.New(store, ag)
@@ -184,6 +215,9 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		return Disposition{}, err
 	}
 	ag.Push(&agenda.Task{Priority: 800, UnitName: requestName, SlotName: "ngConsiderPrune", Reasons: []string{"Consider frozen blocked-pair artifact"}})
+	if err := dsl.ChargeNogoodMeter(meterToken, "agenda-enqueue", 12, 1); err != nil {
+		return Disposition{}, err
+	}
 	popped := 0
 	for ag.Len() > 0 {
 		if popped >= TrainingTaskCap {
@@ -197,9 +231,18 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		if task.UnitName != requestName || target == nil || target.GetString("requestDigest") != requestDigest {
 			return Disposition{}, fmt.Errorf("cross-request or stale bridge task")
 		}
+		if err := dsl.ChargeNogoodMeter(meterToken, "agenda-dequeue", 12, 1); err != nil {
+			return Disposition{}, err
+		}
+		if err := dsl.ChargeNogoodMeter(meterToken, "request-digest-check", 12, 1); err != nil {
+			return Disposition{}, err
+		}
 		eng.WorkOnTask(task)
 		if len(eng.VM.DeletedUnits) != 0 {
 			return Disposition{}, fmt.Errorf("bridge deleted units")
+		}
+		if err := dsl.ChargeNogoodMeter(meterToken, "engine-dispatch", 12, 22); err != nil {
+			return Disposition{}, err
 		}
 		popped++
 	}
@@ -211,6 +254,9 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	result := Disposition{Status: status, Request: requestName, Artifact: disposition.GetString("artifact"), Binding: disposition.GetString("binding"), Completion: disposition.GetString("completion"), Certificate: disposition.GetString("certificate"), Barrier: disposition.GetString("barrier"), Proposal: disposition.GetString("proposal"), TasksPopped: popped, Store: store}
 	if status != "resume" && status != "propose-prune" && status != "bridge-invalid" {
 		return Disposition{}, fmt.Errorf("invalid disposition status %q", status)
+	}
+	if status == "bridge-invalid" {
+		return Disposition{}, fmt.Errorf("bridge sealed an invalid disposition")
 	}
 	if status == "propose-prune" {
 		barrier := store.Get(result.Barrier)
@@ -236,6 +282,14 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 			}
 		}
 	}
+	if err := dsl.ChargeNogoodMeter(meterToken, "adapter-disposition-check", 10, 6); err != nil {
+		return Disposition{}, err
+	}
+	records, err := dsl.NogoodMeterSnapshot(meterToken)
+	if err != nil {
+		return Disposition{}, err
+	}
+	result.MeterRecords = records
 	return result, nil
 }
 

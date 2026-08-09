@@ -39,6 +39,8 @@ type FrozenPromotionProof struct {
 	Proof         string             `json:"proof"`
 	Case          string             `json:"case"`
 	ProblemDigest string             `json:"problem_digest"`
+	Problem       string             `json:"problem"`
+	Decision      nogoods.Literal    `json:"decision"`
 	Binding       nogoods.Binding    `json:"binding"`
 	Completion    nogoods.Completion `json:"completion"`
 	Conflict      bool               `json:"conflict"`
@@ -99,6 +101,11 @@ func FreezeArtifact(run TrainingRun) (FrozenArtifact, []byte, ArtifactAuthority,
 	candidate := run.Store.Get(selection.GetString("selectedCandidate"))
 	if selectionBarrier == nil || !selectionBarrier.GetBool("sealed") || candidate == nil {
 		return FrozenArtifact{}, nil, ArtifactAuthority{}, fmt.Errorf("selection barrier is not sealed")
+	}
+	if u.GetInt("mask") != int(nogoods.FullMask) || candidate.GetInt("mask") != u.GetInt("mask") ||
+		!candidate.GetBool("trainingExact") || !candidate.GetBool("evidenceComplete") ||
+		!slices.Equal(selection.GetStrings("ties"), []string{candidate.Name}) {
+		return FrozenArtifact{}, nil, ArtifactAuthority{}, fmt.Errorf("promoted artifact is not the sole selected exact candidate")
 	}
 	artifact := FrozenArtifact{
 		SchemaVersion: u.GetString("schemaVersion"), GuardVersion: u.GetString("guardVersion"), Name: u.Name,
@@ -163,10 +170,19 @@ func FreezeArtifact(run TrainingRun) (FrozenArtifact, []byte, ArtifactAuthority,
 		if promotionCase == nil {
 			return FrozenArtifact{}, nil, ArtifactAuthority{}, fmt.Errorf("missing promotion case")
 		}
+		problemText := promotionCase.GetString("problem")
+		problem, parseErr := nogoods.ParseProblem([]byte(problemText))
+		binding := nogoods.Binding{Anchor: promotionCase.GetInt("anchor"), X: promotionCase.GetInt("x"), Y: promotionCase.GetInt("y"), Blocked: promotionCase.GetInt("blocked"), Escape: promotionCase.GetInt("escape"), Only: promotionCase.GetInt("only")}
+		decision := nogoods.Literal{Variable: promotionCase.GetInt("decisionVariable"), Color: promotionCase.GetInt("decisionColor")}
+		completion := nogoods.Completion{XColor: promotionCase.GetInt("xColor"), YColor: promotionCase.GetInt("yColor")}
+		conflict, conflictErr := nogoods.EvaluateCompletion(problem, nogoods.FullMask, binding, completion)
+		if parseErr != nil || conflictErr != nil || len(problem.ColorAliases) != 4 || !nogoods.GuardMatches(problem, decision, binding) || !nogoods.MaskMatches(problem, nogoods.FullMask, binding) || !conflict ||
+			proof.GetInt("mask") != int(nogoods.FullMask) || proof.GetBool("conflict") != conflict {
+			return FrozenArtifact{}, nil, ArtifactAuthority{}, fmt.Errorf("invalid promotion proof %q", proofName)
+		}
 		artifact.PromotionProofs = append(artifact.PromotionProofs, FrozenPromotionProof{
-			Proof: proof.Name, Case: promotionCase.Name, ProblemDigest: digestBytes([]byte(promotionCase.GetString("problem"))),
-			Binding:    nogoods.Binding{Anchor: promotionCase.GetInt("anchor"), X: promotionCase.GetInt("x"), Y: promotionCase.GetInt("y"), Blocked: promotionCase.GetInt("blocked"), Escape: promotionCase.GetInt("escape"), Only: promotionCase.GetInt("only")},
-			Completion: nogoods.Completion{XColor: promotionCase.GetInt("xColor"), YColor: promotionCase.GetInt("yColor")}, Conflict: proof.GetBool("conflict"),
+			Proof: proof.Name, Case: promotionCase.Name, ProblemDigest: digestBytes([]byte(problemText)), Problem: problemText,
+			Decision: decision, Binding: binding, Completion: completion, Conflict: conflict,
 		})
 	}
 	artifact.PromotionDigest = digestJSON(struct {
@@ -227,10 +243,23 @@ func (artifact FrozenArtifact) Validate() error {
 	roleTriples := map[[3]int]bool{}
 	for _, proof := range artifact.PromotionProofs {
 		triple := [3]int{proof.Binding.Blocked, proof.Binding.Escape, proof.Binding.Only}
-		if proof.Proof == "" || proof.Case == "" || proofs[proof.Proof] || cases[proof.Case] || roleTriples[triple] || !proof.Conflict || !validDigest(proof.ProblemDigest) || triple[0] == triple[1] || triple[0] == triple[2] || triple[1] == triple[2] || proof.Completion.XColor != triple[2] || proof.Completion.YColor != triple[2] {
+		problem, parseErr := nogoods.ParseProblem([]byte(proof.Problem))
+		conflict, conflictErr := nogoods.EvaluateCompletion(problem, nogoods.FullMask, proof.Binding, proof.Completion)
+		if proof.Proof == "" || proof.Case == "" || proofs[proof.Proof] || cases[proof.Case] || roleTriples[triple] || !proof.Conflict || !validDigest(proof.ProblemDigest) || proof.ProblemDigest != digestBytes([]byte(proof.Problem)) ||
+			parseErr != nil || conflictErr != nil || len(problem.ColorAliases) != 4 || !nogoods.GuardMatches(problem, proof.Decision, proof.Binding) || !nogoods.MaskMatches(problem, nogoods.FullMask, proof.Binding) || !conflict ||
+			triple[0] < 0 || triple[0] > 3 || triple[1] < 0 || triple[1] > 3 || triple[2] < 0 || triple[2] > 3 || triple[0] == triple[1] || triple[0] == triple[2] || triple[1] == triple[2] || proof.Completion.XColor != triple[2] || proof.Completion.YColor != triple[2] {
 			return fmt.Errorf("invalid promotion proof set")
 		}
 		proofs[proof.Proof], cases[proof.Case], roleTriples[triple] = true, true, true
+	}
+	for blocked := 0; blocked < 4; blocked++ {
+		for escape := 0; escape < 4; escape++ {
+			for only := 0; only < 4; only++ {
+				if blocked != escape && blocked != only && escape != only && !roleTriples[[3]int{blocked, escape, only}] {
+					return fmt.Errorf("promotion proof set omitted an injective four-color substitution")
+				}
+			}
+		}
 	}
 	return nil
 }

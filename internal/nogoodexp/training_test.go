@@ -24,6 +24,9 @@ func TestOrdinaryHeuristicAcquisitionPromotesUniqueFullMask(t *testing.T) {
 	if run.TasksPopped <= 1 || run.TasksPopped >= TrainingTaskCap {
 		t.Fatalf("tasks popped = %d", run.TasksPopped)
 	}
+	if len(run.MeterRecords) == 0 {
+		t.Fatal("training emitted no verifier-owned meter records")
+	}
 	artifact := run.Store.Get(run.Artifact)
 	if artifact == nil || artifact.GetInt("mask") != int(nogoods.FullMask) || !artifact.GetBool("frozen") || artifact.GetInt("promotionProofCount") != 24 {
 		t.Fatalf("artifact = %#v", artifact)
@@ -73,5 +76,27 @@ func TestTrainingIsDeterministicAtStoreBoundary(t *testing.T) {
 	}
 	if !slices.Equal(first.Store.All(), second.Store.All()) {
 		t.Fatal("store unit identities differ between deterministic runs")
+	}
+}
+
+func TestFreezeRefusesCorruptedPromotedStoreAuthority(t *testing.T) {
+	for name, corrupt := range map[string]func(TrainingRun){
+		"artifact-mask": func(run TrainingRun) { run.Store.Get(run.Artifact).Set("mask", 5) },
+		"promotion-color": func(run TrainingRun) {
+			proofs := run.Store.Get(run.Artifact).GetStrings("promotionProofs")
+			promotionCase := run.Store.Get(run.Store.Get(proofs[0]).GetString("case"))
+			promotionCase.Set("blocked", 99)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			run, err := RunTraining("../../domains")
+			if err != nil {
+				t.Fatal(err)
+			}
+			corrupt(run)
+			if _, _, _, err := FreezeArtifact(run); err == nil {
+				t.Fatal("corrupted training store minted artifact authority")
+			}
+		})
 	}
 }

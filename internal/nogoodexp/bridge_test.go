@@ -1,6 +1,8 @@
 package nogoodexp
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/chazu/nous/internal/nogoodfixture"
@@ -15,6 +17,93 @@ func TestBridgeProfileDigestIsCommitted(t *testing.T) {
 	if execution.profileHash != committedBridgeProfileHash {
 		t.Fatalf("profile hash = %s", execution.profileHash)
 	}
+	if len(execution.preflight) != 54 || execution.preflight[53].Operands[2].Number != 54 {
+		t.Fatalf("profile preflight = %d events", len(execution.preflight))
+	}
+}
+
+func TestBridgeInvalidAmbiguityIsAnError(t *testing.T) {
+	artifact, authority := learnedArtifact(t)
+	problem := nogoods.Problem{
+		Version: nogoods.ProblemVersion, ColorAliases: []string{"c0", "c1", "c2"},
+		Variables: []nogoods.Variable{
+			{Alias: "a", Domain: []int{0, 1}},
+			{Alias: "x", Domain: []int{0, 2}},
+			{Alias: "y", Domain: []int{0, 2}},
+			{Alias: "z", Domain: []int{0, 2}},
+		},
+		Edges: []nogoods.Edge{{Left: 0, Right: 1}, {Left: 0, Right: 2}, {Left: 0, Right: 3}, {Left: 1, Right: 2}, {Left: 1, Right: 3}, {Left: 2, Right: 3}},
+	}
+	encoded, err := problem.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConsiderPrune("../../domains", encoded, nogoods.Literal{Variable: 0, Color: 0}, &artifact, &authority); err == nil {
+		t.Fatal("ambiguous bridge result was not mechanically invalid")
+	}
+}
+
+func TestCUEBridgeMatcherAgreesAcrossAllThreeColorTwoValueDomains(t *testing.T) {
+	artifact, authority := learnedArtifact(t)
+	execution, err := NewBridgeExecution("../../domains", &artifact, &authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domains := [][]int{{0, 1}, {0, 2}, {1, 2}}
+	ordinal := 0
+	for anchor := 0; anchor < 3; anchor++ {
+		for left := range domains {
+			for middle := range domains {
+				for right := range domains {
+					variableDomains := [][]int{domains[left], domains[middle], domains[right]}
+					for _, blocked := range variableDomains[anchor] {
+						variables := make([]nogoods.Variable, 3)
+						for index := range variables {
+							variables[index] = nogoods.Variable{Alias: fmt.Sprintf("v%d", index), Domain: slices.Clone(variableDomains[index])}
+						}
+						problem := nogoods.Problem{Version: nogoods.ProblemVersion, ColorAliases: []string{"c0", "c1", "c2"}, Variables: variables, Edges: []nogoods.Edge{{Left: 0, Right: 1}, {Left: 0, Right: 2}, {Left: 1, Right: 2}}}
+						encoded, encodeErr := problem.CanonicalJSON()
+						if encodeErr != nil {
+							t.Fatal(encodeErr)
+						}
+						nonAnchor := []int{}
+						for variable := 0; variable < 3; variable++ {
+							if variable != anchor {
+								nonAnchor = append(nonAnchor, variable)
+							}
+						}
+						escape := otherColor(variableDomains[anchor], blocked)
+						leftOnly := otherColor(variableDomains[nonAnchor[0]], blocked)
+						rightOnly := otherColor(variableDomains[nonAnchor[1]], blocked)
+						want := escape >= 0 && leftOnly >= 0 && rightOnly >= 0 && leftOnly == rightOnly && leftOnly != escape
+						disposition, considerErr := execution.Consider(encoded, nogoods.Literal{Variable: anchor, Color: blocked})
+						if considerErr != nil {
+							t.Fatalf("case %d: %v", ordinal, considerErr)
+						}
+						if got := disposition.Status == "propose-prune"; got != want {
+							t.Fatalf("case %d domains=%v anchor=%d blocked=%d proposal=%v want %v", ordinal, variableDomains, anchor, blocked, got, want)
+						}
+						ordinal++
+					}
+				}
+			}
+		}
+	}
+	if ordinal != 162 {
+		t.Fatalf("exhaustive cases = %d", ordinal)
+	}
+}
+
+func otherColor(domain []int, blocked int) int {
+	if !slices.Contains(domain, blocked) {
+		return -1
+	}
+	for _, color := range domain {
+		if color != blocked {
+			return color
+		}
+	}
+	return -1
 }
 
 func learnedArtifact(t *testing.T) (FrozenArtifact, ArtifactAuthority) {

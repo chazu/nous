@@ -79,24 +79,16 @@ func fixedVectorEvents(taskOrdinal uint32, vector [12]int64, prefix string) []Tr
 	return events
 }
 
-func acquisitionTranscript(run TrainingRun, preflight []TranscriptEvent) []TranscriptEvent {
+func acquisitionTranscript(run TrainingRun, preflight []TranscriptEvent) ([]TranscriptEvent, error) {
 	events := slices.Clone(preflight)
-	store := run.Store
-	appendUnits := func(category string, task uint32, vector [12]int64) {
-		count := len(store.Examples(category)) - 1
-		for index := 0; index < count; index++ {
-			events = append(events, fixedVectorEvents(task, vector, category)...)
+	for index, record := range run.MeterRecords {
+		mapped, err := baselineTranscript(0x80000000, nogoodbaseline.Result{Events: []nogoodbaseline.Event{{Category: int(record.Category), Transition: record.Operation, Operands: []int{index}}}})
+		if err != nil {
+			return nil, err
 		}
+		events = append(events, mapped[0])
 	}
-	appendUnits("NogoodCandidate", 0x80000004, [12]int64{0: 1, 11: 1})
-	appendUnits("NogoodRefinement", 0x80000004, [12]int64{0: 1, 11: 1})
-	appendUnits("NogoodBinding", 0x80000004, [12]int64{0: 1, 1: 1, 11: 1})
-	appendUnits("NogoodResult", 0x80000004, [12]int64{8: 1, 11: 1})
-	appendUnits("NogoodEvidence", 0x80000004, [12]int64{11: 2})
-	appendUnits("NogoodEvidenceBarrier", 0x80000004, [12]int64{9: 2, 11: 1})
-	appendUnits("NogoodPromotionProof", 0x90000000, [12]int64{8: 1, 11: 1})
-	events = append(events, fixedVectorEvents(0x90000018, [12]int64{7: 1, 11: 3}, "artifact-freeze")...)
-	return events
+	return events, nil
 }
 
 func transcriptVector(events []TranscriptEvent) (vector [12]int64) {
@@ -112,19 +104,20 @@ func appendEvents(first, second []TranscriptEvent) []TranscriptEvent {
 	return append(slices.Clone(first), second...)
 }
 
-func bridgeTranscript(taskOrdinal uint32, disposition Disposition) []TranscriptEvent {
-	if disposition.Status == "propose-prune" {
-		return fixedVectorEvents(taskOrdinal, [12]int64{3, 23, 3, 3, 3, 0, 0, 10, 1, 25, 1, 53}, "learned-prune")
+func bridgeTranscript(taskOrdinal uint32, disposition Disposition) ([]TranscriptEvent, error) {
+	if len(disposition.MeterRecords) == 0 {
+		return nil, fmt.Errorf("bridge emitted no verifier-owned meter records")
 	}
-	roles := int64(len(disposition.Store.Examples("NogoodRoleCandidate")) - 1)
-	pairs := int64(len(disposition.Store.Examples("NogoodPairProposal")) - 1)
-	bindings := int64(len(disposition.Store.Examples("NogoodBinding")) - 1)
-	artifactChecks := int64(0)
-	artifactRecords := int64(0)
-	if len(disposition.Store.Examples("NogoodArtifact")) > 1 && bindings > 0 {
-		artifactChecks = 10
-		artifactRecords = 2
+	events := make([]TranscriptEvent, 0, len(disposition.MeterRecords))
+	for index, record := range disposition.MeterRecords {
+		if record.Category < 1 || record.Category > 12 || record.Operation == "" {
+			return nil, fmt.Errorf("invalid bridge meter record %d", index)
+		}
+		mapped, err := baselineTranscript(taskOrdinal, nogoodbaseline.Result{Events: []nogoodbaseline.Event{{Category: int(record.Category), Transition: record.Operation, Operands: []int{index}}}})
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, mapped[0])
 	}
-	storeWork := int64(26) + 7 + roles + bindings + artifactRecords + 10
-	return fixedVectorEvents(taskOrdinal, [12]int64{roles + pairs, 17, 0, 0, 0, 0, 0, artifactChecks, 0, 0, 0, storeWork}, "bridge-resume")
+	return events, nil
 }
