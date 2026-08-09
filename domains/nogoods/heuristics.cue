@@ -225,9 +225,99 @@ units: [
 				"CurUnit" @ "request" !
 				"request" @ "dispositionUnit" get-slot nil =
 				if
+					"request" @ "problem" get-slot "problem" !
+					"request" @ "decisionVariable" get-slot "anchor" !
+					"request" @ "decisionColor" get-slot "blocked" !
+					0 "anchorDomainCount" ! 0 "escape" !
+					4 iota each
+						it "color" !
+						"problem" @ "anchor" @ "color" @ ng-domain-has?
+						if
+							"anchorDomainCount" @ 1 + "anchorDomainCount" !
+							"color" @ "blocked" @ != if "color" @ "escape" ! then
+						then
+					end
+					0 list-of "roleCandidates" !
+					"anchorDomainCount" @ 2 = "problem" @ "anchor" @ "blocked" @ ng-domain-has? and
+					if
+						8 iota each
+							it "variable" !
+							"variable" @ "anchor" @ !=
+							if
+								0 "domainCount" ! 0 "only" !
+								4 iota each
+									it "color" !
+									"problem" @ "variable" @ "color" @ ng-domain-has?
+									if
+										"domainCount" @ 1 + "domainCount" !
+										"color" @ "blocked" @ != if "color" @ "only" ! then
+									then
+								end
+								"domainCount" @ 2 = "problem" @ "variable" @ "blocked" @ ng-domain-has? and
+								if
+									"role:" "request" @ concat ":" concat "variable" @ concat "roleSemantic" !
+									"role" "roleSemantic" @ ng-artifact-name "role" !
+									"role" @ "NogoodRoleCandidate" create-unit drop
+									"request" @ "role" @ "request" set-slot "variable" @ "role" @ "variable" set-slot "only" @ "role" @ "only" set-slot
+									"roleCandidates" @ "role" @ list-append "roleCandidates" !
+								then
+							then
+						end
+					then
+					0 "applicableCount" ! "" "applicableArtifact" ! "" "applicableBinding" ! "" "applicableCompletion" ! "" "applicableCertificate" !
+					"roleCandidates" @ list-length iota each
+						it "leftIndex" !
+						"roleCandidates" @ list-length iota each
+							it "rightIndex" !
+							"leftIndex" @ "rightIndex" @ <
+							if
+								"roleCandidates" @ "leftIndex" @ list-get "leftRole" ! "roleCandidates" @ "rightIndex" @ list-get "rightRole" !
+								"leftRole" @ "variable" get-slot "x" ! "rightRole" @ "variable" get-slot "y" !
+								"leftRole" @ "only" get-slot "leftOnly" ! "rightRole" @ "only" get-slot "rightOnly" !
+								"pair:" "request" @ concat ":" concat "x" @ concat ":" concat "y" @ concat "pairSemantic" !
+								"pair" "pairSemantic" @ ng-artifact-name "pair" ! "pair" @ "NogoodPairProposal" create-unit drop
+								"request" @ "pair" @ "request" set-slot "leftRole" @ "pair" @ "leftRole" set-slot "rightRole" @ "pair" @ "rightRole" set-slot
+								"leftOnly" @ "rightOnly" @ = "leftOnly" @ "escape" @ != and "pairGuard" ! "pairGuard" @ "pair" @ "guardMatched" set-slot
+								"pairGuard" @
+								if
+									"binding:" "pair" @ concat "bindingSemantic" ! "binding" "bindingSemantic" @ ng-artifact-name "binding" !
+									"binding" @ "NogoodBinding" create-unit drop
+									"request" @ "binding" @ "request" set-slot "anchor" @ "binding" @ "anchor" set-slot "x" @ "binding" @ "x" set-slot "y" @ "binding" @ "y" set-slot
+									"blocked" @ "binding" @ "blocked" set-slot "escape" @ "binding" @ "escape" set-slot "leftOnly" @ "binding" @ "only" set-slot
+									"NogoodArtifact" examples each
+										it "artifact" !
+										"artifact" @ "NogoodArtifact" !=
+										if
+											"artifact" @ "mask" get-slot "mask" !
+											"problem" @ "mask" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "leftOnly" @ ng-mask-matches?
+											"artifact" @ "authoritative" get-slot true = and
+											if
+												"completion:" "binding" @ concat ":" concat "artifact" @ concat "completionSemantic" ! "completion" "completionSemantic" @ ng-artifact-name "completion" !
+												"completion" @ "NogoodCompletion" create-unit drop "binding" @ "completion" @ "binding" set-slot "leftOnly" @ "completion" @ "xColor" set-slot "leftOnly" @ "completion" @ "yColor" set-slot
+												"problem" @ "mask" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "leftOnly" @ "leftOnly" @ "leftOnly" @ ng-completion-conflicts? "conflict" ! "conflict" @ "completion" @ "conflict" set-slot
+												"certificate:" "completion" @ concat "certificateSemantic" ! "certificate" "certificateSemantic" @ ng-artifact-name "certificate" !
+												"certificate" @ "NogoodCertificate" create-unit drop
+												"artifact" @ "certificate" @ "artifact" set-slot "binding" @ "certificate" @ "binding" set-slot "completion" @ "certificate" @ "completion" set-slot
+												"problem" @ "mask" @ "anchor" @ "blocked" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "leftOnly" @ "leftOnly" @ "leftOnly" @ "conflict" @ ng-certificate-valid? "valid" !
+												"valid" @ "certificate" @ "valid" set-slot
+												"valid" @
+												if
+													"applicableCount" @ 1 + "applicableCount" ! "artifact" @ "applicableArtifact" ! "binding" @ "applicableBinding" ! "completion" @ "applicableCompletion" ! "certificate" @ "applicableCertificate" !
+												then
+											then
+										then
+									end
+								then
+							then
+						end
+					end
 					"disposition:" "request" @ concat "dispositionSemantic" ! "disposition" "dispositionSemantic" @ ng-artifact-name "disposition" !
 					"disposition" @ "NogoodDisposition" create-unit drop
-					"request" @ "disposition" @ "request" set-slot "resume" "disposition" @ "status" set-slot true "disposition" @ "sealed" set-slot
+					"request" @ "disposition" @ "request" set-slot "request" @ "requestDigest" get-slot "disposition" @ "requestDigest" set-slot
+					"applicableCount" @ 0 = if "resume" else "applicableCount" @ 1 = if "propose-prune" else "bridge-invalid" then then "status" !
+					"status" @ "disposition" @ "status" set-slot "applicableCount" @ "disposition" @ "applicableCount" set-slot
+					"applicableArtifact" @ "disposition" @ "artifact" set-slot "applicableBinding" @ "disposition" @ "binding" set-slot "applicableCompletion" @ "disposition" @ "completion" set-slot "applicableCertificate" @ "disposition" @ "certificate" set-slot
+					true "disposition" @ "sealed" set-slot
 					"disposition" @ "request" @ "dispositionUnit" set-slot
 				then
 			then
