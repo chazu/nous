@@ -22,6 +22,7 @@ type curriculum struct {
 	Ordinal  int
 	Family   int
 	Seed     uint64
+	Panel    string
 	Training []byte
 	Heldout  []byte
 	Expected []expectedCase
@@ -64,6 +65,7 @@ func publicPanel(panel string, start uint64, counts []int) ([]curriculum, error)
 		if err != nil {
 			return nil, fmt.Errorf("curriculum %d: %w", i, err)
 		}
+		c.Panel = panel
 		out[i] = c
 	}
 	return out, nil
@@ -131,7 +133,7 @@ func makeCurriculum(ordinal, family int, seed uint64) (curriculum, error) {
 		}
 		return 0
 	})
-	return curriculum{ordinal, family, seed, trainingBytes, heldoutBytes, expected, latentBytes}, nil
+	return curriculum{Ordinal: ordinal, Family: family, Seed: seed, Training: trainingBytes, Heldout: heldoutBytes, Expected: expected, Latent: latentBytes}, nil
 }
 
 func uniqueMinimum(training transformfixturecore.Training, latent []byte) (bool, error) {

@@ -280,10 +280,11 @@ func (s *TransformTranscriptSink) applicationResultProjection(attempted string) 
 }
 
 type TransformTranscriptBundle struct {
-	Raw    []byte
-	Gzip   []byte
-	Vector [12]int64
-	Work   int64
+	Raw     []byte
+	Gzip    []byte
+	Vector  [12]int64
+	Work    int64
+	Objects map[string][]byte
 }
 
 func (s *TransformTranscriptSink) Bundle() (TransformTranscriptBundle, error) {
@@ -315,7 +316,11 @@ func (s *TransformTranscriptSink) Bundle() (TransformTranscriptBundle, error) {
 	if compressed.Len() > GzipChunkByteCap {
 		return TransformTranscriptBundle{}, errors.New("gzip transcript cap")
 	}
-	return TransformTranscriptBundle{raw.Bytes(), compressed.Bytes(), s.Vector, s.Work}, nil
+	objects := make(map[string][]byte, len(s.Objects.Objects))
+	for digest, value := range s.Objects.Objects {
+		objects[digest] = bytes.Clone(value)
+	}
+	return TransformTranscriptBundle{Raw: raw.Bytes(), Gzip: compressed.Bytes(), Vector: s.Vector, Work: s.Work, Objects: objects}, nil
 }
 
 func reduceTransformTranscript(raw []byte, manifestDigest string) (TransformTranscriptBundle, error) {

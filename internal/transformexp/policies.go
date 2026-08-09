@@ -380,8 +380,15 @@ func policySeed(c curriculum, policy Policy) (uint64, uint64) {
 }
 
 func policyManifestDigest(c curriculum, policy Policy) string {
+	return digestBytes(policyManifestBytes(c, policy))
+}
+
+func policyManifestBytes(c curriculum, policy Policy) []byte {
 	training := sha256.Sum256(c.Training)
 	heldout := sha256.Sum256(c.Heldout)
-	preimage := mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", "safe", policy, caseToken(c.Seed, "policy-"+string(policy), 0), hex.EncodeToString(training[:]), hex.EncodeToString(heldout[:]), "", []int{12000, 50000, 48, 2000, 20000}})
-	return digestBytes(preimage)
+	panel := c.Panel
+	if panel == "" {
+		panel = "safe"
+	}
+	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", panel, policy, caseToken(c.Seed, "policy-"+string(policy), 0), hex.EncodeToString(training[:]), hex.EncodeToString(heldout[:]), "", []int{12000, 50000, 48, 2000, 20000}})
 }
