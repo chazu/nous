@@ -3,6 +3,7 @@ package nogoodexp
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/chazu/nous/internal/dsl"
@@ -107,13 +108,82 @@ func acquisitionTranscript(run TrainingRun, preflight []TranscriptEvent) ([]Tran
 	}
 	events := slices.Clone(preflight)
 	for index, record := range run.MeterRecords {
-		event, err := meterRecordTranscript(0x80000000, index, record)
+		ordinal, err := trainingPhaseOrdinal(run, record)
+		if err != nil {
+			return nil, err
+		}
+		event, err := meterRecordTranscript(ordinal, index, record)
 		if err != nil {
 			return nil, err
 		}
 		events = append(events, event)
 	}
 	return events, nil
+}
+
+func trainingPhaseOrdinal(run TrainingRun, record dsl.NogoodMeterRecord) (uint32, error) {
+	for _, name := range []string{record.Subject, record.Object} {
+		if ordinal, ok := namedOrdinal(name, "NG.Promotion.Case."); ok {
+			if ordinal < 0 || ordinal >= 24 {
+				return 0, fmt.Errorf("promotion phase ordinal %d is out of range", ordinal)
+			}
+			return 0x90000000 + uint32(ordinal), nil
+		}
+		if ordinal, ok := namedOrdinal(name, "NG.Training.Example."); ok {
+			if ordinal < 0 || ordinal >= 4 {
+				return 0, fmt.Errorf("training phase ordinal %d is out of range", ordinal)
+			}
+			return 0x80000000 + uint32(ordinal), nil
+		}
+	}
+	for _, name := range []string{record.Subject, record.Object} {
+		unit := run.Store.Get(name)
+		if unit == nil {
+			continue
+		}
+		if ordinal, ok := namedOrdinal(unit.GetString("case"), "NG.Promotion.Case."); ok {
+			return 0x90000000 + uint32(ordinal), nil
+		}
+		example := unit.GetString("example")
+		if example == "" && unit.GetString("binding") != "" {
+			if binding := run.Store.Get(unit.GetString("binding")); binding != nil {
+				example = binding.GetString("example")
+			}
+		}
+		if ordinal, ok := namedOrdinal(example, "NG.Training.Example."); ok {
+			return 0x80000000 + uint32(ordinal), nil
+		}
+	}
+	switch record.Operation {
+	case "promotion-count-check", "promotion-conflict-check", "promotion-barrier-write", "artifact-freeze-write", "provenance-write", "boundary-write":
+		return 0x90000018, nil
+	}
+	if strings.Contains(record.Operation, "promotion") {
+		return 0, fmt.Errorf("promotion record %q has no substitution ordinal", record.Operation)
+	}
+	return 0x80000004, nil
+}
+
+func namedOrdinal(name, prefix string) (int, bool) {
+	if !strings.HasPrefix(name, prefix) {
+		return 0, false
+	}
+	value, err := strconv.Atoi(strings.TrimPrefix(name, prefix))
+	return value, err == nil
+}
+
+func markRecomputedAcquisition(events []TranscriptEvent, taskOrdinal uint32) []TranscriptEvent {
+	out := slices.Clone(events)
+	for index := range out {
+		out[index].TaskOrdinal = taskOrdinal
+		for operandIndex := range out[index].Operands {
+			operand := &out[index].Operands[operandIndex]
+			if !operand.Absent && !operand.Numeric && operand.Text != "" && (strings.Contains(operand.Text, "preflight") || strings.Contains(operand.Text, "read") || strings.Contains(operand.Text, "write") || strings.Contains(operand.Text, "check") || strings.Contains(operand.Text, "proposal") || strings.Contains(operand.Text, "comparison") || strings.Contains(operand.Text, "enqueue") || strings.Contains(operand.Text, "dequeue") || strings.Contains(operand.Text, "dispatch") || strings.Contains(operand.Text, "construct")) {
+				operand.Text = "recomputed-acquisition/" + operand.Text
+			}
+		}
+	}
+	return out
 }
 
 func transcriptVector(events []TranscriptEvent) (vector [12]int64) {
@@ -137,12 +207,55 @@ func bridgeTranscript(taskOrdinal uint32, disposition Disposition) ([]Transcript
 		return nil, err
 	}
 	events := make([]TranscriptEvent, 0, len(disposition.MeterRecords))
+	request := disposition.Store.Get(disposition.Request)
+	problem, err := nogoods.ParseProblem([]byte(request.GetString("problem")))
+	if err != nil {
+		return nil, err
+	}
+	decisionVariable, decisionColor := request.GetInt("decisionVariable"), request.GetInt("decisionColor")
+	removedColors := make([]int, 0, len(problem.Variables[decisionVariable].Domain)-1)
+	for _, color := range problem.Variables[decisionVariable].Domain {
+		if color != decisionColor {
+			removedColors = append(removedColors, color)
+		}
+	}
+	removedIndex := 0
 	for index, record := range disposition.MeterRecords {
-		event, err := meterRecordTranscript(taskOrdinal, index, record)
+		var event TranscriptEvent
+		var err error
+		var rootEvent *nogoodbaseline.Event
+		switch record.Operation {
+		case "root-domain-read":
+			rootEvent = &nogoodbaseline.Event{Category: 2, Transition: "decision-domain-read", Operands: []int{decisionVariable, decisionColor}}
+		case "root-propose":
+			rootEvent = &nogoodbaseline.Event{Category: 3, Transition: "decision-propose", Operands: []int{decisionVariable, decisionColor}}
+		case "root-bind":
+			rootEvent = &nogoodbaseline.Event{Category: 3, Transition: "decision-bind", Operands: []int{decisionVariable, decisionColor}}
+		case "root-delete":
+			if removedIndex >= len(removedColors) {
+				return nil, fmt.Errorf("bridge has too many root-delete records")
+			}
+			rootEvent = &nogoodbaseline.Event{Category: 5, Transition: "domain-delete", Operands: []int{decisionVariable, removedColors[removedIndex]}}
+			removedIndex++
+		case "root-empty-check":
+			rootEvent = &nogoodbaseline.Event{Category: 5, Transition: "domain-empty-check", Operands: []int{decisionVariable}}
+		}
+		if rootEvent != nil {
+			mapped, mapErr := baselineTranscript(taskOrdinal, nogoodbaseline.Result{Events: []nogoodbaseline.Event{*rootEvent}})
+			if mapErr != nil {
+				return nil, mapErr
+			}
+			event = mapped[0]
+		} else {
+			event, err = meterRecordTranscript(taskOrdinal, index, record)
+		}
 		if err != nil {
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if removedIndex != len(removedColors) {
+		return nil, fmt.Errorf("bridge omitted root-delete records")
 	}
 	return events, nil
 }
@@ -425,7 +538,7 @@ func auditBridgeMeter(disposition Disposition) error {
 		if counts["barrier-predicate-check"] != len(barrier.GetStrings("predicateKeys")) || counts["barrier-predicate-check"] != 18 {
 			return fmt.Errorf("proposal meter does not cover the 18 barrier predicates")
 		}
-		wantVector := [12]int64{3, 23, 2, 3, 2, 0, 0, 10, 1, 25, 0, 51}
+		wantVector := [12]int64{3, int64(9 + 2*expectedVisits), 2, 3, 2, 0, 0, 10, 1, 25, 0, int64(44 + expectedVisits)}
 		events := make([]TranscriptEvent, 0, len(disposition.MeterRecords))
 		for index, record := range disposition.MeterRecords {
 			event, eventErr := meterRecordTranscript(0, index, record)
@@ -440,7 +553,7 @@ func auditBridgeMeter(disposition Disposition) error {
 		expectedOperations := map[string]int{
 			"root-domain-read": 1, "root-propose": 1, "root-bind": 1, "root-delete": 1, "root-empty-check": 1,
 			"request-write": 1, "agenda-enqueue": 1, "agenda-dequeue": 1, "request-digest-check": 2,
-			"domain-read": 1, "domain-size-check": 7, "domain-membership-check": 7, "role-visit-record": 7,
+			"domain-read": 1, "domain-size-check": expectedVisits, "domain-membership-check": expectedVisits, "role-visit-record": expectedVisits,
 			"role-candidate": 2, "role-candidate-write": 2, "pair-candidate": 1, "pair-only-equality": 1, "pair-escape-inequality": 1, "pair-record-write": 1,
 			"artifact-read": 1, "mask-bit-0": 1, "mask-bit-1": 1, "mask-bit-2": 1, "authority-read": 1, "frozen-read": 1, "schema-read": 1, "guard-version-read": 1, "artifact-digest-read": 1, "evidence-digest-read": 1,
 			"artifact-edge-read": 3, "artifact-match-read": 1, "artifact-match-record": 1,

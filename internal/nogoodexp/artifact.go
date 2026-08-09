@@ -59,6 +59,7 @@ type FrozenCandidate struct {
 type FrozenArtifact struct {
 	SchemaVersion          string                 `json:"schema_version"`
 	GuardVersion           string                 `json:"guard_version"`
+	PairDomainCardinality  int                    `json:"pair_domain_cardinality"`
 	Name                   string                 `json:"name"`
 	Mask                   int                    `json:"mask"`
 	SchemaSemanticKey      string                 `json:"schema_semantic_key"`
@@ -111,7 +112,7 @@ func FreezeArtifact(run TrainingRun) (FrozenArtifact, []byte, ArtifactAuthority,
 	}
 	artifact := FrozenArtifact{
 		SchemaVersion: u.GetString("schemaVersion"), GuardVersion: u.GetString("guardVersion"), Name: u.Name,
-		Mask: u.GetInt("mask"), Selection: selection.Name, SelectionBarrier: selectionBarrier.Name,
+		PairDomainCardinality: 2, Mask: u.GetInt("mask"), Selection: selection.Name, SelectionBarrier: selectionBarrier.Name,
 		PromotionBarrier: u.GetString("promotionBarrier"), Provenance: u.GetString("provenance"),
 	}
 	if artifact.Provenance != nogoodfixtureAuthority {
@@ -121,10 +122,11 @@ func FreezeArtifact(run TrainingRun) (FrozenArtifact, []byte, ArtifactAuthority,
 	artifact.ExpectedMasks = intSlot(selectionBarrier, "expectedKeys")
 	artifact.ActualMasks = intSlot(selectionBarrier, "actualKeys")
 	artifact.SchemaSemanticKey = digestJSON(struct {
-		Schema string `json:"schema"`
-		Guard  string `json:"guard"`
-		Mask   int    `json:"mask"`
-	}{artifact.SchemaVersion, artifact.GuardVersion, artifact.Mask})
+		Schema                string `json:"schema"`
+		Guard                 string `json:"guard"`
+		Mask                  int    `json:"mask"`
+		PairDomainCardinality int    `json:"pair_domain_cardinality"`
+	}{artifact.SchemaVersion, artifact.GuardVersion, artifact.Mask, artifact.PairDomainCardinality})
 	for _, candidateName := range run.Store.Examples("NogoodCandidate") {
 		if candidateName == "NogoodCandidate" {
 			continue
@@ -252,7 +254,7 @@ func ParseFrozenArtifact(data []byte) (FrozenArtifact, error) {
 }
 
 func (artifact FrozenArtifact) Validate() error {
-	if artifact.Name == "" || artifact.SchemaVersion == "" || artifact.GuardVersion == "" || artifact.Mask < 0 || artifact.Mask > 7 || artifact.Selection == "" || artifact.SelectionBarrier == "" || artifact.PromotionBarrier == "" || artifact.Provenance == "" {
+	if artifact.Name == "" || artifact.SchemaVersion == "" || artifact.GuardVersion == "" || !slices.Contains([]int{2, 3}, artifact.PairDomainCardinality) || artifact.Mask < 0 || artifact.Mask > 7 || artifact.Selection == "" || artifact.SelectionBarrier == "" || artifact.PromotionBarrier == "" || artifact.Provenance == "" {
 		return fmt.Errorf("invalid frozen nogood artifact envelope")
 	}
 	for _, digest := range []string{artifact.SchemaSemanticKey, artifact.EvidenceBoundaryDigest, artifact.CompletionDigest, artifact.PromotionDigest, artifact.ProvenanceDigest, artifact.Digest} {
@@ -260,18 +262,36 @@ func (artifact FrozenArtifact) Validate() error {
 			return fmt.Errorf("invalid frozen nogood artifact digest")
 		}
 	}
-	if len(artifact.Candidates) != 8 || len(artifact.ExactTies) != 1 || !slices.Equal(artifact.ExpectedMasks, []int{0, 1, 2, 3, 4, 5, 6, 7}) || !slices.Equal(artifact.ActualMasks, artifact.ExpectedMasks) || len(artifact.PromotionProofs) != 24 || artifact.Digest != artifactDigest(artifact) {
+	wantTies := 1
+	if artifact.PairDomainCardinality == 3 {
+		wantTies = 0
+	}
+	if len(artifact.Candidates) != 8 || len(artifact.ExactTies) != wantTies || !slices.Equal(artifact.ExpectedMasks, []int{0, 1, 2, 3, 4, 5, 6, 7}) || !slices.Equal(artifact.ActualMasks, artifact.ExpectedMasks) || len(artifact.PromotionProofs) != 24 || artifact.Digest != artifactDigest(artifact) {
 		return fmt.Errorf("invalid frozen nogood artifact contents")
 	}
+	wantSemanticKey := digestJSON(struct {
+		Schema                string `json:"schema"`
+		Guard                 string `json:"guard"`
+		Mask                  int    `json:"mask"`
+		PairDomainCardinality int    `json:"pair_domain_cardinality"`
+	}{artifact.SchemaVersion, artifact.GuardVersion, artifact.Mask, artifact.PairDomainCardinality})
+	if artifact.SchemaSemanticKey != wantSemanticKey {
+		return fmt.Errorf("frozen nogood artifact semantic family key does not re-evaluate")
+	}
 	for mask, candidate := range artifact.Candidates {
-		if candidate.Mask != mask || !candidate.EvidenceComplete || len(candidate.Evidence) != 4 || candidate.TrainingExact != (mask == 7) {
+		wantExact := mask == 7 && artifact.PairDomainCardinality == 2
+		if candidate.Mask != mask || !candidate.EvidenceComplete || len(candidate.Evidence) != 4 || candidate.TrainingExact != wantExact {
 			return fmt.Errorf("invalid candidate evidence boundary")
 		}
 		for _, evidence := range candidate.Evidence {
 			if evidence.Example == "" || evidence.Barrier == "" || !validDigest(evidence.ProblemDigest) || evidence.ProblemDigest != digestBytes([]byte(evidence.Problem)) || !slices.Equal(evidence.ExpectedKeys, evidence.ActualKeys) || len(evidence.Results) != len(evidence.ActualKeys) {
 				return fmt.Errorf("invalid training evidence set")
 			}
-			if err := validateFrozenEvidence(evidence, candidate.Mask); err != nil {
+			validate := validateFrozenEvidence
+			if artifact.PairDomainCardinality == 3 {
+				validate = validateThreeColorFrozenEvidence
+			}
+			if err := validate(evidence, candidate.Mask); err != nil {
 				return err
 			}
 		}
@@ -282,8 +302,9 @@ func (artifact FrozenArtifact) Validate() error {
 		triple := [3]int{proof.Binding.Blocked, proof.Binding.Escape, proof.Binding.Only}
 		problem, parseErr := nogoods.ParseProblem([]byte(proof.Problem))
 		conflict, conflictErr := nogoods.EvaluateCompletion(problem, nogoods.FullMask, proof.Binding, proof.Completion)
+		familyMatches := parseErr == nil && ((artifact.PairDomainCardinality == 2 && nogoods.GuardMatches(problem, proof.Decision, proof.Binding)) || (artifact.PairDomainCardinality == 3 && threeColorFamilyMatches(problem, proof.Decision, proof.Binding)))
 		if proof.Proof == "" || proof.Case == "" || proofs[proof.Proof] || cases[proof.Case] || roleTriples[triple] || !proof.Conflict || !validDigest(proof.ProblemDigest) || proof.ProblemDigest != digestBytes([]byte(proof.Problem)) ||
-			parseErr != nil || conflictErr != nil || len(problem.ColorAliases) != 4 || !nogoods.GuardMatches(problem, proof.Decision, proof.Binding) || !nogoods.MaskMatches(problem, nogoods.FullMask, proof.Binding) || !conflict ||
+			parseErr != nil || conflictErr != nil || len(problem.ColorAliases) != 4 || !familyMatches || !nogoods.MaskMatches(problem, nogoods.FullMask, proof.Binding) || !conflict ||
 			triple[0] < 0 || triple[0] > 3 || triple[1] < 0 || triple[1] > 3 || triple[2] < 0 || triple[2] > 3 || triple[0] == triple[1] || triple[0] == triple[2] || triple[1] == triple[2] || proof.Completion.XColor != triple[2] || proof.Completion.YColor != triple[2] {
 			return fmt.Errorf("invalid promotion proof set")
 		}
@@ -299,6 +320,109 @@ func (artifact FrozenArtifact) Validate() error {
 		}
 	}
 	return nil
+}
+
+func threeColorFamilyMatches(problem nogoods.Problem, decision nogoods.Literal, binding nogoods.Binding) bool {
+	if decision.Variable != binding.Anchor || decision.Color != binding.Blocked || binding.X == binding.Y || binding.Anchor == binding.X || binding.Anchor == binding.Y || !problem.DomainContains(binding.Anchor, binding.Blocked) || len(problem.Variables[binding.X].Domain) != 3 || len(problem.Variables[binding.Y].Domain) != 3 {
+		return false
+	}
+	return problem.DomainContains(binding.X, binding.Blocked) && problem.DomainContains(binding.Y, binding.Blocked) && problem.DomainContains(binding.X, binding.Only) && problem.DomainContains(binding.Y, binding.Only)
+}
+
+func makeWrongFamilyArtifact(source FrozenArtifact) (FrozenArtifact, error) {
+	encoded, err := json.Marshal(source)
+	if err != nil {
+		return FrozenArtifact{}, err
+	}
+	var artifact FrozenArtifact
+	if err := json.Unmarshal(encoded, &artifact); err != nil {
+		return FrozenArtifact{}, err
+	}
+	artifact.SchemaVersion = "blocked-pair-three-color/v1"
+	artifact.PairDomainCardinality = 3
+	artifact.Name += ".three-color-family"
+	artifact.ExactTies = nil
+	for candidateIndex := range artifact.Candidates {
+		candidate := &artifact.Candidates[candidateIndex]
+		candidate.TrainingExact = false
+		for evidenceIndex := range candidate.Evidence {
+			evidence := &candidate.Evidence[evidenceIndex]
+			problem, parseErr := nogoods.ParseProblem([]byte(evidence.Problem))
+			if parseErr != nil {
+				return FrozenArtifact{}, parseErr
+			}
+			for _, variable := range []int{evidence.Binding.X, evidence.Binding.Y} {
+				if variable < 0 || variable >= len(problem.Variables) {
+					return FrozenArtifact{}, fmt.Errorf("wrong-family evidence has invalid pair role")
+				}
+				if !slices.Contains(problem.Variables[variable].Domain, evidence.Binding.Escape) {
+					problem.Variables[variable].Domain = append(problem.Variables[variable].Domain, evidence.Binding.Escape)
+					slices.Sort(problem.Variables[variable].Domain)
+				}
+			}
+			problemBytes, encodeErr := problem.CanonicalJSON()
+			if encodeErr != nil {
+				return FrozenArtifact{}, encodeErr
+			}
+			evidence.Problem = string(problemBytes)
+			evidence.ProblemDigest = digestBytes(problemBytes)
+			evidence.Matches = threeColorFamilyMatches(problem, evidence.Decision, evidence.Binding) && nogoods.MaskMatches(problem, nogoods.Mask(candidate.Mask), evidence.Binding)
+			evidence.Results = expectedTrainingResults(problem, nogoods.Mask(candidate.Mask), evidence.Binding, evidence.Matches)
+			evidence.ExpectedKeys = evidence.ExpectedKeys[:0]
+			for resultIndex := range evidence.Results {
+				result := &evidence.Results[resultIndex]
+				result.Key = fmt.Sprintf("completion:%d:%d", result.XColor, result.YColor)
+				evidence.ExpectedKeys = append(evidence.ExpectedKeys, result.Key)
+			}
+			evidence.ActualKeys = slices.Clone(evidence.ExpectedKeys)
+			evidence.AllConflict = len(evidence.Results) > 0
+			for _, result := range evidence.Results {
+				evidence.AllConflict = evidence.AllConflict && result.Conflict
+			}
+		}
+	}
+	artifact.EvidenceBoundaryDigest = digestJSON(struct {
+		Selection, Barrier string
+		Ties               []string
+		Expected, Actual   []int
+		Candidates         []FrozenCandidate
+	}{artifact.Selection, artifact.SelectionBarrier, artifact.ExactTies, artifact.ExpectedMasks, artifact.ActualMasks, artifact.Candidates})
+	artifact.CompletionDigest = digestJSON(artifact.Candidates)
+	for proofIndex := range artifact.PromotionProofs {
+		proof := &artifact.PromotionProofs[proofIndex]
+		problem, parseErr := nogoods.ParseProblem([]byte(proof.Problem))
+		if parseErr != nil {
+			return FrozenArtifact{}, parseErr
+		}
+		for _, variable := range []int{proof.Binding.X, proof.Binding.Y} {
+			if !slices.Contains(problem.Variables[variable].Domain, proof.Binding.Escape) {
+				problem.Variables[variable].Domain = append(problem.Variables[variable].Domain, proof.Binding.Escape)
+				slices.Sort(problem.Variables[variable].Domain)
+			}
+		}
+		problemBytes, encodeErr := problem.CanonicalJSON()
+		if encodeErr != nil {
+			return FrozenArtifact{}, encodeErr
+		}
+		proof.Problem = string(problemBytes)
+		proof.ProblemDigest = digestBytes(problemBytes)
+		proof.Conflict, err = nogoods.EvaluateCompletion(problem, nogoods.FullMask, proof.Binding, proof.Completion)
+		if err != nil {
+			return FrozenArtifact{}, err
+		}
+	}
+	artifact.PromotionDigest = digestJSON(struct {
+		Barrier string                 `json:"barrier"`
+		Proofs  []FrozenPromotionProof `json:"proofs"`
+	}{artifact.PromotionBarrier, artifact.PromotionProofs})
+	artifact.ProvenanceDigest = digestJSON(struct {
+		Authority string `json:"authority"`
+		Evidence  string `json:"evidence"`
+		Promotion string `json:"promotion"`
+	}{artifact.Provenance, artifact.EvidenceBoundaryDigest, artifact.PromotionDigest})
+	artifact.SchemaSemanticKey = artifactSemanticKey(artifact)
+	artifact.Digest = artifactDigest(artifact)
+	return artifact, artifact.Validate()
 }
 
 func validateFrozenEvidence(evidence FrozenEvidence, mask int) error {
@@ -324,6 +448,33 @@ func validateFrozenEvidence(evidence FrozenEvidence, mask int) error {
 	}
 	if evidence.AllConflict != allConflict {
 		return fmt.Errorf("evidence aggregate does not re-evaluate")
+	}
+	return nil
+}
+
+func validateThreeColorFrozenEvidence(evidence FrozenEvidence, mask int) error {
+	problem, err := nogoods.ParseProblem([]byte(evidence.Problem))
+	if err != nil || mask < 0 || mask > int(nogoods.FullMask) {
+		return fmt.Errorf("invalid three-color-family evidence problem or mask")
+	}
+	matches := threeColorFamilyMatches(problem, evidence.Decision, evidence.Binding) && nogoods.MaskMatches(problem, nogoods.Mask(mask), evidence.Binding)
+	if evidence.Matches != matches {
+		return fmt.Errorf("three-color-family evidence match does not re-evaluate")
+	}
+	wantResults := expectedTrainingResults(problem, nogoods.Mask(mask), evidence.Binding, matches)
+	if len(evidence.Results) != len(wantResults) || len(evidence.ExpectedKeys) != len(wantResults) || !slices.Equal(evidence.ExpectedKeys, evidence.ActualKeys) {
+		return fmt.Errorf("three-color-family evidence completion set is incomplete")
+	}
+	allConflict := len(wantResults) > 0
+	for index, result := range evidence.Results {
+		want := wantResults[index]
+		if result.XColor != want.XColor || result.YColor != want.YColor || result.Conflict != want.Conflict || evidence.ExpectedKeys[index] != fmt.Sprintf("completion:%d:%d", want.XColor, want.YColor) {
+			return fmt.Errorf("three-color-family evidence result does not re-evaluate")
+		}
+		allConflict = allConflict && result.Conflict
+	}
+	if evidence.AllConflict != allConflict {
+		return fmt.Errorf("three-color-family evidence aggregate does not re-evaluate")
 	}
 	return nil
 }
@@ -363,6 +514,7 @@ func installArtifact(store *unit.Store, artifact FrozenArtifact, authority *Arti
 	u.Set("isA", []string{"NogoodArtifact", "Anything"})
 	u.Set("schemaVersion", artifact.SchemaVersion)
 	u.Set("guardVersion", artifact.GuardVersion)
+	u.Set("pairDomainCardinality", artifact.PairDomainCardinality)
 	u.Set("mask", artifact.Mask)
 	u.Set("schemaSemanticKey", artifact.SchemaSemanticKey)
 	u.Set("evidenceBoundaryDigest", artifact.EvidenceBoundaryDigest)
@@ -380,6 +532,15 @@ func installArtifact(store *unit.Store, artifact FrozenArtifact, authority *Arti
 func artifactDigest(artifact FrozenArtifact) string {
 	artifact.Digest = ""
 	return digestJSON(artifact)
+}
+
+func artifactSemanticKey(artifact FrozenArtifact) string {
+	return digestJSON(struct {
+		Schema                string `json:"schema"`
+		Guard                 string `json:"guard"`
+		Mask                  int    `json:"mask"`
+		PairDomainCardinality int    `json:"pair_domain_cardinality"`
+	}{artifact.SchemaVersion, artifact.GuardVersion, artifact.Mask, artifact.PairDomainCardinality})
 }
 
 func digestJSON(value any) string {

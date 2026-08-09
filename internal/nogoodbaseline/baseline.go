@@ -81,6 +81,13 @@ type solver struct {
 	explanations []map[int]map[int]bool
 	degree       []int
 	meter        meter
+	nogoods      map[string]exactNogood
+}
+
+type exactNogood struct {
+	key       string
+	literals  []Literal
+	variables map[int]bool
 }
 
 // MACCBJ answers one fixed-branch completion query using maintaining arc
@@ -134,12 +141,13 @@ func macCBJ(data []byte, decision Literal, prepared bool) (Result, error) {
 			s.meter.charge(5, "domain-empty-check", decision.Variable)
 		}
 	}
+	var failure map[int]bool
 	if !s.assignedEdgesConsistent(decision.Variable) {
-		s.finishRoot(&result, decision, rootDomains, rootExplanations)
-		return result, nil
+		failure = map[int]bool{decision.Variable: true}
+	} else {
+		queue := s.initialQueue(decision.Variable)
+		failure = s.ac3(queue)
 	}
-	queue := s.initialQueue(decision.Variable)
-	failure := s.ac3(queue)
 	if failure == nil {
 		var witness []int
 		witness, failure = s.search()
@@ -150,9 +158,9 @@ func macCBJ(data []byte, decision Literal, prepared bool) (Result, error) {
 		}
 	}
 	if !result.Satisfied {
-		// The root wrapper seals the concrete decision nogood before restore.
-		s.meter.charge(12, "nogood-lookup", decision.Variable, decision.Color)
-		s.meter.charge(12, "nogood-write", decision.Variable, decision.Color)
+		// All root failure origins are normalized to the distinguished literal;
+		// no recursive conflict may escape the empty caller prefix.
+		s.materializeExactNogood(map[int]bool{decision.Variable: true})
 		if failure != nil {
 			s.meter.charge(7, "root-project", decision.Variable)
 		}
@@ -162,7 +170,7 @@ func macCBJ(data []byte, decision Literal, prepared bool) (Result, error) {
 }
 
 func newSolver(p problem, result *Result) *solver {
-	s := &solver{p: p, domains: make([][]int, len(p.Variables)), assignment: make([]int, len(p.Variables)), explanations: make([]map[int]map[int]bool, len(p.Variables)), degree: make([]int, len(p.Variables)), meter: meter{result}}
+	s := &solver{p: p, domains: make([][]int, len(p.Variables)), assignment: make([]int, len(p.Variables)), explanations: make([]map[int]map[int]bool, len(p.Variables)), degree: make([]int, len(p.Variables)), meter: meter{result}, nogoods: map[string]exactNogood{}}
 	for i, v := range p.Variables {
 		s.domains[i] = slices.Clone(v.Domain)
 		s.assignment[i] = -1
@@ -192,6 +200,9 @@ func (s *solver) finishRoot(result *Result, decision Literal, domains [][]int, e
 }
 
 func (s *solver) search() ([]int, map[int]bool) {
+	if failure := s.lookupExactNogood(); failure != nil {
+		return nil, failure
+	}
 	variable := s.chooseVariable()
 	if variable < 0 {
 		if s.completeConsistent() {
@@ -216,6 +227,7 @@ func (s *solver) search() ([]int, map[int]bool) {
 		if !s.assignedEdgesConsistent(variable) {
 			failure := s.assignedNeighborSet(variable)
 			failure[variable] = true
+			s.materializeExactNogood(failure)
 			s.restore(domains, explanations, assignment)
 			for _, member := range sortedSetMembers(failure) {
 				if member != variable {
@@ -233,6 +245,7 @@ func (s *solver) search() ([]int, map[int]bool) {
 			}
 			failure = nested
 		}
+		s.materializeExactNogood(failure)
 		s.restore(domains, explanations, assignment)
 		if !failure[variable] {
 			s.meter.charge(7, "backjump", variable)
@@ -245,7 +258,64 @@ func (s *solver) search() ([]int, map[int]bool) {
 			}
 		}
 	}
+	s.materializeExactNogood(conflicts)
 	return nil, conflicts
+}
+
+func (s *solver) lookupExactNogood() map[int]bool {
+	keys := make([]string, 0, len(s.nogoods))
+	for key := range s.nogoods {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		record := s.nogoods[key]
+		s.meter.charge(12, "nogood-lookup", len(record.literals))
+		matches := true
+		for _, literal := range record.literals {
+			if s.assignment[literal.Variable] != literal.Color {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			s.meter.charge(12, "nogood-hit", len(record.literals))
+			return cloneSet(record.variables)
+		}
+	}
+	return nil
+}
+
+func (s *solver) materializeExactNogood(failure map[int]bool) {
+	if len(failure) == 0 {
+		return
+	}
+	variables := sortedSetMembers(failure)
+	literals := make([]Literal, 0, len(variables))
+	for _, variable := range variables {
+		if variable >= 0 && variable < len(s.assignment) && s.assignment[variable] >= 0 {
+			literals = append(literals, Literal{Variable: variable, Color: s.assignment[variable]})
+		}
+	}
+	if len(literals) == 0 {
+		return
+	}
+	var key bytes.Buffer
+	for _, literal := range literals {
+		fmt.Fprintf(&key, "%08d=%08d;", literal.Variable, literal.Color)
+	}
+	semanticKey := key.String()
+	if _, exists := s.nogoods[semanticKey]; exists {
+		return
+	}
+	set := make(map[int]bool, len(literals))
+	operands := make([]int, 0, len(literals)*2)
+	for _, literal := range literals {
+		set[literal.Variable] = true
+		operands = append(operands, literal.Variable, literal.Color)
+	}
+	s.nogoods[semanticKey] = exactNogood{key: semanticKey, literals: slices.Clone(literals), variables: set}
+	s.meter.charge(12, "nogood-write", operands...)
 }
 
 func (s *solver) restore(domains [][]int, explanations []map[int]map[int]bool, assignment []int) {

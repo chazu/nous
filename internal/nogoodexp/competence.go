@@ -59,6 +59,9 @@ func runCompetence(domainsDir, panel string) (CompetenceExecution, error) {
 		if disposition.Status != wantStatus {
 			return CompetenceExecution{}, fmt.Errorf("competence %d %s disposition %s, want %s", competenceCase.Ordinal, competenceCase.Kind, disposition.Status, wantStatus)
 		}
+		if _, meterErr := bridgeTranscript(uint32(competenceCase.Ordinal), disposition); meterErr != nil {
+			return CompetenceExecution{}, fmt.Errorf("competence %d %s meter audit: %w", competenceCase.Ordinal, competenceCase.Kind, meterErr)
+		}
 		oracle, oracleErr := nogoodoracle.Enumerate(competenceCase.ProblemJSON, nogoodoracle.Literal(competenceCase.Decision))
 		if oracleErr != nil {
 			return CompetenceExecution{}, oracleErr

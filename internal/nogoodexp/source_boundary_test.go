@@ -76,3 +76,25 @@ func TestValidationFixtureGenerationHasOneProductionCallSurface(t *testing.T) {
 		t.Fatalf("validation production surfaces panel=%d competence=%d, want one definition and guarded caller each", panelSurfaces, competenceSurfaces)
 	}
 }
+
+func TestProtectedPanelObservationHasOnlyGuardedExportedExecutors(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden := []string{"func BuildDevelopmentEvidence(", "func RunDevelopmentExecution(", "func PersistDevelopmentEvidence(", "func InferPanel("}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		data, readErr := os.ReadFile(entry.Name())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, surface := range forbidden {
+			if strings.Contains(string(data), surface) {
+				t.Fatalf("unguarded protected observation surface %q in %s", surface, entry.Name())
+			}
+		}
+	}
+}

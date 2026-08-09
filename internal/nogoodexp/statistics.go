@@ -80,10 +80,6 @@ func InferDevelopment(execution PanelExecution) (Inference, error) {
 	return inferPanelWithAuthority(execution, publicStatisticsAuthority("development", 832001))
 }
 
-func InferPanel(execution PanelExecution, root any) (Inference, error) {
-	return inferPanelWithAuthority(execution, publicStatisticsAuthority(execution.Panel, root))
-}
-
 func inferPanelWithAuthority(execution PanelExecution, authority statisticsAuthority) (Inference, error) {
 	if !slices.Contains([]string{"development", "validation", "locked"}, execution.Panel) || len(execution.Policies) != len(RequiredPolicies) {
 		return Inference{}, fmt.Errorf("inference requires a complete preregistered panel execution")

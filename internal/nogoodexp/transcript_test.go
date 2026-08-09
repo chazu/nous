@@ -3,6 +3,7 @@ package nogoodexp
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"slices"
 	"testing"
@@ -40,6 +41,21 @@ func TestNGTGoldenAcquisitionStream(t *testing.T) {
 	decoded, err := DecodeTranscript(bundle.Raw)
 	if err != nil || decoded.Vector[11] != 1 {
 		t.Fatalf("decode = %#v, %v", decoded.Vector, err)
+	}
+	if len(decoded.Events) != 1 || decoded.Events[0] != goldenPreflightEvent() {
+		t.Fatalf("decoded typed event = %#v", decoded.Events)
+	}
+}
+
+func TestTranscriptRejectsOverflowingEventCountWithoutPanic(t *testing.T) {
+	bundle, err := EncodeTranscript([]TranscriptEvent{goldenPreflightEvent()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := slices.Clone(bundle.Raw)
+	binary.BigEndian.PutUint64(corrupt[16:24], ^uint64(0))
+	if _, err := DecodeTranscript(corrupt); err == nil {
+		t.Fatal("overflowing transcript event count was accepted")
 	}
 }
 

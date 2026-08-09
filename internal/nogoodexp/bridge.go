@@ -44,7 +44,7 @@ type BridgeExecution struct {
 	preflight   []TranscriptEvent
 }
 
-const committedBridgeProfileHash = "6b6275f20242bca8580b6bc9dcd459e19f37359424d1b6d8e53452b7e01a4dfc"
+const committedBridgeProfileHash = "7afd93db95786ec66fe697f8acfc06cb63ddc58c8e31aaa8c39c4a06501d95d6"
 
 func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *ArtifactAuthority) (*BridgeExecution, error) {
 	store := unit.NewStore()
@@ -208,6 +208,7 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	request.Set("problem", string(problemJSON))
 	request.Set("decisionVariable", decision.Variable)
 	request.Set("decisionColor", decision.Color)
+	request.Set("variableCount", len(problem.Variables))
 	request.Set("requestNumber", requestNumber)
 	request.Set("policyProfileHash", execution.profileHash)
 	request.Set("targetDigest", targetDigest)
@@ -419,6 +420,32 @@ func auditProposalOccurrence(result Disposition) error {
 	}
 	if !slices.Equal(barrier.GetStrings("predicateKeys"), []string{"predicate-problem", "predicate-guard", "predicate-mask", "predicate-conflict", "predicate-certificate", "predicate-authority", "predicate-frozen", "predicate-schema", "predicate-guard-version", "predicate-artifact-digest", "predicate-evidence-digest", "predicate-promotion-digest", "predicate-provenance-digest", "predicate-request-digest", "predicate-target-digest", "predicate-decision-digest", "predicate-assignment-digest", "predicate-reduced-domain-digest"}) || slices.Contains(barrier.GetStrings("predicateOutcomeKeys"), "false") {
 		return fmt.Errorf("proposal occurrence evidence barrier is incomplete")
+	}
+	problem, parseErr := nogoods.ParseProblem([]byte(request.GetString("problem")))
+	decision := nogoods.Literal{Variable: request.GetInt("decisionVariable"), Color: request.GetInt("decisionColor")}
+	frozenBinding := nogoods.Binding{Anchor: binding.GetInt("anchor"), X: binding.GetInt("x"), Y: binding.GetInt("y"), Blocked: binding.GetInt("blocked"), Escape: binding.GetInt("escape"), Only: binding.GetInt("only")}
+	frozenCompletion := nogoods.Completion{XColor: completion.GetInt("xColor"), YColor: completion.GetInt("yColor")}
+	mask := nogoods.Mask(artifact.GetInt("mask"))
+	conflict, conflictErr := nogoods.EvaluateCompletion(problem, mask, frozenBinding, frozenCompletion)
+	independent := []bool{
+		parseErr == nil,
+		parseErr == nil && nogoods.GuardMatches(problem, decision, frozenBinding),
+		parseErr == nil && nogoods.MaskMatches(problem, mask, frozenBinding),
+		conflictErr == nil && conflict,
+		conflictErr == nil && conflict && certificate.GetBool("valid") && certificate.GetString("request") == request.Name && certificate.GetString("artifact") == artifact.Name && certificate.GetString("binding") == binding.Name && certificate.GetString("completion") == completion.Name,
+		artifact.GetBool("authoritative"), artifact.GetBool("frozen"),
+		artifact.GetString("schemaVersion") == "blocked-pair/v1", artifact.GetString("guardVersion") == "blocked-pair-guard/v1",
+		artifact.GetString("artifactDigest") == request.GetString("acceptedArtifactDigest"), artifact.GetString("evidenceBoundaryDigest") == request.GetString("acceptedEvidenceDigest"),
+		artifact.GetString("promotionDigest") == request.GetString("acceptedPromotionDigest"), artifact.GetString("provenanceDigest") == request.GetString("acceptedProvenanceDigest"),
+		request.GetString("requestDigest") != "", request.GetString("targetDigest") != "", request.GetString("decisionDigest") != "", request.GetString("assignmentDigest") != "", request.GetString("reducedDomainDigest") != "",
+	}
+	if len(independent) != 18 || len(barrier.GetStrings("predicateOutcomeKeys")) != 18 {
+		return fmt.Errorf("proposal occurrence independent predicate cardinality mismatch")
+	}
+	for index, passed := range independent {
+		if !passed || barrier.GetStrings("predicateOutcomeKeys")[index] != "true" {
+			return fmt.Errorf("proposal occurrence predicate %d failed independent recomputation", index)
+		}
 	}
 	return nil
 }

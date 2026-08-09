@@ -45,6 +45,7 @@ type TranscriptBundle struct {
 	Raw        []byte
 	Gzip       []byte
 	Dictionary []string
+	Events     []TranscriptEvent
 	Vector     [12]int64
 }
 
@@ -202,7 +203,7 @@ func DecodeTranscript(raw []byte) (TranscriptBundle, error) {
 	}
 	dictionaryLength := binary.BigEndian.Uint64(raw[8:16])
 	eventCount := binary.BigEndian.Uint64(raw[16:24])
-	if dictionaryLength > transcriptDictCap || uint64(len(raw)) != transcriptHeaderSize+dictionaryLength+eventCount*transcriptRecordSize {
+	if dictionaryLength > transcriptDictCap || dictionaryLength > uint64(len(raw)-transcriptHeaderSize) || eventCount > (uint64(len(raw))-transcriptHeaderSize-dictionaryLength)/transcriptRecordSize || uint64(len(raw)) != transcriptHeaderSize+dictionaryLength+eventCount*transcriptRecordSize {
 		return TranscriptBundle{}, fmt.Errorf("invalid transcript size")
 	}
 	dictionaryBytes := raw[transcriptHeaderSize : transcriptHeaderSize+int(dictionaryLength)]
@@ -218,6 +219,7 @@ func DecodeTranscript(raw []byte) (TranscriptBundle, error) {
 		return TranscriptBundle{}, fmt.Errorf("noncanonical dictionary")
 	}
 	var vector [12]int64
+	events := make([]TranscriptEvent, 0, int(eventCount))
 	offset := transcriptHeaderSize + int(dictionaryLength)
 	for sequence := uint64(0); sequence < eventCount; sequence++ {
 		record := raw[offset : offset+transcriptRecordSize]
@@ -252,9 +254,26 @@ func DecodeTranscript(raw []byte) (TranscriptBundle, error) {
 				}
 			}
 		}
+		event := TranscriptEvent{Category: record[1], Code: record[2], TaskOrdinal: binary.BigEndian.Uint32(record[4:8])}
+		for index, kind := range spec.kinds {
+			value := int32(binary.BigEndian.Uint32(record[16+index*4 : 20+index*4]))
+			switch kind {
+			case omit:
+				event.Operands[index] = Omitted()
+			case numeric:
+				event.Operands[index] = Number(value)
+			case requiredID, optionalID:
+				if value == 0 {
+					event.Operands[index] = Omitted()
+				} else {
+					event.Operands[index] = ID(dictionary[value-1])
+				}
+			}
+		}
+		events = append(events, event)
 		vector[record[1]-1]++
 	}
-	return TranscriptBundle{Raw: slices.Clone(raw), Dictionary: dictionary, Vector: vector}, nil
+	return TranscriptBundle{Raw: slices.Clone(raw), Dictionary: dictionary, Events: events, Vector: vector}, nil
 }
 
 func decodeDictionary(data []byte) ([]string, error) {

@@ -45,7 +45,7 @@ type PanelExecution struct {
 	Policies          []PolicyExecution `json:"policies"`
 }
 
-func RunDevelopmentExecution(domainsDir, role string) (PanelExecution, error) {
+func runDevelopmentExecution(domainsDir, role string) (PanelExecution, error) {
 	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		return PanelExecution{}, err
@@ -81,13 +81,16 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 	}
 	corrupted := artifact
 	corrupted.Mask = 5
+	corrupted.SchemaSemanticKey = artifactSemanticKey(corrupted)
 	corrupted.Digest = artifactDigest(corrupted)
 	random := artifact
 	random.Mask = nogoodfixture.RandomControlMask()
+	random.SchemaSemanticKey = artifactSemanticKey(random)
 	random.Digest = artifactDigest(random)
-	wrongFamily := artifact
-	wrongFamily.SchemaVersion = "blocked-pair-three-color/v1"
-	wrongFamily.Digest = artifactDigest(wrongFamily)
+	wrongFamily, err := makeWrongFamilyArtifact(artifact)
+	if err != nil {
+		return PanelExecution{}, err
+	}
 
 	bridges := map[string]*BridgeExecution{}
 	bridgeInputs := map[string]struct {
@@ -223,9 +226,7 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 		if acquisitionErr != nil {
 			return TaskOutcome{}, nil, acquisitionErr
 		}
-		for index := range localAcquisition {
-			localAcquisition[index].TaskOrdinal = uint32(task.Ordinal)
-		}
+		localAcquisition = markRecomputedAcquisition(localAcquisition, uint32(task.Ordinal))
 		events = appendEvents(events, localAcquisition)
 		bridgeEvents, meterErr := bridgeTranscript(uint32(task.Ordinal), d)
 		if meterErr != nil {

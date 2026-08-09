@@ -136,7 +136,7 @@ func totalManifestGzip(manifest ExecutionManifest) int64 {
 	return total
 }
 
-func PersistDevelopmentEvidence(repoRoot string, evidence DevelopmentEvidence) error {
+func persistDevelopmentEvidence(repoRoot string, evidence DevelopmentEvidence) error {
 	return persistEvidence(repoRoot, "development", evidence, false)
 }
 

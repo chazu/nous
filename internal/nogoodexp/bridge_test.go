@@ -302,6 +302,7 @@ func TestParsedOrMutatedArtifactCannotSelfAuthorize(t *testing.T) {
 	}
 	mutated := artifact
 	mutated.Mask = 5
+	mutated.SchemaSemanticKey = artifactSemanticKey(mutated)
 	mutated.Digest = artifactDigest(mutated)
 	result, err = ConsiderPrune("../../domains", tasks[0].ProblemJSON, tasks[0].Decision, &mutated, &authority)
 	if err != nil || result.Status != "resume" {

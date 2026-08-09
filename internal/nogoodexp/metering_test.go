@@ -111,3 +111,38 @@ func TestMeterRejectsTrainingAndResumeOmissionsAndTupleRetargeting(t *testing.T)
 		t.Fatal("proposal meter accepted a retargeted completion-domain read")
 	}
 }
+
+func TestAcquisitionTranscriptUsesOnlyClosedPhaseOrdinals(t *testing.T) {
+	training, err := RunTraining("../../domains")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := NewBridgeExecution("../../domains", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := acquisitionTranscript(training, bridge.preflight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[uint32]bool{}
+	for _, event := range events {
+		if !legalAcquisitionOrdinal(event.TaskOrdinal) {
+			t.Fatalf("illegal acquisition ordinal %#x", event.TaskOrdinal)
+		}
+		seen[event.TaskOrdinal] = true
+	}
+	for ordinal := uint32(0x80000000); ordinal <= 0x80000004; ordinal++ {
+		if !seen[ordinal] {
+			t.Fatalf("missing training phase ordinal %#x", ordinal)
+		}
+	}
+	for ordinal := uint32(0x90000000); ordinal <= 0x90000018; ordinal++ {
+		if !seen[ordinal] {
+			t.Fatalf("missing promotion/freeze phase ordinal %#x", ordinal)
+		}
+	}
+	if !seen[0xffffffff] {
+		t.Fatal("missing bridge-profile phase ordinal")
+	}
+}

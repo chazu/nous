@@ -63,7 +63,7 @@ type DevelopmentEvidence struct {
 	Bundle      EvidenceBundle
 }
 
-func BuildDevelopmentEvidence(domainsDir, implementationCommit string) (DevelopmentEvidence, error) {
+func buildDevelopmentEvidenceDefault(domainsDir, implementationCommit string) (DevelopmentEvidence, error) {
 	return buildDevelopmentEvidence(domainsDir, implementationCommit, EstimateDevelopmentPower)
 }
 
@@ -165,7 +165,10 @@ func buildPanelEvidenceFromFixtures(domainsDir, implementationCommit, panel stri
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	classification := stageClassification(panel, inference, powerEstimate)
+	classification, err := stageClassification(panel, inference, powerEstimate)
+	if err != nil {
+		return DevelopmentEvidence{}, err
+	}
 	report := Report{Payload: payload, PayloadSHA256: digestHex(payloadBytes), RootManifestSHA256: digestHex(bundle.RootManifestJSON), Classification: classification}
 	reportJSON, err := canonicalJSON(report)
 	if err != nil {
@@ -177,14 +180,20 @@ func buildPanelEvidenceFromFixtures(domainsDir, implementationCommit, panel stri
 	return DevelopmentEvidence{Report: report, Primary: primary, Audit: audit, FixtureJSON: slices.Clone(fixtureJSON), ReportJSON: reportJSON, Bundle: bundle}, nil
 }
 
-func stageClassification(panel string, inference Inference, power PowerEstimate) string {
+func stageClassification(panel string, inference Inference, power PowerEstimate) (string, error) {
+	if inference.Classification != "valid-positive" && inference.Classification != "valid-null" {
+		return "", fmt.Errorf("invalid inference classification %q", inference.Classification)
+	}
 	if panel == "development" && !power.Authorized {
-		return "valid-null"
+		return "valid-null", nil
 	}
 	if panel == "locked" {
-		return inference.Classification
+		return inference.Classification, nil
 	}
-	return "interim"
+	if panel != "development" && panel != "validation" {
+		return "", fmt.Errorf("invalid report panel %q", panel)
+	}
+	return "interim", nil
 }
 
 func semanticPanel(execution PanelExecution) SemanticPanel {

@@ -54,7 +54,7 @@ func TestDevelopmentEvidenceIsDualDeterministicAndPersistsAllChunks(t *testing.T
 		t.Fatalf("incomplete evidence = %#v", evidence.Report)
 	}
 	root := t.TempDir()
-	if err := PersistDevelopmentEvidence(root, evidence); err != nil {
+	if err := persistDevelopmentEvidence(root, evidence); err != nil {
 		t.Fatal(err)
 	}
 	transcriptRoot := filepath.Join(root, ".nous", "nogoods-v2-development-transcripts")
@@ -78,7 +78,7 @@ func TestDevelopmentEvidenceIsDualDeterministicAndPersistsAllChunks(t *testing.T
 	if err != nil || !bytes.Equal(reportBytes, evidence.ReportJSON) {
 		t.Fatalf("persisted report mismatch: %v", err)
 	}
-	if err := PersistDevelopmentEvidence(root, evidence); err == nil {
+	if err := persistDevelopmentEvidence(root, evidence); err == nil {
 		t.Fatal("development evidence overwrote an existing attempt")
 	}
 	if err := verifyEvidenceFiles(root, "development", evidence.Report); err != nil {
@@ -102,7 +102,17 @@ func TestTerminalClassificationTableIsClosed(t *testing.T) {
 	positive := Inference{Classification: "valid-positive"}
 	null := Inference{Classification: "valid-null"}
 	authorized := PowerEstimate{Authorized: true}
-	if stageClassification("development", positive, PowerEstimate{}) != "valid-null" || stageClassification("development", null, authorized) != "interim" || stageClassification("validation", positive, authorized) != "interim" || stageClassification("validation", null, authorized) != "interim" || stageClassification("locked", positive, authorized) != "valid-positive" || stageClassification("locked", null, authorized) != "valid-null" {
+	classify := func(panel string, inference Inference, power PowerEstimate) string {
+		value, err := stageClassification(panel, inference, power)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if classify("development", positive, PowerEstimate{}) != "valid-null" || classify("development", null, authorized) != "interim" || classify("validation", positive, authorized) != "interim" || classify("validation", null, authorized) != "interim" || classify("locked", positive, authorized) != "valid-positive" || classify("locked", null, authorized) != "valid-null" {
 		t.Fatal("stage classification table drifted")
+	}
+	if _, err := stageClassification("locked", Inference{Classification: "garbage"}, authorized); err == nil {
+		t.Fatal("locked table accepted an open classification")
 	}
 }

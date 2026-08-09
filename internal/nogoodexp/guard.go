@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/chazu/nous/internal/nogoodoracle"
 )
 
 const (
@@ -249,6 +251,14 @@ func authorizeRepository(repoRoot, domainsDir string) (repositoryAuthority, erro
 	if err != nil {
 		return repositoryAuthority{}, err
 	}
+	top, err := gitOutput(root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return repositoryAuthority{}, err
+	}
+	canonicalTop, err := filepath.EvalSymlinks(top)
+	if err != nil || canonicalTop != root {
+		return repositoryAuthority{}, fmt.Errorf("Git authority top level is not the canonical repository root")
+	}
 	status, err := gitOutput(root, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return repositoryAuthority{}, err
@@ -274,7 +284,7 @@ func authorizeRepository(repoRoot, domainsDir string) (repositoryAuthority, erro
 	if manifest.Version != "nogood-implementation-reviews/v2" || manifest.PlanCommit != PlanCommit || len(manifest.ImplementationCommit) != 40 {
 		return repositoryAuthority{}, fmt.Errorf("implementation review manifest identity is invalid")
 	}
-	if err := exec.Command("git", "-C", root, "merge-base", "--is-ancestor", manifest.ImplementationCommit, head).Run(); err != nil {
+	if err := gitCommand(root, "merge-base", "--is-ancestor", manifest.ImplementationCommit, head).Run(); err != nil {
 		return repositoryAuthority{}, fmt.Errorf("reviewed implementation is not an ancestor of clean HEAD")
 	}
 	wantScopes := []string{"architecture", "constraint-semantics", "experimental-validity"}
@@ -321,7 +331,7 @@ func gitFileAtCommit(repoRoot, commit, path string) ([]byte, error) {
 	if strings.Contains(path, "\x00") || strings.Contains(commit, "\x00") {
 		return nil, fmt.Errorf("invalid git object path")
 	}
-	command := exec.Command("git", "-C", repoRoot, "show", commit+":"+path)
+	command := gitCommand(repoRoot, "show", commit+":"+path)
 	return command.Output()
 }
 
@@ -452,15 +462,46 @@ func verifyCommittedEvidence(authority repositoryAuthority, panel string) (Repor
 		return Report{}, fmt.Errorf("%s report is not canonical/bounded", panel)
 	}
 	payload, err := canonicalJSON(report.Payload)
-	if err != nil || digestHex(payload) != report.PayloadSHA256 || report.Payload.Panel != panel || report.Payload.PlanCommit != PlanCommit || report.Payload.ImplementationCommit != authority.reviews.ImplementationCommit || !allMechanicalGates(report.Payload.Gates) {
+	if err != nil || digestHex(payload) != report.PayloadSHA256 || report.Payload.ReportVersion != ReportVersion || !bytes.Equal(report.Payload.Manifest, preregisteredManifest()) || report.Payload.Panel != panel || report.Payload.PlanCommit != PlanCommit || report.Payload.ImplementationCommit != authority.reviews.ImplementationCommit || !allMechanicalGates(report.Payload.Gates) || validatePowerEstimate(report.Payload.DevelopmentPower) != nil {
 		return Report{}, fmt.Errorf("%s report payload failed verification", panel)
 	}
-	wantClassification := stageClassification(panel, report.Payload.Inference, report.Payload.DevelopmentPower)
-	if report.Classification != wantClassification {
+	wantClassification, err := stageClassification(panel, report.Payload.Inference, report.Payload.DevelopmentPower)
+	if err != nil || report.Classification != wantClassification {
 		return Report{}, fmt.Errorf("%s report has invalid stage classification %q", panel, report.Classification)
 	}
 	if err := verifyEvidenceFiles(authority.root, panel, report); err != nil {
 		return Report{}, err
+	}
+	fixtureBytes, err := os.ReadFile(filepath.Join(transcriptPath(authority.root, panel), "fixtures.json"))
+	if err != nil {
+		return Report{}, err
+	}
+	if err := verifyRetainedOutcomeClaims(panel, fixtureBytes, report.Payload.Execution); err != nil {
+		return Report{}, err
+	}
+	if panel == "development" || panel == "validation" {
+		competencePanel := "development"
+		inferenceAuthority := publicStatisticsAuthority("development", 832001)
+		power := EstimateDevelopmentPower
+		if panel == "validation" {
+			development, verifyErr := verifyCommittedEvidence(authority, "development")
+			if verifyErr != nil {
+				return Report{}, fmt.Errorf("validation development replay: %w", verifyErr)
+			}
+			competencePanel = "validation"
+			inferenceAuthority = publicStatisticsAuthority("validation", 833001)
+			power = func(PanelExecution) (PowerEstimate, error) { return development.Payload.DevelopmentPower, nil }
+		}
+		rebuilt, rebuildErr := buildPanelEvidenceFromFixtures(filepath.Join(authority.root, "domains"), authority.reviews.ImplementationCommit, panel, fixtureBytes, competencePanel, inferenceAuthority, power)
+		if rebuildErr != nil {
+			return Report{}, fmt.Errorf("%s independent deterministic replay: %w", panel, rebuildErr)
+		}
+		if !bytes.Equal(rebuilt.ReportJSON, reportBytes) {
+			return Report{}, fmt.Errorf("%s committed report differs from deterministic replay", panel)
+		}
+		if err := compareRebuiltEvidenceFiles(authority.root, panel, rebuilt); err != nil {
+			return Report{}, err
+		}
 	}
 	if panel == "validation" {
 		if err := verifyCommittedReceipt(authority, report); err != nil {
@@ -468,6 +509,61 @@ func verifyCommittedEvidence(authority repositoryAuthority, panel string) (Repor
 		}
 	}
 	return report, nil
+}
+
+func verifyRetainedOutcomeClaims(panel string, fixtureBytes []byte, semantic SemanticPanel) error {
+	tasks, err := decodeFixtureBundle(panel, fixtureBytes)
+	if err != nil {
+		return err
+	}
+	if len(semantic.Policies) != PolicyCount {
+		return fmt.Errorf("%s semantic panel has the wrong policy count", panel)
+	}
+	for policyIndex, policy := range semantic.Policies {
+		if policy.Policy != RequiredPolicies[policyIndex] || len(policy.Tasks) != len(tasks) {
+			return fmt.Errorf("%s semantic policy surface is incomplete", panel)
+		}
+		for index, task := range tasks {
+			claim := policy.Tasks[index]
+			truth, oracleErr := nogoodoracle.Enumerate(task.ProblemJSON, nogoodoracle.Literal(task.Decision))
+			if oracleErr != nil {
+				return oracleErr
+			}
+			if claim.Ordinal != task.Ordinal || claim.Cohort != string(task.Cohort) || claim.SemanticCell != fixtureSemanticCell(task) || claim.Satisfied != truth.Satisfiable || claim.Satisfied && !containsOracleWitness(truth.Solutions, claim.Witness) || claim.Disposition == "propose-prune" && truth.Satisfiable || !claim.PruneSound {
+				return fmt.Errorf("%s %s task %d fails independent fixture/oracle reduction", panel, policy.Policy, index)
+			}
+		}
+	}
+	return nil
+}
+
+func validatePowerEstimate(power PowerEstimate) error {
+	if power.Replicates != PowerOuterReplicates || power.Passing < 0 || power.Passing > power.Replicates || power.Fraction.Numerator != int64(power.Passing) || power.Fraction.Denominator != int64(power.Replicates) || power.Authorized != (power.Passing*100 >= 80*power.Replicates) {
+		return fmt.Errorf("invalid development power estimate")
+	}
+	return nil
+}
+
+func compareRebuiltEvidenceFiles(repoRoot, panel string, evidence DevelopmentEvidence) error {
+	expected := map[string][]byte{
+		"manifest.json": evidence.Bundle.RootManifestJSON,
+		"fixtures.json": evidence.FixtureJSON,
+		filepath.Join("primary", "execution-manifest.json"): evidence.Bundle.PrimaryManifestJSON,
+		filepath.Join("audit", "execution-manifest.json"):   evidence.Bundle.AuditManifestJSON,
+	}
+	for _, execution := range []PanelExecution{evidence.Primary, evidence.Audit} {
+		for _, policy := range execution.Policies {
+			expected[filepath.Join(execution.Role, policy.Policy+".ngt.gz")] = policy.Transcript.Gzip
+		}
+	}
+	base := transcriptPath(repoRoot, panel)
+	for relative, want := range expected {
+		got, err := os.ReadFile(filepath.Join(base, relative))
+		if err != nil || !bytes.Equal(got, want) {
+			return fmt.Errorf("%s replay differs at %s", panel, filepath.ToSlash(relative))
+		}
+	}
+	return nil
 }
 
 func verifyCommittedReceipt(authority repositoryAuthority, report Report) error {
@@ -491,7 +587,7 @@ func verifyCommittedReceipt(authority repositoryAuthority, report Report) error 
 	if err != nil || !bytes.Equal(canonical, encoded) || receipt.Version != receiptVersion || receipt.Panel != "validation" || receipt.State != "published" || receipt.PlanCommit != PlanCommit || receipt.ImplementationCommit != authority.reviews.ImplementationCommit {
 		return fmt.Errorf("validation receipt identity is invalid")
 	}
-	if len(receipt.Head) != 40 || exec.Command("git", "-C", authority.root, "merge-base", "--is-ancestor", receipt.Head, authority.head).Run() != nil {
+	if len(receipt.Head) != 40 || gitCommand(authority.root, "merge-base", "--is-ancestor", receipt.Head, authority.head).Run() != nil {
 		return fmt.Errorf("validation receipt execution head is not an ancestor of clean HEAD")
 	}
 	rootBytes, err := os.ReadFile(filepath.Join(transcriptPath(authority.root, "validation"), "manifest.json"))
@@ -585,15 +681,23 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 		if digestHex(manifestBytes) != wantDigest || json.Unmarshal(manifestBytes, &manifests[index]) != nil || manifests[index].ExecutionRole != role || len(manifests[index].Policies) != PolicyCount {
 			return fmt.Errorf("%s %s execution manifest is invalid", panel, role)
 		}
+		if manifests[index].AcquisitionEventCount < 0 || manifests[index].AcquisitionWork != manifests[index].AcquisitionEventCount || totalManifestEvents(manifests[index]) < 0 || totalManifestEvents(manifests[index]) > 8000000 || totalManifestRaw(manifests[index]) < 0 || totalManifestRaw(manifests[index]) > 1073741824 || totalManifestGzip(manifests[index]) < 0 || totalManifestGzip(manifests[index]) > 1074000000 {
+			return fmt.Errorf("%s %s execution manifest exceeds a preregistered cap", panel, role)
+		}
 		canonicalManifest, _ := canonicalJSON(manifests[index])
 		if !bytes.Equal(canonicalManifest, manifestBytes) {
 			return fmt.Errorf("%s %s execution manifest is not canonical", panel, role)
 		}
 		for policyIndex, chunk := range manifests[index].Policies {
-			if chunk.Policy != RequiredPolicies[policyIndex] {
+			if chunk.Policy != RequiredPolicies[policyIndex] || chunk.EventCount < 0 || chunk.RawSize < transcriptHeaderSize || chunk.GzipSize < 0 || chunk.FirstSequence != 0 || chunk.LastSequence != chunk.EventCount-1 {
 				return fmt.Errorf("%s %s policy order mismatch", panel, role)
 			}
-			gzipBytes, err := os.ReadFile(filepath.Join(transcriptPath(repoRoot, panel), role, chunk.Policy+".ngt.gz"))
+			chunkPath := filepath.Join(transcriptPath(repoRoot, panel), role, chunk.Policy+".ngt.gz")
+			info, err := os.Stat(chunkPath)
+			if err != nil || info.Size() != int64(chunk.GzipSize) || info.Size() > 1074000000 {
+				return fmt.Errorf("%s %s chunk %s has invalid bounded size", panel, role, chunk.Policy)
+			}
+			gzipBytes, err := os.ReadFile(chunkPath)
 			if err != nil || len(gzipBytes) != chunk.GzipSize || digestHex(gzipBytes) != chunk.GzipSHA256 {
 				return fmt.Errorf("%s %s chunk %s mismatch", panel, role, chunk.Policy)
 			}
@@ -603,7 +707,7 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 				return fmt.Errorf("%s chunk gzip header invalid", chunk.Policy)
 			}
 			reader.Multistream(false)
-			raw, err := io.ReadAll(reader)
+			raw, err := io.ReadAll(io.LimitReader(reader, int64(chunk.RawSize)+1))
 			closeErr := reader.Close()
 			canonicalGzipBytes, canonicalErr := canonicalGzip(raw)
 			if err != nil || closeErr != nil || compressedReader.Len() != 0 || canonicalErr != nil || !bytes.Equal(canonicalGzipBytes, gzipBytes) || len(raw) != chunk.RawSize || digestHex(raw) != chunk.RawSHA256 {
@@ -613,7 +717,16 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 			if err != nil || transcriptWorkFromVector(decoded.Vector) != chunk.EventCount {
 				return fmt.Errorf("%s chunk transcript reduction failed", chunk.Policy)
 			}
+			if err := verifyReducedTranscript(panel, role, chunk.Policy, decoded, manifests[index], report.Payload.Execution); err != nil {
+				return err
+			}
 		}
+	}
+	if totalManifestEvents(manifests[0])+totalManifestEvents(manifests[1]) > 16000000 || totalManifestRaw(manifests[0])+totalManifestRaw(manifests[1]) > 2147483648 || totalManifestGzip(manifests[0])+totalManifestGzip(manifests[1]) > 2148000000 {
+		return fmt.Errorf("%s evidence bundle exceeds a preregistered cap", panel)
+	}
+	if manifests[0].AcquisitionEventCount != manifests[1].AcquisitionEventCount || manifests[0].AcquisitionWork != manifests[1].AcquisitionWork || manifests[0].AcquisitionVector != manifests[1].AcquisitionVector || report.Payload.Execution.AcquisitionWork != manifests[0].AcquisitionWork || report.Payload.Execution.AcquisitionVector != manifests[0].AcquisitionVector {
+		return fmt.Errorf("%s acquisition reduction differs across evidence surfaces", panel)
 	}
 	for index := range manifests[0].Policies {
 		if manifests[0].Policies[index].RawSHA256 != manifests[1].Policies[index].RawSHA256 || manifests[0].Policies[index].GzipSHA256 != manifests[1].Policies[index].GzipSHA256 {
@@ -621,6 +734,56 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 		}
 	}
 	return nil
+}
+
+func verifyReducedTranscript(panel, role, policy string, decoded TranscriptBundle, manifest ExecutionManifest, semantic SemanticPanel) error {
+	taskCount := map[string]int{"development": DevelopmentTaskCount, "validation": ValidationTaskCount, "locked": LockedTaskCount}[panel]
+	if taskCount == 0 || semantic.Panel != panel {
+		return fmt.Errorf("%s %s transcript has unknown panel", panel, policy)
+	}
+	var semanticPolicy *PolicyExecution
+	for index := range semantic.Policies {
+		if semantic.Policies[index].Policy == policy {
+			semanticPolicy = &semantic.Policies[index]
+			break
+		}
+	}
+	if semanticPolicy == nil || len(semanticPolicy.Tasks) != taskCount {
+		return fmt.Errorf("%s %s report task surface is incomplete", panel, policy)
+	}
+	taskVectors := make([][12]int64, taskCount)
+	var acquisition [12]int64
+	for _, event := range decoded.Events {
+		if event.TaskOrdinal&0x80000000 != 0 {
+			if policy != "nous-generalized" || !legalAcquisitionOrdinal(event.TaskOrdinal) {
+				return fmt.Errorf("%s %s contains illegal acquisition ordinal %#x", panel, policy, event.TaskOrdinal)
+			}
+			acquisition[event.Category-1]++
+			continue
+		}
+		if int(event.TaskOrdinal) >= taskCount {
+			return fmt.Errorf("%s %s contains out-of-range task ordinal %d", panel, policy, event.TaskOrdinal)
+		}
+		taskVectors[event.TaskOrdinal][event.Category-1]++
+	}
+	for ordinal, vector := range taskVectors {
+		task := semanticPolicy.Tasks[ordinal]
+		if task.Ordinal != ordinal || task.Vector != vector || task.Work != transcriptWorkFromVector(vector) {
+			return fmt.Errorf("%s %s %s task %d is not reconstructed by its transcript", panel, role, policy, ordinal)
+		}
+	}
+	if policy == "nous-generalized" {
+		if acquisition != manifest.AcquisitionVector || transcriptWorkFromVector(acquisition) != manifest.AcquisitionEventCount || manifest.AcquisitionWork != manifest.AcquisitionEventCount {
+			return fmt.Errorf("%s %s acquisition fields are not reconstructed by the learned transcript", panel, role)
+		}
+	} else if transcriptWorkFromVector(acquisition) != 0 {
+		return fmt.Errorf("%s %s carries forbidden acquisition events", panel, policy)
+	}
+	return nil
+}
+
+func legalAcquisitionOrdinal(ordinal uint32) bool {
+	return ordinal == 0xffffffff || ordinal >= 0x80000000 && ordinal <= 0x80000004 || ordinal >= 0x90000000 && ordinal <= 0x90000018
 }
 
 func allMechanicalGates(gates MechanicalGates) bool {
@@ -636,12 +799,30 @@ func transcriptWorkFromVector(vector [12]int64) int64 {
 }
 
 func gitOutput(repoRoot string, args ...string) (string, error) {
-	command := exec.Command("git", append([]string{"-C", repoRoot}, args...)...)
+	command := gitCommand(repoRoot, args...)
 	output, err := command.Output()
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func gitCommand(repoRoot string, args ...string) *exec.Cmd {
+	gitArgs := []string{"-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.hooksPath=/dev/null", "-C", repoRoot}
+	command := exec.Command("git", append(gitArgs, args...)...)
+	environment := make([]string, 0, len(os.Environ())+3)
+	for _, entry := range os.Environ() {
+		name := entry
+		if separator := strings.IndexByte(entry, '='); separator >= 0 {
+			name = entry[:separator]
+		}
+		if strings.HasPrefix(name, "GIT_") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	command.Env = append(environment, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_OPTIONAL_LOCKS=0")
+	return command
 }
 
 func reportPath(repoRoot, panel string) string {

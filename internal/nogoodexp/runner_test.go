@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/chazu/nous/internal/nogoodbaseline"
 	"github.com/chazu/nous/internal/nogoodfixture"
 )
 
@@ -52,6 +53,46 @@ func TestCompletePolicyMatrixOnUtilitySmokePanel(t *testing.T) {
 		if got, want := reset.Tasks[index].Work, noArtifact.Tasks[index].Work+54; got != want {
 			t.Fatalf("reset task %d work = %d, want fresh-profile work %d", smoke[index].Ordinal, got, want)
 		}
+	}
+}
+
+func TestBridgeRootPrefixIsByteIdenticalToStandaloneMACCBJ(t *testing.T) {
+	tasks, err := nogoodfixture.DevelopmentPanel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := tasks[0]
+	bridge, err := NewBridgeExecution("../../domains", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disposition, err := bridge.Consider(task.ProblemJSON, task.Decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridgeEvents, err := bridgeTranscript(uint32(task.Ordinal), disposition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	standalone, err := nogoodbaseline.MACCBJ(task.ProblemJSON, nogoodbaseline.Literal{Variable: task.Decision.Variable, Color: task.Decision.Color})
+	if err != nil {
+		t.Fatal(err)
+	}
+	standaloneEvents, err := baselineTranscript(uint32(task.Ordinal), standalone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := 3 + 2*(2-1)
+	left, err := EncodeTranscript(bridgeEvents[:prefix])
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := EncodeTranscript(standaloneEvents[:prefix])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(left.Raw, right.Raw) {
+		t.Fatalf("bridge/standalone root prefix differs: %s", describeTranscriptDifference(left.Raw, right.Raw, firstDifferentByte(left.Raw, right.Raw)))
 	}
 }
 

@@ -322,7 +322,7 @@ units: [
 					0 list-of "roleCandidates" !
 					"anchorDomainCount" @ 2 = "anchorDomain" @ "blocked" @ list-contains and
 					if
-						8 iota each
+						"request" @ "variableCount" get-slot iota each
 							it "variable" !
 							"variable" @ "anchor" @ !=
 							if
