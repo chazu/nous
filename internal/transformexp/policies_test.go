@@ -19,6 +19,13 @@ func TestSixPoliciesExposeExpectedSemanticControls(t *testing.T) {
 		if got := results[NousRefine]; got.Terminal != "completed" || got.HeldoutCorrect != 8 || got.FalseApplications != 0 {
 			t.Fatalf("family %d nous=%+v", family, got)
 		}
+		nous := results[NousRefine]
+		if len(nous.Transcript.Raw) == 0 || !nous.HeldoutStoreUnchanged {
+			t.Fatalf("family %d nous evidence/store boundary=%+v", family, nous)
+		}
+		if _, err := reduceTransformTranscript(nous.Transcript.Raw, policyManifestDigest(c, NousRefine)); err != nil {
+			t.Fatalf("family %d nous transcript: %v", family, err)
+		}
 		if got := results[PositiveLGG]; got.Terminal != "completed" || got.HeldoutCorrect >= 8 || got.FalseApplications == 0 {
 			t.Fatalf("family %d lgg=%+v", family, got)
 		}

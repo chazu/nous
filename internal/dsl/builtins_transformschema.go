@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,7 @@ func init() {
 		"ts-program-apply":      bTSProgramApply,
 		"ts-refine":             bTSRefine,
 		"ts-candidate-allocate": bTSCandidateAllocate,
+		"ts-output-compare":     bTSOutputCompare,
 		"ts-digest":             bTSDigest,
 		"ts-node-facts":         bTSNodeFacts,
 		"ts-parent-facts":       bTSParentFacts,
@@ -76,6 +78,10 @@ var transformMeters = struct {
 }{items: map[string]*transformMeter{}}
 
 func RegisterTransformMeter(token string) error {
+	return RegisterTransformMeterWithRecords(token, nil)
+}
+
+func RegisterTransformMeterWithRecords(token string, records []TransformMeterRecord) error {
 	if token == "" {
 		return errors.New("empty transformation meter token")
 	}
@@ -84,8 +90,22 @@ func RegisterTransformMeter(token string) error {
 	if transformMeters.items[token] != nil {
 		return errors.New("duplicate transformation meter token")
 	}
-	transformMeters.items[token] = &transformMeter{}
+	cloned := make([]TransformMeterRecord, len(records))
+	for i, record := range records {
+		cloned[i] = record
+		cloned[i].Inputs = cloneTransformBytes(record.Inputs)
+		cloned[i].Outputs = cloneTransformBytes(record.Outputs)
+	}
+	transformMeters.items[token] = &transformMeter{records: cloned}
 	return nil
+}
+
+func cloneTransformBytes(values [][]byte) [][]byte {
+	out := make([][]byte, len(values))
+	for i := range values {
+		out[i] = slices.Clone(values[i])
+	}
+	return out
 }
 
 func UnregisterTransformMeter(token string) {
@@ -137,7 +157,7 @@ func recordTransform(vm *VM, operation, outcome string, category int, inputs, ou
 	if experiment == nil || experiment.GetString("meterToken") == "" {
 		return nil
 	}
-	phase := map[string]string{"tsAcquire": "acquire", "tsRefine": "target", "tsClose": "training-validate"}[vm.CurrentTask.SlotName]
+	phase := map[string]string{"tsAcquire": "acquire", "tsRefine": "target", "tsClose": "training-validate", "tsHeldout": "heldout"}[vm.CurrentTask.SlotName]
 	if vm.CurrentTask.SlotName == "tsEvaluateFactor" {
 		phase = current.GetString("stage")
 	}
@@ -151,13 +171,6 @@ func recordTransform(vm *VM, operation, outcome string, category int, inputs, ou
 	if m == nil {
 		return errors.New("unknown transformation meter")
 	}
-	clone := func(values [][]byte) [][]byte {
-		out := make([][]byte, len(values))
-		for i := range values {
-			out[i] = slices.Clone(values[i])
-		}
-		return out
-	}
 	subject, object := "", ""
 	if len(inputs) > 0 {
 		subject = transformDigest(inputs[0])
@@ -166,7 +179,7 @@ func recordTransform(vm *VM, operation, outcome string, category int, inputs, ou
 		object = transformDigest(outputs[0])
 	}
 	m.Lock()
-	m.records = append(m.records, TransformMeterRecord{uint8(category), operation, subject, object, outcome, phase, clone(inputs), clone(outputs)})
+	m.records = append(m.records, TransformMeterRecord{uint8(category), operation, subject, object, outcome, phase, cloneTransformBytes(inputs), cloneTransformBytes(outputs)})
 	m.Unlock()
 	return nil
 }
@@ -237,6 +250,29 @@ func bTSSchemaApply(vm *VM) error {
 	return nil
 }
 
+func ExecuteTransformSchemaApplication(vm *VM, forestBytes, schemaBytes []byte) (string, []byte, error) {
+	f, err := transformschema.ParseForest(forestBytes)
+	if err != nil {
+		return "invalid-input", nil, err
+	}
+	s, err := transformschema.ParseSchema(schemaBytes)
+	if err != nil {
+		return "invalid-input", nil, err
+	}
+	r, err := s.Apply(f)
+	if err != nil {
+		return "invalid-input", nil, err
+	}
+	var output []byte
+	if r.Output != nil {
+		output, _ = r.Output.CanonicalJSON()
+	}
+	if err := recordSchemaApplication(vm, f, s, r, forestBytes, schemaBytes, output); err != nil {
+		return "invalid-input", nil, err
+	}
+	return r.Terminal, output, nil
+}
+
 func recordSchemaApplication(vm *VM, f transformschema.Forest, s transformschema.Schema, r transformschema.Result, forestBytes, schemaBytes, outputBytes []byte) error {
 	if vm.CurrentTask == nil {
 		return nil
@@ -302,7 +338,7 @@ func recordSchemaApplication(vm *VM, f transformschema.Forest, s transformschema
 			return err
 		}
 	}
-	finalEventCount := len(f.Nodes) + len(parentNodes) + len(targetNodes) + predicates + 2*len(r.Certificate.Edits) + 1 + 1 + len(f.Nodes)
+	finalEventCount := len(f.Nodes) + len(parentNodes) + len(targetNodes) + predicates + 2*len(r.Certificate.Edits) + 1 + 1
 	last := start + finalEventCount - 1
 	resultWire, _ := json.Marshal([]any{"transform-result/v1", r.Terminal, transformDigest(outputBytes)})
 	guards := make([]bool, predicates)
@@ -317,12 +353,71 @@ func recordSchemaApplication(vm *VM, f transformschema.Forest, s transformschema
 	if err := recordTransform(vm, "evidence-link", "attached", 10, [][]byte{resultWire}, nil); err != nil {
 		return err
 	}
-	for range f.Nodes {
-		if err := recordTransform(vm, "output-compare", "equal", 9, [][]byte{outputBytes, outputBytes}, [][]byte{transformAtom("boolean", true)}); err != nil {
+	return nil
+}
+
+func bTSOutputCompare(vm *VM) error {
+	rightValue, leftValue := vm.pop(), vm.pop()
+	if leftValue.Kind() != VString || rightValue.Kind() != VString {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	leftBytes, rightBytes := []byte(leftValue.AsString()), []byte(rightValue.AsString())
+	left, leftErr := transformschema.ParseForest(leftBytes)
+	right, rightErr := transformschema.ParseForest(rightBytes)
+	if leftErr != nil || rightErr != nil || len(left.Nodes) != len(right.Nodes) {
+		if err := recordTransform(vm, "output-compare", "invalid-input", 9, [][]byte{leftBytes, rightBytes}, nil); err != nil {
+			return err
+		}
+		vm.push(BoolVal(false))
+		return nil
+	}
+	equal := true
+	for i := range left.Nodes {
+		leftNode, _ := json.Marshal(left.Nodes[i])
+		rightNode, _ := json.Marshal(right.Nodes[i])
+		nodeEqual := bytes.Equal(leftNode, rightNode)
+		if !nodeEqual {
+			equal = false
+		}
+		outcome := "different"
+		if nodeEqual {
+			outcome = "equal"
+		}
+		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", nodeEqual)}); err != nil {
 			return err
 		}
 	}
+	vm.push(BoolVal(equal))
 	return nil
+}
+
+func CompareTransformOutputs(vm *VM, leftBytes, rightBytes []byte) (bool, error) {
+	left, leftErr := transformschema.ParseForest(leftBytes)
+	right, rightErr := transformschema.ParseForest(rightBytes)
+	if leftErr != nil || rightErr != nil || len(left.Nodes) != len(right.Nodes) {
+		if err := recordTransform(vm, "output-compare", "invalid-input", 9, [][]byte{leftBytes, rightBytes}, nil); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	equal := true
+	for i := range left.Nodes {
+		leftNode, _ := json.Marshal(left.Nodes[i])
+		rightNode, _ := json.Marshal(right.Nodes[i])
+		nodeEqual := bytes.Equal(leftNode, rightNode)
+		if !nodeEqual {
+			equal = false
+		}
+		outcome := "different"
+		if nodeEqual {
+			outcome = "equal"
+		}
+		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", nodeEqual)}); err != nil {
+			return false, err
+		}
+	}
+	return equal, nil
 }
 
 func transformMeterLength(vm *VM) int {

@@ -50,7 +50,7 @@ units: [
 					"program" @ nil !=
 					if
 						"before" @ "program" @ ts-program-apply "actual" !
-						"actual" @ "after" @ =
+					"actual" @ "after" @ ts-output-compare
 						if
 							"TS.Program." "example" @ concat "programName" !
 							"programName" @ "TransformConcreteProgram" create-unit drop
@@ -412,7 +412,7 @@ units: [
 						else
 							"result" @ 0 list-get "terminal" ! "result" @ 1 list-get "output" !
 							"example" @ "kind" get-slot "positive" =
-							if "terminal" @ "applied" = "output" @ "example" @ "after" get-slot = and not if false "valid" ! then
+							if "terminal" @ "applied" = "output" @ "example" @ "after" get-slot ts-output-compare and not if false "valid" ! then
 							else
 								"abstain/request-count" "abstain/anchor" "abstain/locality" "abstain/expansion" "abstain/no-op" 5 list-of "abstentions" !
 								"abstentions" @ "terminal" @ list-contains not if false "valid" ! then
