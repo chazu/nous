@@ -51,6 +51,7 @@ type PolicyOutcome struct {
 	frozenReplayBatch     []byte
 	frozenPrograms        []byte
 	ordinal               int
+	trainingStore         []byte
 }
 
 type heldoutObservation struct {
@@ -77,6 +78,7 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 		}
 		out.acquisition = &run
 		out.frozenPrograms, _ = programBatch(run)
+		out.trainingStore, _ = run.Store.CanonicalJSON()
 		if run.Artifact != "" {
 			out.Schema = []byte(run.Store.Get(run.Artifact).GetString("schema"))
 		}
@@ -88,6 +90,7 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 			return out, err
 		}
 		out.TasksPopped, out.TrainingWork = run.TasksPopped, len(run.MeterRecords)
+		out.trainingStore, _ = run.Store.CanonicalJSON()
 		batch, err := programBatch(run)
 		if err != nil {
 			return out, err
@@ -130,6 +133,9 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 	default:
 		return out, fmt.Errorf("unknown policy %q", policy)
 	}
+	if len(out.trainingStore) == 0 {
+		out.trainingStore = baselineTrainingStore(c, out)
+	}
 	if out.Terminal != "completed" || len(out.Schema) == 0 {
 		if out.acquisition != nil {
 			run := *out.acquisition
@@ -154,6 +160,22 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 		return out, nil
 	}
 	return out, nil
+}
+
+func baselineTrainingStore(c policyCurriculum, out PolicyOutcome) []byte {
+	store := unit.NewStore()
+	state := unit.New("TransformBaselineTrainingState")
+	state.Set("isA", []string{"TransformTrainingState", "Anything"})
+	state.Set("policy", string(out.Policy))
+	state.Set("terminal", out.Terminal)
+	state.Set("applications", out.Applications)
+	state.Set("trainingDigest", digestBytes(c.Training))
+	state.Set("schemaDigest", digestBytes(out.Schema))
+	state.Set("programBatchDigest", digestBytes(out.frozenReplayBatch))
+	state.Set("eventCount", len(out.baselineEvents))
+	store.Put(state)
+	encoded, _ := store.CanonicalJSON()
+	return encoded
 }
 
 func executeHeldoutInputs(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {

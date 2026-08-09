@@ -13,8 +13,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/chazu/nous/internal/transformoracle"
 )
 
 const ReviewManifestPath = "docs/transformation-schema-implementation-reviews.json"
@@ -846,6 +849,12 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 			return err
 		}
 	}
+	primaryExecution, primaryErr := read("primary/execution-manifest.json")
+	auditExecution, auditErr := read("audit/execution-manifest.json")
+	var primaryWire, auditWire []json.RawMessage
+	if primaryErr != nil || auditErr != nil || json.Unmarshal(primaryExecution, &primaryWire) != nil || json.Unmarshal(auditExecution, &auditWire) != nil || len(primaryWire) != 3 || len(auditWire) != 3 || !bytes.Equal(primaryWire[2], auditWire[2]) {
+		return fmt.Errorf("%s primary and audit execution semantics differ", panel)
+	}
 	reviewBytes, err := read("review-authority.json")
 	if err != nil || !bytes.Equal(reviewBytes, authority.ReviewAuthority) {
 		return fmt.Errorf("%s review authority leaf mismatch", panel)
@@ -883,6 +892,15 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	if err != nil || rootErr != nil || !bytes.Equal(rebuiltCompetence, committedCompetenceRoot) {
 		return fmt.Errorf("%s competence root does not reconstruct from case leaves", panel)
 	}
+	replayedCompetence, replayErr := runTransformMicrocases()
+	if replayErr != nil || len(replayedCompetence) != len(competenceLeaves) {
+		return fmt.Errorf("%s competence microcases do not replay", panel)
+	}
+	for name, value := range replayedCompetence {
+		if !bytes.Equal(value, competenceLeaves[name]) {
+			return fmt.Errorf("%s competence microcase changed: %s", panel, name)
+		}
+	}
 	wantRows := DevelopmentCount * len(empiricalPolicies)
 	if panel == "validation" {
 		wantRows = ValidationCount * len(empiricalPolicies)
@@ -892,6 +910,24 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	}
 	if len(report.Payload.Rows) != wantRows || len(report.Payload.Limitations) != 0 {
 		return fmt.Errorf("%s report row/limitation cardinality mismatch", panel)
+	}
+	for ordinal := 0; ordinal < wantRows/len(empiricalPolicies); ordinal++ {
+		training, trainingErr := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
+		heldout, heldoutErr := read(fmt.Sprintf("fixtures/%03d/heldout.json", ordinal))
+		scorer, scorerErr := read(fmt.Sprintf("fixtures/%03d/scorer.json", ordinal))
+		ledgerBytes, ledgerErr := read(fmt.Sprintf("fixtures/%03d/acceptance.json", ordinal))
+		var ledgerWire []json.RawMessage
+		var ledgerVersion, matrixDigest string
+		var ledgerApplications int
+		var ledgerWork int64
+		var ledgerAccepted bool
+		if trainingErr != nil || heldoutErr != nil || scorerErr != nil || ledgerErr != nil || json.Unmarshal(ledgerBytes, &ledgerWire) != nil || len(ledgerWire) != 5 || json.Unmarshal(ledgerWire[0], &ledgerVersion) != nil || ledgerVersion != "transform-generator-acceptance-ledger/v1" || json.Unmarshal(ledgerWire[1], &ledgerApplications) != nil || json.Unmarshal(ledgerWire[2], &ledgerWork) != nil || json.Unmarshal(ledgerWire[3], &matrixDigest) != nil || json.Unmarshal(ledgerWire[4], &ledgerAccepted) != nil {
+			return fmt.Errorf("%s acceptance ledger %d does not decode", panel, ordinal)
+		}
+		audit, auditErr := transformoracle.AuditAcceptance(training, heldout, scorer)
+		if auditErr != nil || audit.Applications != ledgerApplications || audit.Work != ledgerWork || audit.MatrixSHA256 != matrixDigest || audit.Accepted != ledgerAccepted || !ledgerAccepted {
+			return fmt.Errorf("%s acceptance ledger %d does not independently reconstruct", panel, ordinal)
+		}
 	}
 	for index, row := range report.Payload.Rows {
 		ordinal, policyIndex := index/len(empiricalPolicies), index%len(empiricalPolicies)
@@ -913,6 +949,19 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 		if err != nil || !bytes.Equal(mustJSON(inference), mustJSON(report.Payload.Inference)) {
 			return fmt.Errorf("%s inference does not reconstruct from policy rows", panel)
 		}
+	} else {
+		pairBytes, pairErr := read("statistics/locked-pairs.json")
+		pairs, decodeErr := decodeCommittedStatisticPairs(pairBytes)
+		if pairErr != nil || decodeErr != nil {
+			return fmt.Errorf("locked statistic pairs do not decode")
+		}
+		inference, inferenceErr := computeTransformInferenceWithPairs(paired, panel, 0, pairs, 10000, 10000)
+		for index := range pairs {
+			pairs[index] = [2]uint64{}
+		}
+		if inferenceErr != nil || !bytes.Equal(mustJSON(inference), mustJSON(report.Payload.Inference)) {
+			return fmt.Errorf("locked inference does not reconstruct from committed statistic pairs")
+		}
 	}
 	if panel == "development" {
 		power, err := estimateTransformPower(paired, 2000, 2000)
@@ -926,7 +975,48 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	if err != nil || classification != report.Classification {
 		return fmt.Errorf("%s classification does not reconstruct", panel)
 	}
+	reconstructedGates := [12]bool{true, true, true, true, true, true, true, true, true, true, true, true}
+	if report.Payload.Gates != reconstructedGates {
+		return fmt.Errorf("%s committed gates do not match reconstructed evidence", panel)
+	}
 	return nil
+}
+
+func decodeCommittedStatisticPairs(data []byte) ([][2]uint64, error) {
+	var wire []json.RawMessage
+	var version string
+	var rows [][]json.RawMessage
+	if json.Unmarshal(data, &wire) != nil || len(wire) != 2 || json.Unmarshal(wire[0], &version) != nil || version != "transform-statistics-pairs/v1" || json.Unmarshal(wire[1], &rows) != nil || len(rows) != 20000 {
+		return nil, errors.New("committed statistic pair wire")
+	}
+	pairs := make([][2]uint64, len(rows))
+	for index, row := range rows {
+		var first, second string
+		if len(row) != 2 || json.Unmarshal(row[0], &first) != nil || json.Unmarshal(row[1], &second) != nil || len(first) != 16 || len(second) != 16 || !isLowerHex(first, 16) || !isLowerHex(second, 16) {
+			return nil, fmt.Errorf("committed statistic pair %d", index)
+		}
+		var err error
+		pairs[index][0], err = strconv.ParseUint(first, 16, 64)
+		if err != nil {
+			return nil, err
+		}
+		pairs[index][1], err = strconv.ParseUint(second, 16, 64)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !bytes.Equal(data, mustJSON([]any{"transform-statistics-pairs/v1", statisticPairRows(pairs)})) {
+		return nil, errors.New("committed statistic pairs are not canonical")
+	}
+	return pairs, nil
+}
+
+func statisticPairRows(pairs [][2]uint64) []any {
+	rows := make([]any, len(pairs))
+	for index, pair := range pairs {
+		rows[index] = []any{fmt.Sprintf("%016x", pair[0]), fmt.Sprintf("%016x", pair[1])}
+	}
+	return rows
 }
 
 func verifyCommittedExecution(authority repositoryAuthority, report protectedReport, role string) error {
@@ -962,10 +1052,10 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		}
 		var policy Policy
 		var ordinal, rawBytes, gzipBytes, eventCount, applications int
-		var token, premanifestDigest, chunkDigest, objectRootDigest, terminal, schemaDigest, trainingDigest, heldoutDigest string
+		var token, premanifestDigest, chunkDigest, objectRootDigest, terminal, schemaDigest, trainingStoreDigest, heldoutDigest string
 		var vector [12]int64
 		var work int64
-		targets := []any{&policy, &ordinal, &token, &premanifestDigest, &chunkDigest, &rawBytes, &gzipBytes, &eventCount, &objectRootDigest, &vector, &work, &applications, &terminal, &schemaDigest, &trainingDigest, &heldoutDigest}
+		targets := []any{&policy, &ordinal, &token, &premanifestDigest, &chunkDigest, &rawBytes, &gzipBytes, &eventCount, &objectRootDigest, &vector, &work, &applications, &terminal, &schemaDigest, &trainingStoreDigest, &heldoutDigest}
 		for field := range targets {
 			if json.Unmarshal(raw[field], targets[field]) != nil {
 				return fmt.Errorf("%s %s execution row %d field %d", panel, role, index, field)
@@ -983,8 +1073,9 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		}
 		heldoutFixture, heldoutFixtureErr := read(fmt.Sprintf("fixtures/%03d/heldout.json", ordinal))
 		queueFixture, queueFixtureErr := read(fmt.Sprintf("fixtures/%03d/queue.json", ordinal))
+		trainingFixture, trainingFixtureErr := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
 		premanifest, err := read(fmt.Sprintf("pre/%s/%s.json", policy, token))
-		if err != nil || heldoutFixtureErr != nil || queueFixtureErr != nil || digestBytes(premanifest) != premanifestDigest || verifyCommittedPremanifest(premanifest, policy, token, trainingDigest, digestBytes(heldoutFixture), digestBytes(queueFixture)) != nil {
+		if err != nil || heldoutFixtureErr != nil || queueFixtureErr != nil || trainingFixtureErr != nil || digestBytes(premanifest) != premanifestDigest || verifyCommittedPremanifest(premanifest, policy, token, digestBytes(trainingFixture), digestBytes(heldoutFixture), digestBytes(queueFixture)) != nil {
 			return fmt.Errorf("%s %s premanifest mismatch: %s", panel, role, key)
 		}
 		chunk, err := read(role + "/" + key + "/transcript.jsonl.gz")
@@ -1035,9 +1126,19 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		if artifactErr != nil || artifactDigest != schemaDigest {
 			return fmt.Errorf("%s %s frozen artifact does not reconstruct: %s", panel, role, key)
 		}
-		training, err := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
-		if err != nil || digestBytes(training) != trainingDigest {
-			return fmt.Errorf("%s %s training fixture mismatch: %s", panel, role, key)
+		trainingStore, err := read(role + "/" + key + "/training-store.json")
+		if err != nil || !canonicalJSON(trainingStore) || digestBytes(trainingStore) != trainingStoreDigest {
+			return fmt.Errorf("%s %s training Store mismatch: %s", panel, role, key)
+		}
+		trainingPrograms, programsErr := read(role + "/" + key + "/training-programs.json")
+		requiresPrograms := policy == NousRefine || policy == PositiveLGG || policy == ConcreteReplay || policy == NoEqualityGuard
+		if requiresPrograms {
+			programAudit, auditErr := transformoracle.AuditPolicy(trainingFixture, heldoutFixture, nil, trainingPrograms)
+			if programsErr != nil || auditErr != nil || !programAudit.ProgramsExact {
+				return fmt.Errorf("%s %s training programs do not independently replay: %s", panel, role, key)
+			}
+		} else if programsErr == nil {
+			return fmt.Errorf("%s %s unexpected training programs: %s", panel, role, key)
 		}
 		familyBytes, familyErr := read(fmt.Sprintf("fixtures/%03d/family.json", ordinal))
 		if familyErr != nil || !bytes.Equal(familyBytes, mustJSON([]any{"transform-family-assignment/v1", ordinal, reportRow.Family})) {

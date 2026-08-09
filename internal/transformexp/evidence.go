@@ -3,10 +3,13 @@ package transformexp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
 	"strings"
+
+	"github.com/chazu/nous/internal/transformfixturecore"
 )
 
 type evidenceLeaf struct {
@@ -34,6 +37,18 @@ func buildPanelEvidence(domainsDir, panel string, curricula []curriculum, author
 }
 
 func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][]byte, fixtureRoot []byte, count int, authority uint64, lockedPairs [][2]uint64, reviewAuthority []byte) (panelEvidence, error) {
+	if panel == "locked" {
+		if len(lockedPairs) != 20000 {
+			return panelEvidence{}, fmt.Errorf("locked statistics pair count %d", len(lockedPairs))
+		}
+		rows := make([]any, len(lockedPairs))
+		for index, pair := range lockedPairs {
+			rows[index] = []any{fmt.Sprintf("%016x", pair[0]), fmt.Sprintf("%016x", pair[1])}
+		}
+		files["statistics/locked-pairs.json"] = mustJSON([]any{"transform-statistics-pairs/v1", rows})
+	} else if len(lockedPairs) != 0 {
+		return panelEvidence{}, errors.New("statistics pairs supplied outside locked panel")
+	}
 	executionCurricula, err := decodePreparedCurricula(files, panel, count)
 	if err != nil {
 		return panelEvidence{}, err
@@ -49,11 +64,11 @@ func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][
 		}
 		files["review-authority.json"] = bytes.Clone(reviewAuthority)
 	}
-	primaryManifest, err := addExecutionEvidence(files, "primary", executionCurricula, report.Rows, artifacts.Primary)
+	primaryManifest, err := addExecutionEvidence(files, "primary", executionCurricula, report.Rows, artifacts.Primary, artifacts.PrimaryStores, artifacts.PrimaryPrograms)
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	auditManifest, err := addExecutionEvidence(files, "audit", executionCurricula, report.Rows, artifacts.Audit)
+	auditManifest, err := addExecutionEvidence(files, "audit", executionCurricula, report.Rows, artifacts.Audit, artifacts.AuditStores, artifacts.AuditPrograms)
 	if err != nil {
 		return panelEvidence{}, err
 	}
@@ -203,7 +218,7 @@ func decodePreparedCurricula(files map[string][]byte, panel string, count int) (
 	return result, nil
 }
 
-func addExecutionEvidence(files map[string][]byte, role string, curricula []curriculum, reportRows []PolicyReportRow, bundles map[string]TransformTranscriptBundle) ([]byte, error) {
+func addExecutionEvidence(files map[string][]byte, role string, curricula []curriculum, reportRows []PolicyReportRow, bundles map[string]TransformTranscriptBundle, trainingStores, trainingPrograms map[string][]byte) ([]byte, error) {
 	rowsByKey := map[string]PolicyReportRow{}
 	for _, row := range reportRows {
 		rowsByKey[fmt.Sprintf("%s/%03d", row.Policy, row.Ordinal)] = row
@@ -221,6 +236,17 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 				return nil, fmt.Errorf("missing %s bundle %s", role, key)
 			}
 			base := role + "/" + key
+			trainingStore := trainingStores[key]
+			if len(trainingStore) == 0 || !canonicalJSON(trainingStore) {
+				return nil, fmt.Errorf("missing canonical %s training Store %s", role, key)
+			}
+			files[base+"/training-store.json"] = bytes.Clone(trainingStore)
+			if programs := trainingPrograms[key]; len(programs) != 0 {
+				if _, err := transformfixturecore.ParseProgramBatch(programs); err != nil {
+					return nil, fmt.Errorf("invalid %s training programs %s", role, key)
+				}
+				files[base+"/training-programs.json"] = bytes.Clone(programs)
+			}
 			files[base+"/transcript.jsonl.gz"] = bytes.Clone(bundle.Gzip)
 			objectFiles := map[string][]byte{}
 			for digest, value := range bundle.Objects {
@@ -250,7 +276,7 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 			if err != nil {
 				return nil, fmt.Errorf("reconstruct %s heldout results %s: %w", role, key, err)
 			}
-			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, artifactDigest, digestBytes(c.Training), digestBytes(heldoutResults)})
+			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, artifactDigest, digestBytes(trainingStore), digestBytes(heldoutResults)})
 		}
 	}
 	return mustJSON([]any{"transform-execution/v1", role, rows}), nil

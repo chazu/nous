@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/dsl"
+	"github.com/chazu/nous/internal/transformbaseline"
 	"github.com/chazu/nous/internal/transformoracle"
+	"github.com/chazu/nous/internal/unit"
 	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
 )
 
@@ -99,18 +103,23 @@ func runTransformMicrocases() (map[string][]byte, error) {
 			}
 			return len(seen) == 72
 		}},
-		{"anchor-request-target", []any{"request-target", "unique"}, func() bool {
-			return apply(base, transformschema.Schema{"request-target", "definition", "local", "any", "required"}).Terminal == "applied"
+		{"anchor-bindings", []any{"three", "unique", "absent", "ambiguous"}, func() bool {
+			for _, anchor := range []string{"request-target", "from-value", "first-local"} {
+				if apply(base, transformschema.Schema{anchor, "definition", "local", "any", "required"}).Terminal != "applied" {
+					return false
+				}
+			}
+			absent := cloneBase()
+			absent.Nodes[2].From = "c"
+			ambiguous := cloneBase()
+			ambiguous.Nodes = append(ambiguous.Nodes, transformschema.Node{ID: 4, Kind: "definition", Parent: 0, Key: "e", Value: "a", Target: -1})
+			return apply(absent, transformschema.Schema{"from-value", "definition", "local", "any", "required"}).Terminal == "abstain/anchor" && apply(ambiguous, transformschema.Schema{"from-value", "definition", "local", "any", "required"}).Terminal == "abstain/anchor"
 		}},
-		{"anchor-from-value", []any{"from-value", "unique"}, func() bool {
-			return apply(base, transformschema.Schema{"from-value", "definition", "local", "any", "required"}).Terminal == "applied"
-		}},
-		{"anchor-first-local", []any{"first-local", "first"}, func() bool {
-			return apply(base, transformschema.Schema{"first-local", "definition", "local", "any", "required"}).Terminal == "applied"
-		}},
-		{"expansion-targets", []any{"definition+references", 2}, func() bool {
-			result := apply(base, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"})
-			return result.Terminal == "applied" && len(result.Certificate.Edits) == 2
+		{"expansion-modes", []any{"definition", "references", "combined"}, func() bool {
+			definition := apply(base, transformschema.Schema{"request-target", "definition", "local", "any", "required"})
+			references := apply(base, transformschema.Schema{"request-target", "references", "local", "any", "required"})
+			combined := apply(base, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"})
+			return len(definition.Certificate.Edits) == 1 && len(references.Certificate.Edits) == 1 && len(combined.Certificate.Edits) == 2
 		}},
 		{"reference-scope", []any{"local", "global"}, func() bool {
 			forest := cloneBase()
@@ -126,13 +135,25 @@ func runTransformMicrocases() (map[string][]byte, error) {
 			any := apply(forest, transformschema.Schema{"request-target", "references", "local", "any", "required"})
 			return equal.Terminal == "abstain/expansion" && any.Terminal == "applied"
 		}},
-		{"locality-noop", []any{"locality", "no-op"}, func() bool {
-			forest := cloneBase()
-			forest.Nodes[2].To = "a"
-			return apply(forest, transformschema.Schema{"request-target", "definition", "local", "any", "required"}).Terminal == "abstain/no-op"
+		{"noop-locality", []any{"no-op", "required", "none"}, func() bool {
+			noop := cloneBase()
+			noop.Nodes[2].To = "a"
+			remote := cloneBase()
+			remote.Nodes = append(remote.Nodes, transformschema.Node{ID: 4, Kind: "group", Parent: -1, Target: -1})
+			remote.Nodes[1].Parent = 4
+			required := apply(remote, transformschema.Schema{"request-target", "definition", "local", "any", "required"})
+			none := apply(remote, transformschema.Schema{"request-target", "definition", "local", "any", "none"})
+			return apply(noop, transformschema.Schema{"request-target", "definition", "local", "any", "required"}).Terminal == "abstain/no-op" && required.Terminal == "abstain/locality" && none.Terminal == "applied"
 		}},
-		{"edit-boundaries", []any{0, 1, 4, 5}, func() bool {
-			return (transformschema.Program{}).Validate() != nil && (transformschema.Program{Edits: []transformschema.Edit{{1, "b"}}}).Validate() == nil && (transformschema.Program{Edits: []transformschema.Edit{{1, "b"}, {2, "b"}, {3, "b"}, {4, "b"}}}).Validate() == nil && (transformschema.Program{Edits: []transformschema.Edit{{1, "b"}, {2, "b"}, {3, "b"}, {4, "b"}, {5, "b"}}}).Validate() != nil
+		{"expansion-boundaries", []any{0, 1, 4, 5}, func() bool {
+			zero := cloneBase()
+			zero.Nodes = zero.Nodes[:3]
+			four := cloneBase()
+			four.Nodes = append(four.Nodes, transformschema.Node{ID: 4, Kind: "reference", Parent: 0, Key: "s", Value: "a", Target: 1}, transformschema.Node{ID: 5, Kind: "reference", Parent: 0, Key: "t", Value: "a", Target: 1})
+			five := transformschema.Forest{Nodes: slices.Clone(four.Nodes)}
+			five.Nodes = append(five.Nodes, transformschema.Node{ID: 6, Kind: "reference", Parent: 0, Key: "u", Value: "a", Target: 1})
+			combined := transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}
+			return apply(zero, transformschema.Schema{"request-target", "references", "local", "any", "required"}).Terminal == "abstain/expansion" && len(apply(base, transformschema.Schema{"request-target", "definition", "local", "any", "required"}).Certificate.Edits) == 1 && len(apply(four, combined).Certificate.Edits) == 4 && apply(five, combined).Terminal == "abstain/expansion"
 		}},
 		{"alpha-child-order", []any{"reordered", "canonical"}, func() bool {
 			left, _ := base.CanonicalJSON()
@@ -141,33 +162,88 @@ func runTransformMicrocases() (map[string][]byte, error) {
 			right, _ := rightForest.CanonicalJSON()
 			return bytes.Equal(left, right)
 		}},
-		{"program-invalid", []any{"duplicate-target", "no-op"}, func() bool {
+		{"occupied-aliases", []any{"occupied", "alternate-aliases"}, func() bool {
+			forest := cloneBase()
+			forest.Nodes[1].Key, forest.Nodes[2].Key, forest.Nodes[3].Key = "service", "change", "usage"
+			forest.Nodes = append(forest.Nodes, transformschema.Node{ID: 4, Kind: "decoy", Parent: 0, Key: "occupied", Value: "c", Target: -1})
+			return apply(forest, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}).Terminal == "applied"
+		}},
+		{"primitive-edit-rejection", []any{"zero", "five", "duplicate-target", "no-op"}, func() bool {
 			duplicate := transformschema.Program{Edits: []transformschema.Edit{{1, "b"}, {1, "c"}}}
 			noOp := transformschema.Program{Edits: []transformschema.Edit{{1, "a"}}}
 			_, noOpErr := noOp.Apply(base)
-			return duplicate.Validate() != nil && noOpErr != nil
+			five := transformschema.Program{Edits: []transformschema.Edit{{1, "b"}, {2, "b"}, {3, "b"}, {4, "b"}, {5, "b"}}}
+			return (transformschema.Program{}).Validate() != nil && five.Validate() != nil && duplicate.Validate() != nil && noOpErr != nil
 		}},
-		{"wrong-context", []any{"two-requests", "abstain"}, func() bool {
+		{"wrong-context-corruption", []any{"two-requests", "remote", "digest"}, func() bool {
 			forest := cloneBase()
 			forest.Nodes = append(forest.Nodes, transformschema.Node{ID: 4, Kind: "request", Parent: 0, Key: "x", From: "a", To: "b", Target: 1})
-			return apply(forest, transformschema.Schema{"request-target", "definition", "local", "any", "required"}).Terminal == "abstain/request-count"
-		}},
-		{"oracle-parity", []any{"production", "oracle"}, func() bool {
-			forestBytes, _ := base.CanonicalJSON()
-			schema := transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}
-			schemaBytes, _ := schema.CanonicalJSON()
-			production := apply(base, schema)
-			oracle, err := transformoracle.Apply(forestBytes, schemaBytes)
-			productionBytes, _ := production.Output.CanonicalJSON()
-			return err == nil && production.Terminal == oracle.Terminal && bytes.Equal(productionBytes, oracle.Output)
-		}},
-		{"evidence-corruption", []any{"frozen-digest", "mutated-schema"}, func() bool {
 			schema := transformschema.Schema{"request-target", "definition", "local", "any", "required"}
-			original, _ := schema.CanonicalJSON()
-			commitment := digestBytes(original)
+			encoded, _ := schema.CanonicalJSON()
 			schema.Locality = "none"
 			mutated, _ := schema.CanonicalJSON()
-			return commitment != digestBytes(mutated)
+			return apply(forest, transformschema.Schema{"request-target", "definition", "local", "any", "required"}).Terminal == "abstain/request-count" && digestBytes(encoded) != digestBytes(mutated)
+		}},
+		{"concrete-program-recovery", []any{"local-facts", "no-pair-helper"}, func() bool {
+			program := transformschema.Program{Edits: []transformschema.Edit{{Target: 1, Value: "b"}, {Target: 3, Value: "b"}}}
+			programBytes, err := program.CanonicalJSON()
+			if err != nil {
+				return false
+			}
+			parsed, err := transformschema.ParseProgram(programBytes)
+			output, applyErr := parsed.Apply(base)
+			want := apply(base, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"})
+			outputBytes, _ := output.CanonicalJSON()
+			wantBytes, _ := want.Output.CanonicalJSON()
+			return err == nil && applyErr == nil && bytes.Equal(outputBytes, wantBytes)
+		}},
+		{"ties-evidence-barriers", []any{"mdl-tie", "five-stages"}, func() bool {
+			left := transformschema.Schema{"request-target", "definition", "local", "equals-from", "none"}
+			right := transformschema.Schema{"request-target", "references", "global", "any", "none"}
+			partial := transformschema.Partial{}
+			for _, value := range []string{"definition", "request-target", "local", "any", "required"} {
+				var err error
+				partial, err = partial.Refine(value)
+				if err != nil {
+					return false
+				}
+			}
+			return schemaDescription(left) == schemaDescription(right) && partial.Stage == 5
+		}},
+		{"application-prefixes", []any{"standalone", "driver", "byte-identical"}, func() bool {
+			forestBytes, _ := base.CanonicalJSON()
+			schemaBytes, _ := (transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}).CanonicalJSON()
+			_, standalone, err := transformbaseline.ApplySchemaMeteredAt(forestBytes, schemaBytes, "heldout", 0)
+			if err != nil {
+				return false
+			}
+			store := unit.NewStore()
+			experiment := unit.New("TransformCompetenceExperiment")
+			experiment.Set("meterToken", "transform-competence-prefix")
+			store.Put(experiment)
+			if dsl.RegisterTransformMeter("transform-competence-prefix") != nil {
+				return false
+			}
+			vm := dsl.NewVM(store, agenda.New(), nil)
+			vm.CurrentTask = &agenda.Task{UnitName: experiment.Name, SlotName: "tsHeldout"}
+			_, _, executeErr := dsl.ExecuteTransformSchemaApplication(vm, forestBytes, schemaBytes)
+			records, snapshotErr := dsl.TransformMeterSnapshot("transform-competence-prefix")
+			dsl.UnregisterTransformMeter("transform-competence-prefix")
+			driver := baselineEventsFromTransformMeter(records)
+			standalonePrefix, driverPrefix := len(standalone), len(driver)
+			for index, event := range standalone {
+				if event.Operation == "schema-application" {
+					standalonePrefix = index
+					break
+				}
+			}
+			for index, event := range driver {
+				if event.Operation == "schema-application" {
+					driverPrefix = index
+					break
+				}
+			}
+			return executeErr == nil && snapshotErr == nil && standalonePrefix == driverPrefix && bytes.Equal(mustJSON(standalone[:standalonePrefix]), mustJSON(driver[:driverPrefix]))
 		}},
 	}
 	files := map[string][]byte{}

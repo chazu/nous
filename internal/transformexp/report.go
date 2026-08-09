@@ -60,8 +60,12 @@ type AcceptanceDiagnostics struct {
 }
 
 type panelArtifacts struct {
-	Primary map[string]TransformTranscriptBundle
-	Audit   map[string]TransformTranscriptBundle
+	Primary         map[string]TransformTranscriptBundle
+	Audit           map[string]TransformTranscriptBundle
+	PrimaryStores   map[string][]byte
+	AuditStores     map[string][]byte
+	PrimaryPrograms map[string][]byte
+	AuditPrograms   map[string][]byte
 }
 
 func (r SafePanelReport) JSON() ([]byte, error) {
@@ -92,7 +96,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 		return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("empty panel")
 	}
 	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true, Conservation: true, OracleParity: true, ProgramsExact: true, ApplicationsExact: true, ArtifactFrozen: true, HeldoutSealed: true, GeneratorAcceptance: AcceptanceDiagnostics{Exact: true}, OracleAcceptance: AcceptanceDiagnostics{Exact: true}}
-	artifacts := panelArtifacts{Primary: map[string]TransformTranscriptBundle{}, Audit: map[string]TransformTranscriptBundle{}}
+	artifacts := panelArtifacts{Primary: map[string]TransformTranscriptBundle{}, Audit: map[string]TransformTranscriptBundle{}, PrimaryStores: map[string][]byte{}, AuditStores: map[string][]byte{}, PrimaryPrograms: map[string][]byte{}, AuditPrograms: map[string][]byte{}}
 	var generatorRows, oracleRows []any
 	for index, c := range curricula {
 		if c.Ordinal != index {
@@ -197,6 +201,10 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			key := fmt.Sprintf("%s/%03d", policy, c.Ordinal)
 			artifacts.Primary[key] = outcome.Transcript
 			artifacts.Audit[key] = audit.Transcript
+			artifacts.PrimaryStores[key] = bytes.Clone(outcome.trainingStore)
+			artifacts.AuditStores[key] = bytes.Clone(audit.trainingStore)
+			artifacts.PrimaryPrograms[key] = bytes.Clone(outcome.frozenPrograms)
+			artifacts.AuditPrograms[key] = bytes.Clone(audit.frozenPrograms)
 			work := int64(outcome.TrainingWork)
 			transcriptDigest := ""
 			if len(outcome.Transcript.Raw) != 0 {
