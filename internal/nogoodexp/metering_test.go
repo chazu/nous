@@ -2,6 +2,7 @@ package nogoodexp
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/chazu/nous/internal/nogoodfixture"
@@ -144,5 +145,14 @@ func TestAcquisitionTranscriptUsesOnlyClosedPhaseOrdinals(t *testing.T) {
 	}
 	if !seen[0xffffffff] {
 		t.Fatal("missing bridge-profile phase ordinal")
+	}
+	for _, event := range markRecomputedAcquisition(events, 7) {
+		named := false
+		for _, operand := range event.Operands {
+			named = named || strings.HasPrefix(operand.Text, "recomputed-acquisition/")
+		}
+		if !named || event.TaskOrdinal != 7 {
+			t.Fatalf("recomputed acquisition event lacks closed phase identity: %#v", event)
+		}
 	}
 }

@@ -681,7 +681,7 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 		if digestHex(manifestBytes) != wantDigest || json.Unmarshal(manifestBytes, &manifests[index]) != nil || manifests[index].ExecutionRole != role || len(manifests[index].Policies) != PolicyCount {
 			return fmt.Errorf("%s %s execution manifest is invalid", panel, role)
 		}
-		if manifests[index].AcquisitionEventCount < 0 || manifests[index].AcquisitionWork != manifests[index].AcquisitionEventCount || totalManifestEvents(manifests[index]) < 0 || totalManifestEvents(manifests[index]) > 8000000 || totalManifestRaw(manifests[index]) < 0 || totalManifestRaw(manifests[index]) > 1073741824 || totalManifestGzip(manifests[index]) < 0 || totalManifestGzip(manifests[index]) > 1074000000 {
+		if manifests[index].AcquisitionEventCount < 0 || manifests[index].AcquisitionWork != manifests[index].AcquisitionEventCount || validateExecutionManifestCaps(manifests[index]) != nil {
 			return fmt.Errorf("%s %s execution manifest exceeds a preregistered cap", panel, role)
 		}
 		canonicalManifest, _ := canonicalJSON(manifests[index])
@@ -732,6 +732,22 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 		if manifests[0].Policies[index].RawSHA256 != manifests[1].Policies[index].RawSHA256 || manifests[0].Policies[index].GzipSHA256 != manifests[1].Policies[index].GzipSHA256 {
 			return fmt.Errorf("%s dual transcript hash mismatch at policy %d", panel, index)
 		}
+	}
+	return nil
+}
+
+func validateExecutionManifestCaps(manifest ExecutionManifest) error {
+	var events, raw, compressed int64
+	for _, chunk := range manifest.Policies {
+		if chunk.EventCount < 0 || chunk.EventCount > 8000000 || chunk.RawSize < transcriptHeaderSize || int64(chunk.RawSize) > 1073741824 || chunk.GzipSize < 0 || int64(chunk.GzipSize) > 1074000000 {
+			return fmt.Errorf("chunk exceeds an individual transcript cap")
+		}
+		if events > 8000000-chunk.EventCount || raw > 1073741824-int64(chunk.RawSize) || compressed > 1074000000-int64(chunk.GzipSize) {
+			return fmt.Errorf("execution manifest aggregate exceeds a transcript cap")
+		}
+		events += chunk.EventCount
+		raw += int64(chunk.RawSize)
+		compressed += int64(chunk.GzipSize)
 	}
 	return nil
 }

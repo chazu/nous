@@ -176,14 +176,30 @@ func markRecomputedAcquisition(events []TranscriptEvent, taskOrdinal uint32) []T
 	out := slices.Clone(events)
 	for index := range out {
 		out[index].TaskOrdinal = taskOrdinal
-		for operandIndex := range out[index].Operands {
+		operationOperands := map[uint8][]int{
+			1: {4}, 2: {1}, 3: {3}, 4: {2}, 5: {2}, 6: {4}, 7: {2, 4}, 8: {3, 5},
+			9: {2, 5}, 10: {2, 5}, 11: {0}, 16: {1}, 18: {3},
+		}[out[index].Code]
+		for _, operandIndex := range operationOperands {
 			operand := &out[index].Operands[operandIndex]
-			if !operand.Absent && !operand.Numeric && operand.Text != "" && (strings.Contains(operand.Text, "preflight") || strings.Contains(operand.Text, "read") || strings.Contains(operand.Text, "write") || strings.Contains(operand.Text, "check") || strings.Contains(operand.Text, "proposal") || strings.Contains(operand.Text, "comparison") || strings.Contains(operand.Text, "enqueue") || strings.Contains(operand.Text, "dequeue") || strings.Contains(operand.Text, "dispatch") || strings.Contains(operand.Text, "construct")) {
-				operand.Text = "recomputed-acquisition/" + operand.Text
+			if !operand.Absent && !operand.Numeric && operand.Text != "" {
+				operand.Text = recomputedOperationID(operand.Text)
 			}
 		}
 	}
 	return out
+}
+
+func recomputedOperationID(operation string) string {
+	const prefix = "recomputed-acquisition/"
+	if strings.HasPrefix(operation, prefix) {
+		return operation
+	}
+	value := prefix + operation
+	if len(value) <= 128 {
+		return value
+	}
+	return prefix + "sha256:" + digestBytes([]byte(operation))
 }
 
 func transcriptVector(events []TranscriptEvent) (vector [12]int64) {
