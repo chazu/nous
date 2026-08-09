@@ -755,6 +755,11 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 			return fmt.Errorf("%s report digest mismatch at %s", panel, check.Path)
 		}
 	}
+	for _, role := range []string{"primary", "audit"} {
+		if err := verifyCommittedExecution(authority, report, role); err != nil {
+			return err
+		}
+	}
 	reviewBytes, err := read("review-authority.json")
 	if err != nil || !bytes.Equal(reviewBytes, authority.ReviewAuthority) {
 		return fmt.Errorf("%s review authority leaf mismatch", panel)
@@ -813,6 +818,117 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	return nil
 }
 
+func verifyCommittedExecution(authority repositoryAuthority, report protectedReport, role string) error {
+	panel := report.Payload.Panel
+	base := transcriptPath(authority.Root, panel)
+	read := func(name string) ([]byte, error) {
+		return readCommittedBlob(authority.Root, authority.Head, relativeTo(authority.Root, filepath.Join(base, filepath.FromSlash(name))))
+	}
+	manifestBytes, err := read(role + "/execution-manifest.json")
+	if err != nil || !canonicalJSON(manifestBytes) {
+		return fmt.Errorf("%s %s execution manifest is not canonical", panel, role)
+	}
+	wantManifestDigest := report.Payload.PrimaryManifest
+	if role == "audit" {
+		wantManifestDigest = report.Payload.AuditManifest
+	}
+	if digestBytes(manifestBytes) != wantManifestDigest {
+		return fmt.Errorf("%s %s execution manifest digest mismatch", panel, role)
+	}
+	var wire []json.RawMessage
+	var version, gotRole string
+	var rows [][]json.RawMessage
+	if json.Unmarshal(manifestBytes, &wire) != nil || len(wire) != 3 || json.Unmarshal(wire[0], &version) != nil || version != "transform-execution/v1" || json.Unmarshal(wire[1], &gotRole) != nil || gotRole != role || json.Unmarshal(wire[2], &rows) != nil || len(rows) != len(report.Payload.Rows) {
+		return fmt.Errorf("%s %s execution manifest shape mismatch", panel, role)
+	}
+	reportRows := map[string]PolicyReportRow{}
+	for _, row := range report.Payload.Rows {
+		reportRows[fmt.Sprintf("%s/%03d", row.Policy, row.Ordinal)] = row
+	}
+	for index, raw := range rows {
+		if len(raw) != 16 {
+			return fmt.Errorf("%s %s execution row %d width", panel, role, index)
+		}
+		var policy Policy
+		var ordinal, rawBytes, gzipBytes, eventCount, applications int
+		var token, premanifestDigest, chunkDigest, objectRootDigest, terminal, schemaDigest, trainingDigest, heldoutDigest string
+		var vector [12]int64
+		var work int64
+		targets := []any{&policy, &ordinal, &token, &premanifestDigest, &chunkDigest, &rawBytes, &gzipBytes, &eventCount, &objectRootDigest, &vector, &work, &applications, &terminal, &schemaDigest, &trainingDigest, &heldoutDigest}
+		for field := range targets {
+			if json.Unmarshal(raw[field], targets[field]) != nil {
+				return fmt.Errorf("%s %s execution row %d field %d", panel, role, index, field)
+			}
+		}
+		wantPolicy := empiricalPolicies[index/(len(rows)/len(empiricalPolicies))]
+		wantOrdinal := index % (len(rows) / len(empiricalPolicies))
+		if policy != wantPolicy || ordinal != wantOrdinal || len(token) != 16 || !isLowerHex(premanifestDigest, 64) || !isLowerHex(chunkDigest, 64) || !isLowerHex(objectRootDigest, 64) || rawBytes <= 0 || gzipBytes <= 0 || eventCount <= 0 || work <= 0 || applications < 0 || applications > ApplicationsPerPolicy {
+			return fmt.Errorf("%s %s execution row %d identity", panel, role, index)
+		}
+		key := fmt.Sprintf("%s/%03d", policy, ordinal)
+		reportRow, exists := reportRows[key]
+		if !exists {
+			return fmt.Errorf("%s %s execution row has no report row: %s", panel, role, key)
+		}
+		premanifest, err := read(fmt.Sprintf("pre/%s/%s.json", policy, token))
+		if err != nil || digestBytes(premanifest) != premanifestDigest {
+			return fmt.Errorf("%s %s premanifest mismatch: %s", panel, role, key)
+		}
+		chunk, err := read(role + "/" + key + "/transcript.jsonl.gz")
+		if err != nil || len(chunk) != gzipBytes || digestBytes(chunk) != chunkDigest {
+			return fmt.Errorf("%s %s transcript chunk mismatch: %s", panel, role, key)
+		}
+		rawTranscript, err := decodeTransformGzip(chunk)
+		if err != nil || len(rawTranscript) != rawBytes || bytes.Count(rawTranscript, []byte{'\n'}) != eventCount {
+			return fmt.Errorf("%s %s transcript framing mismatch: %s", panel, role, key)
+		}
+		objectDirectory := role + "/" + key + "/objects"
+		objectPrefix := relativeTo(authority.Root, filepath.Join(base, filepath.FromSlash(objectDirectory))) + "/"
+		tracked, err := gitOutput(authority.Root, "ls-tree", "-r", "--name-only", authority.Head, "--", strings.TrimSuffix(objectPrefix, "/"))
+		if err != nil {
+			return err
+		}
+		objects := map[string][]byte{}
+		objectFiles := map[string][]byte{}
+		for _, repositoryPath := range strings.Split(tracked, "\n") {
+			if repositoryPath == "" {
+				continue
+			}
+			if !strings.HasPrefix(repositoryPath, objectPrefix) || !strings.HasSuffix(repositoryPath, ".json") {
+				return fmt.Errorf("%s %s invalid object path: %s", panel, role, repositoryPath)
+			}
+			relative := strings.TrimPrefix(repositoryPath, relativeTo(authority.Root, base)+"/")
+			value, err := read(relative)
+			if err != nil {
+				return err
+			}
+			name := strings.TrimSuffix(filepath.Base(repositoryPath), ".json")
+			if digestBytes(value) != name {
+				return fmt.Errorf("%s %s object filename digest mismatch", panel, role)
+			}
+			objects[name] = value
+			objectFiles[relative] = value
+		}
+		objectRoot, err := read(role + "/" + key + "/object-root.json")
+		rebuiltRoot, rebuildErr := canonicalEvidenceRoot("transform-objects/v1", "", objectFiles)
+		if err != nil || rebuildErr != nil || !bytes.Equal(objectRoot, rebuiltRoot) || digestBytes(objectRoot) != objectRootDigest {
+			return fmt.Errorf("%s %s object root mismatch: %s", panel, role, key)
+		}
+		reduced, err := reduceTransformTranscript(rawTranscript, objects, premanifestDigest)
+		if err != nil || reduced.Vector != vector || reduced.Work != work || reduced.Applications != applications || reduced.Terminal != terminal {
+			return fmt.Errorf("%s %s transcript does not reduce to manifest: %s", panel, role, key)
+		}
+		training, err := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
+		if err != nil || digestBytes(training) != trainingDigest {
+			return fmt.Errorf("%s %s training fixture mismatch: %s", panel, role, key)
+		}
+		if reportRow.Work != work || reportRow.Applications != applications || reportRow.Terminal != terminal || reportRow.SchemaSHA256 != schemaDigest || digestBytes(mustJSON([]any{reportRow.HeldoutCorrectBits, reportRow.FalseApplications})) != heldoutDigest {
+			return fmt.Errorf("%s %s report row does not reconstruct: %s", panel, role, key)
+		}
+	}
+	return nil
+}
+
 func verifyGraphBlobs(authority repositoryAuthority, panel string, graph []byte) error {
 	var wire []json.RawMessage
 	if json.Unmarshal(graph, &wire) != nil || len(wire) != 3 {
@@ -824,6 +940,7 @@ func verifyGraphBlobs(authority repositoryAuthority, panel string, graph []byte)
 		return fmt.Errorf("invalid evidence graph identity")
 	}
 	previous := ""
+	files := map[string][]byte{}
 	for _, leaf := range leaves {
 		var path, digest, mode string
 		var size int
@@ -834,7 +951,39 @@ func verifyGraphBlobs(authority repositoryAuthority, panel string, graph []byte)
 		if err != nil || len(data) != size || digestBytes(data) != digest {
 			return fmt.Errorf("evidence graph leaf mismatch: %s", path)
 		}
+		files[path] = data
 		previous = path
+	}
+	rebuilt, err := canonicalEvidenceRoot("transform-evidence-graph/v1", panel, files)
+	if err != nil || !bytes.Equal(rebuilt, graph) {
+		return fmt.Errorf("evidence graph does not reconstruct from its leaves")
+	}
+	prefix := relativeTo(authority.Root, transcriptPath(authority.Root, panel)) + "/"
+	tracked, err := gitOutput(authority.Root, "ls-tree", "-r", "--name-only", authority.Head, "--", strings.TrimSuffix(prefix, "/"))
+	if err != nil {
+		return err
+	}
+	want := map[string]bool{}
+	for _, repositoryPath := range strings.Split(tracked, "\n") {
+		if repositoryPath == "" {
+			continue
+		}
+		if !strings.HasPrefix(repositoryPath, prefix) {
+			return fmt.Errorf("evidence tree escaped panel prefix")
+		}
+		relative := strings.TrimPrefix(repositoryPath, prefix)
+		if relative == "evidence-graph.json" {
+			continue
+		}
+		want[relative] = true
+	}
+	if len(want) != len(files) {
+		return fmt.Errorf("evidence graph omits or invents committed leaves")
+	}
+	for path := range files {
+		if !want[path] {
+			return fmt.Errorf("evidence graph leaf is not exact committed tree: %s", path)
+		}
 	}
 	return nil
 }

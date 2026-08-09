@@ -79,7 +79,7 @@ func lockedPanel(root []byte) ([]curriculum, [][2]uint64, error) {
 	}
 	permutationDigest := lockedHMAC(root, []any{"part3/transform-schema/v1", "family-permutation", "locked"})
 	rng := rand.New(rand.NewPCG(binary.BigEndian.Uint64(permutationDigest[:8]), binary.BigEndian.Uint64(permutationDigest[8:16])))
-	rng.Shuffle(len(families), func(i, j int) { families[i], families[j] = families[j], families[i] })
+	shuffleFixtureValues(rng, families)
 	panelCommitment := hex.EncodeToString(lockedHMAC(root, []any{"transform-panel/v1", "locked"}))
 	panel := make([]curriculum, LockedCount)
 	for ordinal := range panel {
@@ -125,7 +125,7 @@ func publicPanel(panel string, start uint64, counts []int) ([]curriculum, error)
 	}
 	seed := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v1", "family-permutation", panel, start}))
 	rng := rand.New(rand.NewPCG(binary.BigEndian.Uint64(seed[:8]), binary.BigEndian.Uint64(seed[8:16])))
-	rng.Shuffle(len(families), func(i, j int) { families[i], families[j] = families[j], families[i] })
+	shuffleFixtureValues(rng, families)
 	panelCommitment := digestBytes(mustJSON([]any{"transform-panel/v1", panel, start}))
 	out := make([]curriculum, len(families))
 	for i, family := range families {
@@ -167,37 +167,60 @@ func generateCurriculumAttempt(ordinal, family int, seed uint64, panelCommitment
 	training := transformfixturecore.Training{ProfileDigest: transformfixturecore.ProfileDigest()}
 	heldout := transformfixturecore.Heldout{ProfileDigest: transformfixturecore.ProfileDigest()}
 	var expected []expectedCase
+	structureRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "structure")
 	aliasRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "aliases")
-	aliasSeed := aliasRNG.Uint64()
-	for i := 0; i < 4; i++ {
-		before := positiveForest(aliasSeed, i, false)
+	scalarRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "scalars")
+	childRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "child-order")
+	caseOrderRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "case-order")
+	structureSeed, aliasSeed, scalarSeed, childSeed := structureRNG.Uint64(), aliasRNG.Uint64(), scalarRNG.Uint64(), childRNG.Uint64()
+	trainingOrder := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	heldoutOrder := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	shuffleFixtureValues(caseOrderRNG, trainingOrder)
+	shuffleFixtureValues(caseOrderRNG, heldoutOrder)
+	for position, spec := range trainingOrder {
+		if spec >= 4 {
+			continue
+		}
+		before := streamedPositiveForest(structureSeed, aliasSeed, scalarSeed, childSeed, spec, false)
 		result, err := latent.Apply(before)
 		if err != nil || result.Terminal != "applied" {
 			return curriculum{}, errRejectedCurriculumAttempt
 		}
 		beforeBytes, _ := before.CanonicalJSON()
 		afterBytes, _ := result.Output.CanonicalJSON()
-		token := fixtureToken(panelCommitment, seedCommitment, attempt, i)
+		token := fixtureToken(panelCommitment, seedCommitment, attempt, position)
 		training.Cases = append(training.Cases, transformfixturecore.TrainingCase{Token: token, Kind: "positive", Before: beforeBytes, After: afterBytes})
 	}
-	for i, kind := range []string{"zero", "two", "noop", "wrong-context"} {
-		before := negativeForest(aliasSeed, i, false, latent, kind)
+	negativeKinds := []string{"zero", "two", "noop", "wrong-context"}
+	for position, spec := range trainingOrder {
+		if spec < 4 {
+			continue
+		}
+		negative := spec - 4
+		before := streamedNegativeForest(structureSeed, aliasSeed, scalarSeed, childSeed, negative, false, latent, negativeKinds[negative])
 		beforeBytes, _ := before.CanonicalJSON()
-		training.Cases = append(training.Cases, transformfixturecore.TrainingCase{Token: fixtureToken(panelCommitment, seedCommitment, attempt, 4+i), Kind: "abstain", Before: beforeBytes})
+		training.Cases = append(training.Cases, transformfixturecore.TrainingCase{Token: fixtureToken(panelCommitment, seedCommitment, attempt, position), Kind: "abstain", Before: beforeBytes})
 	}
-	for i := 0; i < 4; i++ {
-		before := positiveForest(aliasSeed, i, true)
+	for position, spec := range heldoutOrder {
+		if spec >= 4 {
+			continue
+		}
+		before := streamedPositiveForest(structureSeed^0x9e3779b97f4a7c15, aliasSeed, scalarSeed, childSeed, spec, true)
 		result, _ := latent.Apply(before)
 		beforeBytes, _ := before.CanonicalJSON()
 		output, _ := result.Output.CanonicalJSON()
-		token := fixtureToken(panelCommitment, seedCommitment, attempt, 8+i)
+		token := fixtureToken(panelCommitment, seedCommitment, attempt, 8+position)
 		heldout.Cases = append(heldout.Cases, transformfixturecore.HeldoutCase{Token: token, Before: beforeBytes})
 		expected = append(expected, expectedCase{token, "applied", output})
 	}
-	for i, kind := range []string{"zero", "two", "noop", "wrong-context"} {
-		before := negativeForest(aliasSeed, i, true, latent, kind)
+	for position, spec := range heldoutOrder {
+		if spec < 4 {
+			continue
+		}
+		negative := spec - 4
+		before := streamedNegativeForest(structureSeed^0x9e3779b97f4a7c15, aliasSeed, scalarSeed, childSeed, negative, true, latent, negativeKinds[negative])
 		beforeBytes, _ := before.CanonicalJSON()
-		token := fixtureToken(panelCommitment, seedCommitment, attempt, 12+i)
+		token := fixtureToken(panelCommitment, seedCommitment, attempt, 8+position)
 		heldout.Cases = append(heldout.Cases, transformfixturecore.HeldoutCase{Token: token, Before: beforeBytes})
 		expected = append(expected, expectedCase{token, "abstain", nil})
 	}
@@ -232,9 +255,14 @@ func generateCurriculumAttempt(ordinal, family int, seed uint64, panelCommitment
 	policyRandomness := map[Policy][2]uint64{}
 	queueRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "production-queue")
 	randomRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "random-policy")
+	tieRNG := fixtureStream(panelCommitment, seedCommitment, attempt, "baseline-ties")
 	for _, policy := range empiricalPolicies {
 		policyTokens[policy] = fmt.Sprintf("%016x", queueRNG.Uint64())
-		policyRandomness[policy] = [2]uint64{randomRNG.Uint64(), randomRNG.Uint64()}
+		stream := tieRNG
+		if policy == RandomPBE {
+			stream = randomRNG
+		}
+		policyRandomness[policy] = [2]uint64{stream.Uint64(), stream.Uint64()}
 	}
 	return curriculum{Ordinal: ordinal, Family: family, Seed: seed, SeedCommitment: seedCommitment, PanelCommitment: panelCommitment, AcceptedAttempt: attempt, Training: trainingBytes, Heldout: heldoutBytes, Expected: expected, Latent: latentBytes, PolicyTokens: policyTokens, PolicyRandomness: policyRandomness}, nil
 }
@@ -308,13 +336,18 @@ func schemaDescription(s transformschema.Schema) int {
 }
 
 func positiveForest(seed uint64, variant int, heldout bool) transformschema.Forest {
+	return streamedPositiveForest(seed, seed, seed, seed, variant, heldout)
+}
+
+func streamedPositiveForest(structureSeed, aliasSeed, scalarSeed, childSeed uint64, variant int, heldout bool) transformschema.Forest {
 	trainingWords := [][5]string{{"base", "old", "new", "other", "spare"}, {"start", "prior", "next", "aside", "extra"}, {"plain", "early", "later", "alien", "decoy"}, {"root", "before", "after", "remote", "unused"}}
 	heldoutWords := [][5]string{{"alpha", "amber", "azure", "ashen", "apple"}, {"brisk", "brown", "blue", "beige", "birch"}, {"clear", "coral", "cyan", "cream", "cedar"}, {"dense", "dark", "dawn", "dull", "drift"}}
 	words := trainingWords
 	if heldout {
 		words = heldoutWords
 	}
-	w := words[(int(seed%uint64(len(words)))+variant)%len(words)]
+	structuralVariant := (int(structureSeed%4) + variant) % 4
+	w := words[(int(scalarSeed%uint64(len(words)))+variant)%len(words)]
 	f := transformschema.Forest{Nodes: []transformschema.Node{
 		{ID: 0, Kind: "group", Parent: -1, Target: -1},
 		{ID: 1, Kind: "definition", Parent: 0, Key: "decoy", Value: w[4], Target: -1},
@@ -328,29 +361,45 @@ func positiveForest(seed uint64, variant int, heldout bool) transformschema.Fore
 	}}
 	if heldout {
 		keys := []string{"mirror", "object", "update", "near", "side", "distant", "farther", "vacant"}
+		rotateStrings(keys, int(aliasSeed%uint64(len(keys))))
 		for index := range f.Nodes {
 			if f.Nodes[index].Kind != "group" {
 				f.Nodes[index].Key = keys[index-1]
 			}
 		}
+	} else {
+		keys := []string{"decoy", "service", "change", "local", "aside", "remote", "far"}
+		rotateStrings(keys, int(aliasSeed%uint64(len(keys))))
+		key := 0
+		for index := range f.Nodes {
+			if f.Nodes[index].Kind != "group" {
+				f.Nodes[index].Key = keys[key]
+				key++
+			}
+		}
 	}
-	if variant == 0 {
+	if structuralVariant == 0 {
 		f.Nodes = f.Nodes[:6]
 	}
-	if variant == 3 {
+	if structuralVariant == 3 {
 		f.Nodes[1].Value = w[1]
 	}
 	// A combined/global/any schema must stay within the four-edit grammar while
 	// the batch collectively distinguishes local/global and equals/any.
-	if variant%2 == 0 {
+	if structuralVariant%2 == 0 {
 		if len(f.Nodes) > 8 {
 			f.Nodes[8].Target = 1
 		}
 	} else {
 		f.Nodes[5].Target = 1
 	}
-	if variant == 2 {
-		mapping := []int{6, 3, 7, 1, 8, 2, 0, 5, 4}
+	if structuralVariant == 2 {
+		mapping := make([]int, len(f.Nodes))
+		for index := range mapping {
+			mapping[index] = index
+		}
+		rng := rand.New(rand.NewPCG(childSeed, childSeed^0xd1b54a32d192ed03))
+		shuffleFixtureValues(rng, mapping)
 		for index := range f.Nodes {
 			node := &f.Nodes[index]
 			node.ID = mapping[node.ID]
@@ -366,7 +415,11 @@ func positiveForest(seed uint64, variant int, heldout bool) transformschema.Fore
 }
 
 func negativeForest(seed uint64, variant int, heldout bool, latent transformschema.Schema, kind string) transformschema.Forest {
-	f := positiveForest(seed, variant, heldout)
+	return streamedNegativeForest(seed, seed, seed, seed, variant, heldout, latent, kind)
+}
+
+func streamedNegativeForest(structureSeed, aliasSeed, scalarSeed, childSeed uint64, variant int, heldout bool, latent transformschema.Schema, kind string) transformschema.Forest {
+	f := streamedPositiveForest(structureSeed, aliasSeed, scalarSeed, childSeed, variant, heldout)
 	find := func(kind string) *transformschema.Node {
 		for index := range f.Nodes {
 			if f.Nodes[index].Kind == kind {
@@ -439,6 +492,21 @@ func fixtureToken(panelCommitment, seedCommitment string, attempt, index int) st
 		_ = rng.Uint64()
 	}
 	return fmt.Sprintf("%016x", rng.Uint64())
+}
+
+func shuffleFixtureValues[T any](rng *rand.Rand, values []T) {
+	for index := len(values) - 1; index > 0; index-- {
+		other := int(rng.Uint64N(uint64(index + 1)))
+		values[index], values[other] = values[other], values[index]
+	}
+}
+
+func rotateStrings(values []string, offset int) {
+	if len(values) == 0 || offset%len(values) == 0 {
+		return
+	}
+	offset %= len(values)
+	copy(values, append(slices.Clone(values[offset:]), values[:offset]...))
 }
 
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }

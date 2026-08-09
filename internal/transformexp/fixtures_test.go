@@ -3,6 +3,7 @@ package transformexp
 import (
 	"bytes"
 	"encoding/hex"
+	"slices"
 	"testing"
 
 	"github.com/chazu/nous/internal/transformfixturecore"
@@ -24,6 +25,52 @@ func TestFrozenLockedDerivationGoldenVectors(t *testing.T) {
 		if got := hex.EncodeToString(lockedHMAC(root, vector.Preimage)); got != vector.Want {
 			t.Fatalf("HMAC(%v)=%s want %s", vector.Preimage, got, vector.Want)
 		}
+	}
+}
+
+func TestPublicPermutationAndPurposeStreamGoldenVectors(t *testing.T) {
+	panelCommitment := digestBytes(mustJSON([]any{"transform-panel/v1", "development", 841001}))
+	seedCommitment := digestBytes(mustJSON([]any{"transform-seed/v1", "development", uint64(841001)}))
+	wantStreams := map[string][2]uint64{
+		"structure":        {0x2051e0743fb114f7, 0xb9cc40b83d51fc1b},
+		"aliases":          {0xee2f635ebed39fa3, 0xb8ec9eb16f841789},
+		"scalars":          {0xeba47e7f1fad87b7, 0x253373ccf8d86669},
+		"child-order":      {0xb7c2bf7d1b655a44, 0xb623a457136f0096},
+		"case-tokens":      {0xc3ee98e89448c9a4, 0x553f364d9a07414c},
+		"case-order":       {0x826576001885aa80, 0xf49312eba699baa5},
+		"production-queue": {0x544baaf39bfd7c40, 0xc1615a8541006f07},
+		"random-policy":    {0x975fb9b5ed9eca09, 0x63abf3ab9c1949b4},
+		"baseline-ties":    {0x8f0f0c40154aaa53, 0x7fa3de7348c0a341},
+	}
+	for purpose, want := range wantStreams {
+		rng := fixtureStream(panelCommitment, seedCommitment, 0, purpose)
+		if got := [2]uint64{rng.Uint64(), rng.Uint64()}; got != want {
+			t.Fatalf("%s stream=%016x want=%016x", purpose, got, want)
+		}
+	}
+	panel, err := developmentPanel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotDevelopment := make([]int, len(panel))
+	for index := range panel {
+		gotDevelopment[index] = panel[index].Family
+	}
+	wantDevelopment := []int{1, 8, 7, 2, 2, 5, 4, 8, 0, 5, 5, 3, 0, 1, 7, 2, 0, 8, 2, 4, 1, 0, 6, 0, 0, 6, 3, 5, 4, 2, 6, 8, 3, 7, 2, 7, 6, 4, 1, 1, 6, 3, 1, 4, 7, 3, 8, 5}
+	if !slices.Equal(gotDevelopment, wantDevelopment) {
+		t.Fatalf("development family permutation=%v", gotDevelopment)
+	}
+	validation, err := validationPanel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotValidation := make([]int, len(validation))
+	for index := range validation {
+		gotValidation[index] = validation[index].Family
+	}
+	wantValidation := []int{4, 0, 0, 6, 3, 8, 2, 2, 5, 8, 3, 4, 7, 3, 1, 0, 2, 1, 1, 2, 8, 5, 3, 3, 0, 8, 8, 0, 5, 0, 5, 7, 1, 4, 4, 4, 2, 0, 4, 8, 1, 5, 4, 5, 3, 7, 4, 5, 6, 1, 3, 7, 1, 0, 0, 8, 3, 6, 6, 1, 6, 3, 7, 1, 4, 2, 7, 7, 2, 6, 7, 6, 5, 2, 7, 3, 6, 8, 8, 7, 4, 2, 2, 5, 5, 2, 5, 4, 0, 1, 0, 3, 6, 6, 1, 8}
+	if !slices.Equal(gotValidation, wantValidation) {
+		t.Fatalf("validation family permutation=%v", gotValidation)
 	}
 }
 
