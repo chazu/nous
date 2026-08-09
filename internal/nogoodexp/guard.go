@@ -483,16 +483,10 @@ func rewriteReceipt(repoRoot string, receipt *AttemptReceipt, state string) erro
 }
 
 func verifyCommittedEvidence(authority repositoryAuthority, panel string) (Report, error) {
-	relativeReport, err := filepath.Rel(authority.root, reportPath(authority.root, panel))
+	readCommitted := func(path string) ([]byte, error) { return readCommittedRegularBlob(authority, path) }
+	reportBytes, err := readCommitted(reportPath(authority.root, panel))
 	if err != nil {
-		return Report{}, err
-	}
-	if _, err := gitOutput(authority.root, "ls-files", "--error-unmatch", filepath.ToSlash(relativeReport)); err != nil {
-		return Report{}, fmt.Errorf("%s report is not committed", panel)
-	}
-	reportBytes, err := os.ReadFile(reportPath(authority.root, panel))
-	if err != nil {
-		return Report{}, err
+		return Report{}, fmt.Errorf("%s report is not a committed regular blob: %w", panel, err)
 	}
 	var report Report
 	if err := json.Unmarshal(reportBytes, &report); err != nil {
@@ -510,10 +504,10 @@ func verifyCommittedEvidence(authority repositoryAuthority, panel string) (Repor
 	if err != nil || report.Classification != wantClassification {
 		return Report{}, fmt.Errorf("%s report has invalid stage classification %q", panel, report.Classification)
 	}
-	if err := verifyEvidenceFiles(authority.root, panel, report); err != nil {
+	if err := verifyEvidenceFilesWithReader(authority.root, panel, report, readCommitted); err != nil {
 		return Report{}, err
 	}
-	fixtureBytes, err := os.ReadFile(filepath.Join(transcriptPath(authority.root, panel), "fixtures.json"))
+	fixtureBytes, err := readCommitted(filepath.Join(transcriptPath(authority.root, panel), "fixtures.json"))
 	if err != nil {
 		return Report{}, err
 	}
@@ -540,7 +534,7 @@ func verifyCommittedEvidence(authority repositoryAuthority, panel string) (Repor
 		if !bytes.Equal(rebuilt.ReportJSON, reportBytes) {
 			return Report{}, fmt.Errorf("%s committed report differs from deterministic replay", panel)
 		}
-		if err := compareRebuiltEvidenceFiles(authority.root, panel, rebuilt); err != nil {
+		if err := compareRebuiltEvidenceFiles(authority.root, panel, rebuilt, readCommitted); err != nil {
 			return Report{}, err
 		}
 	}
@@ -550,6 +544,57 @@ func verifyCommittedEvidence(authority repositoryAuthority, panel string) (Repor
 		}
 	}
 	return report, nil
+}
+
+func readCommittedRegularBlob(authority repositoryAuthority, path string) ([]byte, error) {
+	if err := requireRegularPath(authority.root, path, false); err != nil {
+		return nil, err
+	}
+	relative, err := filepath.Rel(authority.root, path)
+	if err != nil || filepath.IsAbs(relative) || strings.HasPrefix(relative, "..") {
+		return nil, fmt.Errorf("path is outside repository")
+	}
+	relative = filepath.ToSlash(relative)
+	entry, err := gitOutput(authority.root, "ls-tree", authority.head, "--", relative)
+	if err != nil || !strings.HasPrefix(entry, "100644 blob ") || !strings.HasSuffix(entry, "\t"+relative) {
+		return nil, fmt.Errorf("Git path is not a regular 100644 blob")
+	}
+	committed, err := gitFileAtCommit(authority.root, authority.head, relative)
+	if err != nil {
+		return nil, err
+	}
+	working, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(working, committed) {
+		return nil, fmt.Errorf("working bytes differ from committed blob")
+	}
+	return committed, nil
+}
+
+func requireRegularPath(repoRoot, path string, directory bool) error {
+	relative, err := filepath.Rel(repoRoot, path)
+	if err != nil || filepath.IsAbs(relative) || relative == "." || strings.HasPrefix(relative, "..") {
+		return fmt.Errorf("path is outside repository")
+	}
+	current := repoRoot
+	parts := strings.Split(filepath.Clean(relative), string(filepath.Separator))
+	for index, part := range parts {
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component is a symlink: %s", filepath.ToSlash(current))
+		}
+		last := index == len(parts)-1
+		if !last && !info.IsDir() {
+			return fmt.Errorf("intermediate path component is not a directory")
+		}
+		if last && (directory && !info.IsDir() || !directory && !info.Mode().IsRegular()) {
+			return fmt.Errorf("path has wrong filesystem type")
+		}
+	}
+	return nil
 }
 
 func verifyRetainedOutcomeClaims(panel string, fixtureBytes []byte, semantic SemanticPanel) error {
@@ -585,7 +630,7 @@ func validatePowerEstimate(power PowerEstimate) error {
 	return nil
 }
 
-func compareRebuiltEvidenceFiles(repoRoot, panel string, evidence DevelopmentEvidence) error {
+func compareRebuiltEvidenceFiles(repoRoot, panel string, evidence DevelopmentEvidence, read func(string) ([]byte, error)) error {
 	expected := map[string][]byte{
 		"manifest.json": evidence.Bundle.RootManifestJSON,
 		"fixtures.json": evidence.FixtureJSON,
@@ -599,7 +644,7 @@ func compareRebuiltEvidenceFiles(repoRoot, panel string, evidence DevelopmentEvi
 	}
 	base := transcriptPath(repoRoot, panel)
 	for relative, want := range expected {
-		got, err := os.ReadFile(filepath.Join(base, relative))
+		got, err := read(filepath.Join(base, relative))
 		if err != nil || !bytes.Equal(got, want) {
 			return fmt.Errorf("%s replay differs at %s", panel, filepath.ToSlash(relative))
 		}
@@ -609,16 +654,10 @@ func compareRebuiltEvidenceFiles(repoRoot, panel string, evidence DevelopmentEvi
 
 func verifyCommittedReceipt(authority repositoryAuthority, report Report) error {
 	path := receiptPath(authority.root, "validation")
-	relative, err := filepath.Rel(authority.root, path)
+	readCommitted := func(path string) ([]byte, error) { return readCommittedRegularBlob(authority, path) }
+	encoded, err := readCommitted(path)
 	if err != nil {
-		return err
-	}
-	if _, err := gitOutput(authority.root, "ls-files", "--error-unmatch", filepath.ToSlash(relative)); err != nil {
-		return fmt.Errorf("validation receipt is not committed")
-	}
-	encoded, err := os.ReadFile(path)
-	if err != nil {
-		return err
+		return fmt.Errorf("validation receipt is not a committed regular blob: %w", err)
 	}
 	var receipt AttemptReceipt
 	if err := json.Unmarshal(encoded, &receipt); err != nil {
@@ -631,23 +670,23 @@ func verifyCommittedReceipt(authority repositoryAuthority, report Report) error 
 	if len(receipt.Head) != 40 || gitCommand(authority.root, "merge-base", "--is-ancestor", receipt.Head, authority.head).Run() != nil {
 		return fmt.Errorf("validation receipt execution head is not an ancestor of clean HEAD")
 	}
-	rootBytes, err := os.ReadFile(filepath.Join(transcriptPath(authority.root, "validation"), "manifest.json"))
+	rootBytes, err := readCommitted(filepath.Join(transcriptPath(authority.root, "validation"), "manifest.json"))
 	if err != nil {
 		return err
 	}
-	fixtureBytes, err := os.ReadFile(filepath.Join(transcriptPath(authority.root, "validation"), "fixtures.json"))
+	fixtureBytes, err := readCommitted(filepath.Join(transcriptPath(authority.root, "validation"), "fixtures.json"))
 	if err != nil {
 		return err
 	}
-	primaryBytes, err := os.ReadFile(filepath.Join(transcriptPath(authority.root, "validation"), "primary", "execution-manifest.json"))
+	primaryBytes, err := readCommitted(filepath.Join(transcriptPath(authority.root, "validation"), "primary", "execution-manifest.json"))
 	if err != nil {
 		return err
 	}
-	auditBytes, err := os.ReadFile(filepath.Join(transcriptPath(authority.root, "validation"), "audit", "execution-manifest.json"))
+	auditBytes, err := readCommitted(filepath.Join(transcriptPath(authority.root, "validation"), "audit", "execution-manifest.json"))
 	if err != nil {
 		return err
 	}
-	wantGraph, err := evidenceGraphFilesDigest(authority.root, "validation", report, rootBytes, fixtureBytes, primaryBytes, auditBytes)
+	wantGraph, err := evidenceGraphFilesDigest(authority.root, "validation", report, rootBytes, fixtureBytes, primaryBytes, auditBytes, readCommitted)
 	if err != nil {
 		return err
 	}
@@ -665,7 +704,7 @@ func mustCanonicalReport(report Report) []byte {
 	return encoded
 }
 
-func evidenceGraphFilesDigest(repoRoot, panel string, report Report, rootBytes, fixtureBytes, primaryBytes, auditBytes []byte) (string, error) {
+func evidenceGraphFilesDigest(repoRoot, panel string, report Report, rootBytes, fixtureBytes, primaryBytes, auditBytes []byte, read func(string) ([]byte, error)) (string, error) {
 	graph := struct {
 		Report, Root, Fixture, Primary, Audit string
 		Chunks                                []string
@@ -675,7 +714,7 @@ func evidenceGraphFilesDigest(repoRoot, panel string, report Report, rootBytes, 
 	}
 	for _, role := range []string{"primary", "audit"} {
 		for _, policy := range RequiredPolicies {
-			data, err := os.ReadFile(filepath.Join(transcriptPath(repoRoot, panel), role, policy+".ngt.gz"))
+			data, err := read(filepath.Join(transcriptPath(repoRoot, panel), role, policy+".ngt.gz"))
 			if err != nil {
 				return "", err
 			}
@@ -690,7 +729,11 @@ func evidenceGraphFilesDigest(repoRoot, panel string, report Report, rootBytes, 
 }
 
 func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
-	rootBytes, err := os.ReadFile(filepath.Join(transcriptPath(repoRoot, panel), "manifest.json"))
+	return verifyEvidenceFilesWithReader(repoRoot, panel, report, os.ReadFile)
+}
+
+func verifyEvidenceFilesWithReader(repoRoot, panel string, report Report, read func(string) ([]byte, error)) error {
+	rootBytes, err := read(filepath.Join(transcriptPath(repoRoot, panel), "manifest.json"))
 	if err != nil || digestHex(rootBytes) != report.RootManifestSHA256 {
 		return fmt.Errorf("%s root manifest digest mismatch", panel)
 	}
@@ -702,7 +745,7 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 	if !bytes.Equal(canonical, rootBytes) || root.Panel != panel || root.ReportPayloadSHA256 != report.PayloadSHA256 || root.FinalReportReference != fmt.Sprintf("nogoods-v2-%s-report.json", panel) {
 		return fmt.Errorf("%s root manifest is invalid", panel)
 	}
-	fixtureBytes, err := os.ReadFile(filepath.Join(transcriptPath(repoRoot, panel), "fixtures.json"))
+	fixtureBytes, err := read(filepath.Join(transcriptPath(repoRoot, panel), "fixtures.json"))
 	if err != nil || len(fixtureBytes) != root.FixtureBundleSize || len(fixtureBytes) > FixtureBundleByteCap || digestHex(fixtureBytes) != root.FixtureBundleSHA256 {
 		return fmt.Errorf("%s fixture bundle digest mismatch", panel)
 	}
@@ -711,7 +754,7 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 	}
 	var manifests [2]ExecutionManifest
 	for index, role := range []string{"primary", "audit"} {
-		manifestBytes, err := os.ReadFile(filepath.Join(transcriptPath(repoRoot, panel), role, "execution-manifest.json"))
+		manifestBytes, err := read(filepath.Join(transcriptPath(repoRoot, panel), role, "execution-manifest.json"))
 		if err != nil {
 			return err
 		}
@@ -734,11 +777,10 @@ func verifyEvidenceFiles(repoRoot, panel string, report Report) error {
 				return fmt.Errorf("%s %s policy order mismatch", panel, role)
 			}
 			chunkPath := filepath.Join(transcriptPath(repoRoot, panel), role, chunk.Policy+".ngt.gz")
-			info, err := os.Stat(chunkPath)
-			if err != nil || info.Size() != int64(chunk.GzipSize) || info.Size() > 1074000000 {
+			gzipBytes, err := read(chunkPath)
+			if err != nil || len(gzipBytes) != chunk.GzipSize || int64(len(gzipBytes)) > 1074000000 {
 				return fmt.Errorf("%s %s chunk %s has invalid bounded size", panel, role, chunk.Policy)
 			}
-			gzipBytes, err := os.ReadFile(chunkPath)
 			if err != nil || len(gzipBytes) != chunk.GzipSize || digestHex(gzipBytes) != chunk.GzipSHA256 {
 				return fmt.Errorf("%s %s chunk %s mismatch", panel, role, chunk.Policy)
 			}
