@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,7 +96,9 @@ func ExecuteValidation(repoRoot, domainsDir string) (report protectedReport, ret
 	}
 	defer func() {
 		if returnErr != nil {
-			_ = finalizeAttempt(authority.Root, receipt, "invalid", "", "", "")
+			if invalidErr := finalizeAttempt(authority.Root, receipt, "invalid", "", "", ""); invalidErr != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("persist invalid validation receipt: %w", invalidErr))
+			}
 		}
 	}()
 	curricula, err := validationPanel()
@@ -156,7 +159,9 @@ func ExecuteLocked(repoRoot, domainsDir, unlockToken string) (report protectedRe
 	}
 	defer func() {
 		if returnErr != nil {
-			_ = finalizeAttempt(authority.Root, receipt, "invalid", "", "", "")
+			if invalidErr := finalizeAttempt(authority.Root, receipt, "invalid", "", "", ""); invalidErr != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("persist invalid locked receipt: %w", invalidErr))
+			}
 		}
 	}()
 	root := make([]byte, sha256.Size)
@@ -292,6 +297,30 @@ func authorizeRepository(repoRoot, domainsDir string) (repositoryAuthority, erro
 	}
 	if replacements, err := gitOutput(root, "for-each-ref", "--format=%(refname)", "refs/replace"); err != nil || replacements != "" {
 		return repositoryAuthority{}, fmt.Errorf("Git replacement authority is forbidden")
+	}
+	for _, forbidden := range []string{"objects/info/alternates", "info/grafts"} {
+		path, pathErr := gitOutput(root, "rev-parse", "--git-path", forbidden)
+		if pathErr != nil {
+			return repositoryAuthority{}, pathErr
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		if _, statErr := os.Lstat(path); statErr == nil {
+			return repositoryAuthority{}, fmt.Errorf("Git %s authority is forbidden", forbidden)
+		} else if !os.IsNotExist(statErr) {
+			return repositoryAuthority{}, statErr
+		}
+	}
+	localConfig, err := gitOutput(root, "config", "--local", "--name-only", "--get-regexp", ".*")
+	if err != nil && localConfig != "" {
+		return repositoryAuthority{}, fmt.Errorf("cannot inspect local Git configuration")
+	}
+	for _, name := range strings.Fields(localConfig) {
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "include.") || strings.HasPrefix(lower, "extensions.") || strings.HasPrefix(lower, "submodule.") || lower == "core.worktree" || lower == "core.attributesfile" || lower == "core.hookspath" || lower == "core.sshcommand" {
+			return repositoryAuthority{}, fmt.Errorf("local Git authority is forbidden: %s", name)
+		}
 	}
 	for _, operation := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"} {
 		path, pathErr := gitOutput(root, "rev-parse", "--git-path", operation)
@@ -503,9 +532,18 @@ func claimAttempt(authority repositoryAuthority, panel string) (*attemptReceipt,
 		return nil, err
 	}
 	if err := os.Mkdir(transcriptPath(authority.Root, panel), 0o755); err != nil {
+		if invalidErr := finalizeAttempt(authority.Root, receipt, "invalid", "", "", ""); invalidErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("persist invalid receipt after transcript directory failure: %w", invalidErr))
+		}
 		return nil, err
 	}
-	return receipt, syncDirectory(filepath.Join(authority.Root, ".nous"))
+	if err := syncDirectory(filepath.Join(authority.Root, ".nous")); err != nil {
+		if invalidErr := finalizeAttempt(authority.Root, receipt, "invalid", "", "", ""); invalidErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("persist invalid receipt after directory sync failure: %w", invalidErr))
+		}
+		return nil, err
+	}
+	return receipt, nil
 }
 
 func receiptBytes(receipt *attemptReceipt) []byte {
@@ -513,39 +551,54 @@ func receiptBytes(receipt *attemptReceipt) []byte {
 }
 
 func startAttempt(root string, receipt *attemptReceipt, commitment, fixture string) error {
-	receipt.RootCommitment = commitment
-	receipt.FixtureRoot = fixture
-	return rewriteReceipt(root, receipt, "running")
+	next := *receipt
+	next.RootCommitment = commitment
+	next.FixtureRoot = fixture
+	return rewriteReceiptValue(root, receipt, next, "running")
 }
 
 func bindAttemptFixture(root string, receipt *attemptReceipt, fixture string) error {
 	if receipt.State != "running" || receipt.FixtureRoot != "" || !isLowerHex(fixture, 64) {
 		return fmt.Errorf("cannot monotonically bind attempt fixture")
 	}
-	receipt.FixtureRoot = fixture
-	return replaceReceiptBytes(root, receipt)
+	next := *receipt
+	next.FixtureRoot = fixture
+	if err := replaceReceiptBytes(root, &next); err != nil {
+		return err
+	}
+	*receipt = next
+	return nil
 }
 
 func finalizeAttempt(root string, receipt *attemptReceipt, state, fixture, report, graph string) error {
+	next := *receipt
 	if fixture != "" {
-		receipt.FixtureRoot = fixture
+		next.FixtureRoot = fixture
 	}
 	if report != "" {
-		receipt.ReportDigest = report
+		next.ReportDigest = report
 	}
 	if graph != "" {
-		receipt.GraphDigest = graph
+		next.GraphDigest = graph
 	}
-	return rewriteReceipt(root, receipt, state)
+	return rewriteReceiptValue(root, receipt, next, state)
 }
 
 func rewriteReceipt(root string, receipt *attemptReceipt, state string) error {
+	return rewriteReceiptValue(root, receipt, *receipt, state)
+}
+
+func rewriteReceiptValue(root string, receipt *attemptReceipt, next attemptReceipt, state string) error {
 	allowed := receipt.State == "claimed" && (state == "running" || state == "invalid") || receipt.State == "running" && (state == "published" || state == "invalid")
 	if !allowed {
 		return fmt.Errorf("invalid receipt transition %s -> %s", receipt.State, state)
 	}
-	receipt.State = state
-	return replaceReceiptBytes(root, receipt)
+	next.State = state
+	if err := replaceReceiptBytes(root, &next); err != nil {
+		return err
+	}
+	*receipt = next
+	return nil
 }
 
 func replaceReceiptBytes(root string, receipt *attemptReceipt) error {
@@ -566,16 +619,24 @@ func persistPreparedFixtures(root, panel string, curricula []curriculum) (string
 		return "", err
 	}
 	base := transcriptPath(root, panel)
-	for name, data := range files {
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	createdDirs := map[string]bool{base: true}
+	for _, name := range names {
+		data := files[name]
 		path := filepath.Join(base, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return "", err
 		}
+		createdDirs[filepath.Dir(path)] = true
 		if err := writeExclusiveSync(path, data, 0o600); err != nil {
 			return "", err
 		}
 	}
-	if err := syncDirectory(base); err != nil {
+	if err := syncDirectoriesDeepestFirst(createdDirs); err != nil {
 		return "", err
 	}
 	return digestBytes(fixtureRoot), nil
@@ -583,7 +644,14 @@ func persistPreparedFixtures(root, panel string, curricula []curriculum) (string
 
 func persistProtected(root, panel string, evidence panelEvidence, report protectedReport) error {
 	base := transcriptPath(root, panel)
-	for name, data := range evidence.Files {
+	names := make([]string, 0, len(evidence.Files))
+	for name := range evidence.Files {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	createdDirs := map[string]bool{base: true}
+	for _, name := range names {
+		data := evidence.Files[name]
 		if !validEvidencePath(name) {
 			return fmt.Errorf("invalid evidence output path")
 		}
@@ -591,6 +659,7 @@ func persistProtected(root, panel string, evidence panelEvidence, report protect
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
+		createdDirs[filepath.Dir(path)] = true
 		if existing, err := os.ReadFile(path); err == nil {
 			if !bytes.Equal(existing, data) {
 				return fmt.Errorf("precommitted evidence differs at %s", name)
@@ -603,7 +672,13 @@ func persistProtected(root, panel string, evidence panelEvidence, report protect
 			return err
 		}
 	}
+	if err := syncDirectoriesDeepestFirst(createdDirs); err != nil {
+		return err
+	}
 	if err := writeExclusiveSync(filepath.Join(base, "evidence-graph.json"), evidence.EvidenceGraph, 0o600); err != nil {
+		return err
+	}
+	if err := syncDirectory(base); err != nil {
 		return err
 	}
 	reportBytes, err := canonicalProtectedReport(report)
@@ -614,6 +689,27 @@ func persistProtected(root, panel string, evidence panelEvidence, report protect
 		return err
 	}
 	return syncDirectory(filepath.Join(root, ".nous"))
+}
+
+func syncDirectoriesDeepestFirst(directories map[string]bool) error {
+	paths := make([]string, 0, len(directories))
+	for path := range directories {
+		paths = append(paths, path)
+	}
+	slices.SortFunc(paths, func(left, right string) int {
+		leftDepth := strings.Count(filepath.Clean(left), string(filepath.Separator))
+		rightDepth := strings.Count(filepath.Clean(right), string(filepath.Separator))
+		if leftDepth != rightDepth {
+			return rightDepth - leftDepth
+		}
+		return strings.Compare(left, right)
+	})
+	for _, path := range paths {
+		if err := syncDirectory(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func verifyCommittedPanel(authority repositoryAuthority, panel string) (protectedReport, error) {

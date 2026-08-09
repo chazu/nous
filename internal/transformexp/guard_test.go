@@ -2,6 +2,7 @@ package transformexp
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,6 +58,35 @@ func TestAttemptReceiptIsExclusiveAndMonotone(t *testing.T) {
 	}
 }
 
+func TestFailedReceiptRewritePreservesClaimForInvalidation(t *testing.T) {
+	root := t.TempDir()
+	authority := repositoryAuthority{Root: root, Head: strings.Repeat("a", 40), Reviews: ImplementationReviewManifest{ImplementationCommit: strings.Repeat("b", 40)}}
+	receipt, err := claimAttempt(authority, "locked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := receiptPath(root, "locked") + ".next"
+	if err := os.WriteFile(temporary, []byte("obstruction"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := startAttempt(root, receipt, strings.Repeat("c", 64), ""); err == nil {
+		t.Fatal("obstructed receipt rewrite succeeded")
+	}
+	if receipt.State != "claimed" || receipt.RootCommitment != "" {
+		t.Fatalf("failed rewrite mutated in-memory authority: %+v", receipt)
+	}
+	if err := os.Remove(temporary); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizeAttempt(root, receipt, "invalid", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(receiptPath(root, "locked"))
+	if err != nil || !strings.Contains(string(data), `"invalid"`) {
+		t.Fatalf("invalid receipt was not durable: %s err=%v", data, err)
+	}
+}
+
 func TestReviewedFilesystemRejectsIgnoredSourceAndSymlink(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n"), 0o600); err != nil {
@@ -106,4 +136,42 @@ func TestProtectedPanelConstructorsHaveExactlyOneProductionCaller(t *testing.T) 
 			t.Fatalf("%s production occurrences = %d, want definition plus one guarded call", surface, count)
 		}
 	}
+}
+
+func TestRepositoryAuthorityRejectsGitAlternatesAndLocalIncludes(t *testing.T) {
+	setup := func(t *testing.T) string {
+		t.Helper()
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "domains"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command("git", "init", "-q", root)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v %s", err, output)
+		}
+		return root
+	}
+	t.Run("alternates", func(t *testing.T) {
+		root := setup(t)
+		path := filepath.Join(root, ".git", "objects", "info", "alternates")
+		if err := os.WriteFile(path, []byte("/tmp/untrusted\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := authorizeRepository(root, filepath.Join(root, "domains")); err == nil || !strings.Contains(err.Error(), "alternates") {
+			t.Fatalf("alternates authority error = %v", err)
+		}
+	})
+	t.Run("include", func(t *testing.T) {
+		root := setup(t)
+		command := exec.Command("git", "-C", root, "config", "--local", "include.path", "/tmp/untrusted")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git config: %v %s", err, output)
+		}
+		if _, err := authorizeRepository(root, filepath.Join(root, "domains")); err == nil || !strings.Contains(err.Error(), "local Git authority") {
+			t.Fatalf("local include authority error = %v", err)
+		}
+	})
 }
