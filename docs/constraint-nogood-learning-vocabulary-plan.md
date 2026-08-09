@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: proposed Part 3 lane-specific implementation plan, revision 7.
+Status: proposed Part 3 lane-specific implementation plan, revision 8.
 
 Revision 1 was committed at
 `10eb2deafd4d8a203257026d0c7925a4f6eaba86` and blocked independently by all
@@ -32,8 +32,17 @@ charges, power-cell support, and acquisition transcript ownership. Revision 6
 resolves that complete review union. Revision 6 was committed at
 `89efcc25f67fdc601bbdff122196894a497300ba`; architecture accepted it, while
 theory found one missing agreement-result read and experimental review required
-at least two development realizations in every semantic cell. Revision 7 makes
-those final mechanical corrections.
+at least two development realizations in every semantic cell. Revision 7 made
+those final mechanical corrections and was accepted at commit
+`549f123eb4413b27e926f8e565e3af376030b3e8`. During pre-panel implementation,
+the literal no-match cap test exposed an arithmetic contradiction: the
+normative ledger requires three target-edge reads which the no-match subtotal
+omitted. V1 is therefore withdrawn unexecuted; it has no competence,
+development, validation, or locked evidence. Revision 8 gives the corrected
+executable protocol V2 identity, reallocates those three reads between the
+matcher and completion rows without changing the 125-event prune maximum,
+sets the 81-event no-match maximum and 83-event hard cap, and corrects the
+evidence-free attainability proof. No protected panel was observed.
 
 This document narrows Vocabulary 1 of the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). It is
@@ -44,7 +53,7 @@ acceptance before production or experiment code is added.
 The lane identity is fixed by the umbrella:
 
 - domain pack: `domains/nogoods`;
-- seed authority: `part3/nogoods/v1`;
+- seed authority: `part3/nogoods/v2`;
 - production package: `internal/vocab/nogoods`;
 - fixture package: `internal/nogoodfixture`;
 - experiment package: `internal/nogoodexp`; and
@@ -57,7 +66,7 @@ minimization, hidden teachers, or protected receipts from another experiment.
 
 ## Research question and claim boundary
 
-V1 asks whether ordinary Nous heuristics can convert failed finite-CSP branches
+V2 asks whether ordinary Nous heuristics can convert failed finite-CSP branches
 into one sound, alpha-invariant generalized nogood and then use that artifact to
 prune the corresponding branch in later renamed problems while preserving the
 complete solution set.
@@ -75,7 +84,7 @@ A positive result would demonstrate bounded negative-knowledge construction,
 alpha-invariant reuse, and a lifecycle work advantage over a fixed strong
 conventional CSP policy. It would not demonstrate general clause learning,
 arbitrary CSP solving, SAT/CDCL, scalable graph coloring, scheduling insight,
-or automatic invention of the feature language. V1 deliberately supplies the
+or automatic invention of the feature language. V2 deliberately supplies the
 three-role/domain guard language and asks Nous to discover the necessary
 topology within it.
 
@@ -97,16 +106,16 @@ it byte-for-byte in every report:
 
 ```json
 {
-  "experiment_version": "nogoods/v1",
-  "seed_authority": "part3/nogoods/v1",
+  "experiment_version": "nogoods/v2",
+  "seed_authority": "part3/nogoods/v2",
   "generator_version": "blocked-pair-csp/v1",
   "grammar_version": "three-role-three-edge-mask/v1",
   "semantics_version": "finite-neq-csp/v1",
   "oracle_version": "independent-exhaustive-coloring/v1",
   "baseline_version": "mac-cbj-mrv-degree/v1",
-  "cost_version": "nogood-lifecycle-events/v1",
+  "cost_version": "nogood-lifecycle-events/v2",
   "statistics_version": "paired-stratified-bootstrap/v1",
-  "report_version": "nogood-trials/v1",
+  "report_version": "nogood-trials/v2",
   "integrity_contract": "budgeted-transcript",
   "training_seeds": {"start": 831001, "count": 4, "step": 1},
   "competence_development_seeds": {"start": 831101, "count": 8, "step": 1},
@@ -125,7 +134,7 @@ it byte-for-byte in every report:
   "target_certificate_completions": 1,
   "training_work_cap": 2000,
   "target_prune_work_cap": 128,
-  "no_match_bridge_overhead_cap": 80,
+  "no_match_bridge_overhead_cap": 83,
   "policy_work_cap_per_task": 2000000,
   "bridge_task_pop_cap": 2000,
   "attributed_unit_cap": 200000,
@@ -161,8 +170,9 @@ power gate passes. Locked task roots are generated only after the one-shot
 locked guard is claimed; no locked root or fixture is present in source.
 
 Any post-review change to the grammar, generator, semantics, work events,
-policy, panel mapping, thresholds, or statistics creates `nogoods/v2` and
-preserves V1 evidence.
+policy, panel mapping, thresholds, or statistics creates the next experiment
+version and preserves all earlier evidence. Revision 8 is `nogoods/v2` because
+it changes a V1 threshold; V1 remains withdrawn and unexecuted.
 
 ## Finite CSP semantics
 
@@ -540,7 +550,7 @@ Every deterministic stream begins with canonical compact JSON containing only
 UTF-8 strings and integers:
 
 ```text
-["part3/nogoods/v1", panel, root, ordinal, purpose]
+["part3/nogoods/v2", panel, root, ordinal, purpose]
 ```
 
 The exact panel tokens and stream scopes are:
@@ -593,11 +603,11 @@ increasing replicate order from their independent PCGs. Ties never consume
 randomness.
 
 The canonical random-control JSON is
-`["part3/nogoods/v1","training",831001,0,"random-control"]`; its SHA-256 is
-`287e2fe3f24afab3f17a07eef3a485774c68135bdcc19933e358437c00777e5f`,
-its PCG seeds are `2917822264651741875,17400228833170589047`, its first raw
-`Uint64` is `10321276913399045564`, and a fresh PCG's first `Uint64N(7)` is
-mask 3. The separately fixed corrupted mask is 5, so the two controls are
+`["part3/nogoods/v2","training",831001,0,"random-control"]`; its SHA-256 is
+`18aed4934f41158c1178b8ccd238835e2dac2717d74f4dd030216477eb916a24`,
+its PCG seeds are `1778592632012871052,1258959285689811806`, its first raw
+`Uint64` is `6134634897815124633`, and a fresh PCG's first `Uint64N(7)` is
+mask 2. The separately fixed corrupted mask is 5, so the two controls are
 distinct.
 
 Unit tests freeze the canonical JSON bytes, SHA-256 digest, two PCG seeds, first
@@ -609,10 +619,10 @@ The `variable-positions` golden vectors are:
 
 | Panel/root | SHA-256 | PCG seeds | First four `Uint64` | Permutation |
 | --- | --- | --- | --- | --- |
-| `training` / `831001` | `ac5eb4be74b192caba90677858e7ca28c346c1329bfe16347b864600b1669f0d` | `12420563552428987082,13443358654286252584` | `16196928853732314818,13964589984287698613,14828555489593947842,3864106448264698449` | `0,1,2` |
-| `development` / `832001` | `7ee119fb7276549805e9faaa614a7049671b62ab1466d6a66417e274b279e2a6` | `9142617286286660760,426147249446875209` | `1213905441346112375,1699159744660973649,1395889987714557996,13902222507069901990` | `5,2,1,4,3,6,0,7` |
-| `validation` / `833001` | `c6ae755044795c25e589d32a073dc98744347a48470364294121d4445b8aca9e` | `14316509253064023077,16539983283958434183` | `4803874459439516066,14275222390261356384,10176726368503672072,10929098418971052156` | `6,0,1,4,7,3,5,2` |
-| `locked` / 64 zeroes | `d1eae2c49127eaedc67e0983f6395fd5ece5fd712a4b44a8598253a172644af1` | `15126151632354011885,14302879928951594965` | `14781793926225946851,10566838600647845555,7622181505994308792,3324590857268697477` | `5,1,6,7,0,2,4,3` |
+| `training` / `831001` | `b2294430cbbdb01f7599360adc4cbf775d43051f7699bb98a06e90cc7d451f7c` | `12837867189163634719,8473863594147889015` | `5998256699142038517,3061088826469977856,7422770284953852099,3707927592788537146` | `1,2,0` |
+| `development` / `832001` | `d0dcab371ea372cc51a6e1e47b32be97fce34dbaac5768f3001ed09c52bb1ca8` | `15050092307990934220,5883638334641847959` | `15897127166009243275,6335397305508338890,16951981388495259188,6912465547973745294` | `0,6,7,4,1,5,2,3` |
+| `validation` / `833001` | `cfbfdf3ef01973db953fcc55f0d956dc78a42eb2fd8cefbc8d4dc24d2a176c04` | `14969929147811984347,10754539104669095644` | `13233943789338552230,1725611645404672679,7588291633582608566,7410435714107475228` | `4,1,7,3,5,2,0,6` |
+| `locked` / 64 zeroes | `2ddab511087840a63120a03abe8c5a779754fc230d1cfdabea23882aad146af3` | `3304152361390850214,3540005481278626423` | `3322225368596265150,3240277704846343908,7689747042175239493,8362869284156611139` | `0,3,7,4,5,2,1,6` |
 
 Training seeds `831001..831004` map directly, without rejection:
 
@@ -631,7 +641,7 @@ materialized completion evaluation, never stored as a fixture label.
 
 The training terminal is one of `promoted`, `no-promotable-artifact`,
 `ambiguous`, `budget-exhausted`, or `mechanical-invalid`. `ambiguous` retains
-all exact masks and selects the canonical first only for diagnostics; V1's
+all exact masks and selects the canonical first only for diagnostics; V2's
 promotion gate requires the unique mask 7. Budget exhaustion is genuine only
 when the reconciled ledger reaches its exact cap. A false terminal class is
 mechanical invalidity.
@@ -974,7 +984,7 @@ successful artifacts.
 
 Complete transcripts are evidence-bundle artifacts, not embedded in the JSON
 report. For panel `<panel>` the canonical directory is
-`.nous/nogoods-v1-<panel>-transcripts/`; it contains `primary/` and `audit/`,
+`.nous/nogoods-v2-<panel>-transcripts/`; it contains `primary/` and `audit/`,
 each with one deterministic `<policy>.ngt.gz` for all 13 required policies and
 an `execution-manifest.json`, plus one root `manifest.json`. Development,
 validation, and locked all execute two fresh stores against the same immutable
@@ -1130,7 +1140,7 @@ Scopes and abort boundaries are exact:
   including the execution's 54-event bridge-profile preflight;
 - `target_prune_work_cap=128` covers one learned request from supplied-decision
   validation through a prune terminal;
-- `no_match_bridge_overhead_cap=80` covers the learned/control target work in
+- `no_match_bridge_overhead_cap=83` covers the learned/control target work in
   excess of its byte-identical standalone continuation when no prune occurs;
 - `policy_work_cap_per_task=2000000` covers one policy on one utility task and
   aborts before the exceeding event;
@@ -1173,7 +1183,7 @@ limits; crossing either makes the panel invalid.
 
 ## Evidence-free attainability bound
 
-V1 requires a strictly negative lifecycle difference but sets no arbitrary
+V2 requires a strictly negative lifecycle difference but sets no arbitrary
 minimum magnitude. That endpoint is attainable without consulting a
 development, validation, or locked seed. A literal expansion of the frozen
 full fixed-branch query—not a cancelled branch fragment—establishes:
@@ -1182,7 +1192,7 @@ full fixed-branch query—not a cancelled branch fragment—establishes:
 | --- | ---: |
 | standalone MAC-CBJ on a reusable branch | at least 150 events |
 | generalized matching/certificate/prune on a reusable branch | at most 125 events; hard cap 128 |
-| no-match bridge overhead before the identical standalone continuation | at most 78 events; hard cap 80 |
+| no-match bridge overhead before the identical standalone continuation | at most 81 events; hard cap 83 |
 | one complete acquisition | at most 2,000 events |
 
 Every distractor has static degree strictly above the degree-two `x,y`, so the
@@ -1220,8 +1230,8 @@ is proposed. Its exact maximum vector is:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | root pre-bridge | 0 | 1 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | request, agenda, and both engine dispatches | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 26 | 26 |
-| anchor, seven visits, two candidates, one pair, one artifact | 3 | 17 | 0 | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 | 12 | 42 |
-| one completion and complete barrier | 0 | 5 | 0 | 3 | 0 | 0 | 0 | 0 | 1 | 19 | 0 | 7 | 35 |
+| anchor, seven visits, two candidates, one pair, one artifact | 3 | 20 | 0 | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 | 12 | 45 |
+| one completion and complete barrier | 0 | 2 | 0 | 3 | 0 | 0 | 0 | 0 | 1 | 19 | 0 | 7 | 32 |
 | disposition, adapter, omitted-prefix record, root restore, terminal | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 6 | 1 | 8 | 17 |
 | **maximum** | **3** | **23** | **3** | **3** | **3** | **0** | **0** | **10** | **1** | **25** | **1** | **53** | **125** |
 
@@ -1244,12 +1254,15 @@ uncharged work and not part of this feasibility proof.
 
 For a no-prune target the shared root and resumed MAC-CBJ events are
 byte-identical and cancel. The maximum extra vector is the 26-event
-request/engine row plus the 42-event matcher row plus ten disposition/adapter
-events, exactly 78. Near misses have the same two candidates and one pair; irrelevant
-and independent-unsat cases retain fewer candidates. Nonauthoritative controls
-stop after provenance diagnostics and never construct a completion, so they do
-not exceed this bound. The complete acquisition has its separately enforced
-2,000-event cap.
+request/engine row plus the 45-event matcher row plus ten disposition/adapter
+events, exactly 81. The matcher subtotal includes all three required target-edge
+reads; revision 7 incorrectly parked them in the completion row, which preserved
+the 125-event prune total but omitted them from the no-match path. Near misses
+have the same two candidates and one pair; irrelevant and independent-unsat
+cases retain fewer candidates. Nonauthoritative controls stop after provenance
+diagnostics and never construct a completion, so they do not exceed this bound.
+The 83-event hard cap preserves two events of abort headroom. The complete
+acquisition has its separately enforced 2,000-event cap.
 
 These are deliberately conservative integer bounds, not mean estimates. The
 plan-conformance test encodes each transition-table multiplicity as a literal
@@ -1258,15 +1271,19 @@ fixtures, baseline, engine, or experiment code. Architecture and experimental
 review accept that literal derivation before implementation; a disagreement
 requires another plan revision, not development observation.
 
-At the locked 312/48/12/12 proportions, the worst attainable total difference
-under these caps is already negative:
+At the locked 312/48/12/12 proportions, every reusable template occurs 78
+times. Using the corrected hard caps and the already frozen per-template
+standalone lower bounds, the worst attainable total difference is negative:
 
 ```text
-A + sum(L-M) <= 2000 + 312*(125-150) + 72*78 = -184
+A + sum(L-M) <= 2000
+                  + 78*((128-177)+(128-150)+(128-153)+(128-150))
+                  + 72*83
+                = -1228
 ```
 
 The standalone denominator is strictly positive, so the corresponding primary
-ratio is below zero. This proves only that V1 can answer its hypothesis; it does
+ratio is below zero. This proves only that V2 can answer its hypothesis; it does
 not forecast the fixed panel or supply evidence for a positive result. A panel
 crossing the acquisition/prune/no-match cap is mechanically invalid rather than
 used to revise the bound.
@@ -1333,12 +1350,12 @@ deterministic tasks; the bootstrap describes sensitivity to task composition,
 while randomization assumes within-task label exchangeability under the sharp
 null. All arithmetic is signed 64-bit after a checked overflow preflight. The
 development replicate-zero tuple has SHA-256
-`4c310ed3e073097cc03302dcdc59eeb3c8eca9b31b23ded25c70e58481abca34`,
-PCG seeds `5490185723907869052,13849416426707349171`, and first eight
-`Uint64N(2)` draws `0,1,1,0,1,0,0,0`. Exact satisfiability and prune soundness
+`0f6ee7c2e3720c748492c6dd815aa0eee1a83bf704e6b439628ea70f057d4079`,
+PCG seeds `1112080982232665204,9552916414266515694`, and first eight
+`Uint64N(2)` draws `1,0,1,1,1,0,0,0`. Exact satisfiability and prune soundness
 are gates, not terms that trade against work.
 
-V1 is `valid-positive` only if all mechanical gates pass, the primary point
+V2 is `valid-positive` only if all mechanical gates pass, the primary point
 estimate is strictly below zero, the interval upper bound is below zero, the paired
 randomization p-value is below 0.05, and target-only overhead on the pooled
 near-miss/irrelevant cohort satisfies the exact ratio-of-sums gate
@@ -1377,7 +1394,7 @@ nonreusable-harm gates. Inner bootstrap endpoints are sorted indices 49 and
 1949. Inner randomization uses `e_i = 384*d_i + A`, draws exactly one
 `Uint64N(2)` per synthetic task and has Monte Carlo denominator 2,001. Power
 streams use canonical JSON
-`["part3/nogoods/v1","power",832001,outerOrdinal,purpose]`, where purpose is
+`["part3/nogoods/v2","power",832001,outerOrdinal,purpose]`, where purpose is
 exactly `panel`, `bootstrap`, or `randomization`; bootstrap and randomization
 derive a fresh PCG from that tuple and never share state. Power is the passing
 fraction and must be at least 0.80 before validation or locked execution is
@@ -1385,12 +1402,12 @@ reachable.
 
 Validation may be invoked once after a committed power-positive development
 report. Its guard exclusively creates
-`.nous/nogoods-v1-validation-receipt.json`, generates and serializes all public
+`.nous/nogoods-v2-validation-receipt.json`, generates and serializes all public
 fixture bytes once, and executes two fresh stores/policy sets internally from
 those same immutable bytes. The two canonical reports must be byte-equal; only
 the first execution supplies empirical work, while the second is separately
 reported integrity audit work. The guard then exclusively writes
-`.nous/nogoods-v1-validation-report.json` and finalizes the receipt. A crash or
+`.nous/nogoods-v2-validation-report.json` and finalizes the receipt. A crash or
 any existing receipt consumes/refuses the attempt. Validation must pass
 competence and all mechanical gates; its empirical result is evidence, not a
 tuning gate. After the committed result, all implementation and plan paths are
@@ -1415,13 +1432,13 @@ audit. This is the deterministic rerun; the private root is never regenerated
 and no second locked invocation exists.
 
 The only locked evidence paths are
-`.nous/nogoods-v1-locked-receipt.json`,
-`.nous/nogoods-v1-locked-report.json`, and the canonical locked transcript
+`.nous/nogoods-v2-locked-receipt.json`,
+`.nous/nogoods-v2-locked-report.json`, and the canonical locked transcript
 directory. No other API accepts `locked`, returns a
 locked fixture, or exposes the root. An integrity-clean empirical miss is
 `valid-null`; mechanical failure is `invalid`; either finalizes the receipt.
 
-If development power is below 0.80, V1 ends as a development-stage valid null,
+If development power is below 0.80, V2 ends as a development-stage valid null,
 validation and locked stay unopened, and the negative feasibility result is
 documented. The panel is not enlarged and thresholds are not changed.
 
@@ -1511,7 +1528,7 @@ Dechter's work on
 [backjumping and constraint learning](https://doi.org/10.1016/0004-3702%2890%2990046-3)
 frames learned constraints as reusable explanations of failed search. GRASP's
 [conflict analysis and recording](https://doi.org/10.1109/12.769433) shows the
-same principle in propositional search. V1 adopts their central causal test—can
+same principle in propositional search. V2 adopts their central causal test—can
 recorded failure prevent repeated work?—but intentionally does not implement
 their general algorithms.
 
