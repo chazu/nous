@@ -303,7 +303,11 @@ func reconstructBridgeMeter(disposition Disposition) ([]dsl.NogoodMeterRecord, e
 	requestName := request.Name
 	addMany(2, requestName, []string{"root-domain-read"})
 	addMany(3, requestName, []string{"root-propose", "root-bind"})
-	addMany(5, requestName, []string{"root-delete", "root-empty-check"})
+	for _, color := range problem.Variables[request.GetInt("decisionVariable")].Domain {
+		if color != request.GetInt("decisionColor") {
+			addMany(5, requestName, []string{"root-delete", "root-empty-check"})
+		}
+	}
 	add(12, "request-write", requestName, request.GetString("requestDigest"), "ok")
 	add(12, "agenda-enqueue", requestName, "ngConsiderPrune", "ok")
 	add(12, "agenda-dequeue", requestName, "ngConsiderPrune", "ok")

@@ -5,7 +5,7 @@ import "testing"
 func TestCompetencePanelsRejectEveryFrozenNearMissAndCorruption(t *testing.T) {
 	for _, panel := range []string{"development", "validation"} {
 		t.Run(panel, func(t *testing.T) {
-			execution, err := RunCompetence("../../domains", panel)
+			execution, err := runCompetence("../../domains", panel)
 			if err != nil {
 				t.Fatal(err)
 			}

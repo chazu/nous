@@ -1,6 +1,7 @@
 package nogoodexp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -19,14 +20,15 @@ var RequiredPolicies = []string{
 }
 
 type TaskOutcome struct {
-	Ordinal     int       `json:"ordinal"`
-	Cohort      string    `json:"cohort"`
-	Satisfied   bool      `json:"satisfied"`
-	Witness     []int     `json:"witness,omitempty"`
-	Disposition string    `json:"disposition,omitempty"`
-	Work        int64     `json:"work"`
-	Vector      [12]int64 `json:"vector"`
-	PruneSound  bool      `json:"prune_sound"`
+	Ordinal      int       `json:"ordinal"`
+	Cohort       string    `json:"cohort"`
+	SemanticCell string    `json:"semantic_cell"`
+	Satisfied    bool      `json:"satisfied"`
+	Witness      []int     `json:"witness,omitempty"`
+	Disposition  string    `json:"disposition,omitempty"`
+	Work         int64     `json:"work"`
+	Vector       [12]int64 `json:"vector"`
+	PruneSound   bool      `json:"prune_sound"`
 }
 
 type PolicyExecution struct {
@@ -44,7 +46,7 @@ type PanelExecution struct {
 }
 
 func RunDevelopmentExecution(domainsDir, role string) (PanelExecution, error) {
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		return PanelExecution{}, err
 	}
@@ -81,7 +83,7 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 	corrupted.Mask = 5
 	corrupted.Digest = artifactDigest(corrupted)
 	random := artifact
-	random.Mask = 3
+	random.Mask = nogoodfixture.RandomControlMask()
 	random.Digest = artifactDigest(random)
 	wrongFamily := artifact
 	wrongFamily.SchemaVersion = "blocked-pair-three-color/v1"
@@ -146,7 +148,44 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 		policyExecution.Transcript = bundle
 		execution.Policies = append(execution.Policies, policyExecution)
 	}
+	if err := validatePanelControls(execution); err != nil {
+		return PanelExecution{}, err
+	}
 	return execution, nil
+}
+
+func validatePanelControls(execution PanelExecution) error {
+	selected, err := policyByName(execution, "mac-cbj", "mac-cbj-empty", "no-artifact", "nous-generalized")
+	if err != nil {
+		return err
+	}
+	mac, empty, noArtifact, learned := selected[0], selected[1], selected[2], selected[3]
+	if !bytes.Equal(empty.Transcript.Raw, noArtifact.Transcript.Raw) {
+		return fmt.Errorf("mac-cbj-empty and no-artifact transcripts differ")
+	}
+	emptyTasks, _ := json.Marshal(empty.Tasks)
+	noArtifactTasks, _ := json.Marshal(noArtifact.Tasks)
+	if !bytes.Equal(emptyTasks, noArtifactTasks) {
+		return fmt.Errorf("mac-cbj-empty and no-artifact outcomes differ")
+	}
+	if len(mac.Tasks) != len(learned.Tasks) {
+		return fmt.Errorf("learned/mac task count mismatch")
+	}
+	maximumResumeOverhead := int64(-1)
+	for index := range learned.Tasks {
+		if learned.Tasks[index].Disposition != "resume" {
+			continue
+		}
+		overhead := learned.Tasks[index].Work - mac.Tasks[index].Work
+		maximumResumeOverhead = max(maximumResumeOverhead, overhead)
+		if overhead < 0 || overhead > NoMatchBridgeOverheadCap {
+			return fmt.Errorf("learned no-match task %d overhead %d exceeds cap learned=%v mac=%v", learned.Tasks[index].Ordinal, overhead, learned.Tasks[index].Vector, mac.Tasks[index].Vector)
+		}
+	}
+	if maximumResumeOverhead != 81 {
+		return fmt.Errorf("learned zero-completion resume maximum %d, want exact preregistered 81", maximumResumeOverhead)
+	}
+	return nil
 }
 
 func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact FrozenArtifact, authority ArtifactAuthority, bridge *BridgeExecution) (TaskOutcome, []TranscriptEvent, error) {
@@ -201,7 +240,7 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			events = appendEvents(events, finalEvents)
 			result = nogoodbaseline.Result{Satisfied: false}
 		} else {
-			result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
+			result, err = nogoodbaseline.MACCBJResume(task.ProblemJSON, decision)
 		}
 	case "reset":
 		emptyBridge, bridgeErr := NewBridgeExecution(domainsDir, nil, nil)
@@ -223,7 +262,7 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			return TaskOutcome{}, nil, meterErr
 		}
 		events = appendEvents(events, bridgeEvents)
-		result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
+		result, err = nogoodbaseline.MACCBJResume(task.ProblemJSON, decision)
 	default:
 		if bridge == nil {
 			return TaskOutcome{}, nil, fmt.Errorf("missing bridge execution")
@@ -247,7 +286,7 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			events = appendEvents(events, finalEvents)
 			result = nogoodbaseline.Result{Satisfied: false}
 		} else {
-			result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
+			result, err = nogoodbaseline.MACCBJResume(task.ProblemJSON, decision)
 		}
 	}
 	if err != nil {
@@ -280,10 +319,28 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 	}
 	vector := transcriptVector(events)
 	work := transcriptWork(events)
+	if work > 2000000 {
+		return TaskOutcome{}, nil, fmt.Errorf("policy %s task %d work %d exceeds hard cap", policy, task.Ordinal, work)
+	}
 	if disposition == "propose-prune" && policy == "nous-generalized" && work > 128 {
 		return TaskOutcome{}, nil, fmt.Errorf("learned prune work %d exceeds hard cap", work)
 	}
-	return TaskOutcome{Ordinal: task.Ordinal, Cohort: string(task.Cohort), Satisfied: result.Satisfied, Witness: slices.Clone(result.Witness), Disposition: disposition, Work: work, Vector: vector, PruneSound: pruneSound}, events, nil
+	return TaskOutcome{Ordinal: task.Ordinal, Cohort: string(task.Cohort), SemanticCell: fixtureSemanticCell(task), Satisfied: result.Satisfied, Witness: slices.Clone(result.Witness), Disposition: disposition, Work: work, Vector: vector, PruneSound: pruneSound}, events, nil
+}
+
+func fixtureSemanticCell(task nogoodfixture.Task) string {
+	switch task.Cohort {
+	case nogoodfixture.Reusable:
+		return fmt.Sprintf("r:%d", task.Template)
+	case nogoodfixture.NearMiss:
+		return fmt.Sprintf("n:%d:%d", task.Template, task.MissingBit)
+	case nogoodfixture.Irrelevant:
+		return fmt.Sprintf("i:%d", task.Template)
+	case nogoodfixture.IndependentUnsat:
+		return fmt.Sprintf("u:%d", task.Template)
+	default:
+		return ""
+	}
 }
 
 func learnedPruneTerminalEvents(taskOrdinal uint32) ([]TranscriptEvent, error) {

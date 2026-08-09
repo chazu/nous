@@ -28,7 +28,7 @@ func TestEngineDispatchSurchargePinsAuditedSource(t *testing.T) {
 
 func TestMeterRejectsRecordsThatDoNotReconcileWithOccurrenceStore(t *testing.T) {
 	artifact, authority := learnedArtifact(t)
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestMeterRejectsTrainingAndResumeOmissionsAndTupleRetargeting(t *testing.T)
 	}
 
 	artifact, authority := learnedArtifact(t)
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}

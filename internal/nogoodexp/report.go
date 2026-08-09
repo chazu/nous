@@ -23,7 +23,7 @@ type MechanicalGates struct {
 }
 
 func developmentTasks() ([]nogoodfixture.Task, error) {
-	return nogoodfixture.Panel("development")
+	return nogoodfixture.DevelopmentPanel()
 }
 
 type SemanticPanel struct {
@@ -55,11 +55,12 @@ type Report struct {
 }
 
 type DevelopmentEvidence struct {
-	Report     Report
-	Primary    PanelExecution
-	Audit      PanelExecution
-	ReportJSON []byte
-	Bundle     EvidenceBundle
+	Report      Report
+	Primary     PanelExecution
+	Audit       PanelExecution
+	FixtureJSON []byte
+	ReportJSON  []byte
+	Bundle      EvidenceBundle
 }
 
 func BuildDevelopmentEvidence(domainsDir, implementationCommit string) (DevelopmentEvidence, error) {
@@ -74,19 +75,42 @@ func buildDevelopmentEvidence(domainsDir, implementationCommit string, power fun
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	primary, err := runPanelExecution(domainsDir, "primary", "development", tasks)
+	return buildPanelEvidence(domainsDir, implementationCommit, "development", tasks, "development", 832001, power)
+}
+
+func buildPanelEvidence(domainsDir, implementationCommit, panel string, tasks []nogoodfixture.Task, competencePanel string, inferenceRoot any, power func(PanelExecution) (PowerEstimate, error)) (DevelopmentEvidence, error) {
+	fixtureJSON, err := encodeFixtureBundle(panel, tasks)
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	audit, err := runPanelExecution(domainsDir, "audit", "development", tasks)
+	return buildPanelEvidenceFromFixtures(domainsDir, implementationCommit, panel, fixtureJSON, competencePanel, publicStatisticsAuthority(panel, inferenceRoot), power)
+}
+
+func buildPanelEvidenceFromFixtures(domainsDir, implementationCommit, panel string, fixtureJSON []byte, competencePanel string, inferenceAuthority statisticsAuthority, power func(PanelExecution) (PowerEstimate, error)) (DevelopmentEvidence, error) {
+	if err := validatePreregisteredManifest(); err != nil {
+		return DevelopmentEvidence{}, err
+	}
+	primaryTasks, err := decodeFixtureBundle(panel, fixtureJSON)
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	primaryCompetence, err := RunCompetence(domainsDir, "development")
+	primary, err := runPanelExecution(domainsDir, "primary", panel, primaryTasks)
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	auditCompetence, err := RunCompetence(domainsDir, "development")
+	auditTasks, err := decodeFixtureBundle(panel, fixtureJSON)
+	if err != nil {
+		return DevelopmentEvidence{}, err
+	}
+	audit, err := runPanelExecution(domainsDir, "audit", panel, auditTasks)
+	if err != nil {
+		return DevelopmentEvidence{}, err
+	}
+	primaryCompetence, err := runCompetence(domainsDir, competencePanel)
+	if err != nil {
+		return DevelopmentEvidence{}, err
+	}
+	auditCompetence, err := runCompetence(domainsDir, competencePanel)
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
@@ -109,12 +133,12 @@ func buildDevelopmentEvidence(domainsDir, implementationCommit string, power fun
 		return DevelopmentEvidence{}, err
 	}
 	if !bytes.Equal(primaryBytes, auditBytes) || !bytes.Equal(competenceBytes, auditCompetenceBytes) {
-		return DevelopmentEvidence{}, fmt.Errorf("development dual execution semantic mismatch")
+		return DevelopmentEvidence{}, fmt.Errorf("%s dual execution semantic mismatch", panel)
 	}
 	if err := compareTranscriptBundles(primary, audit); err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	inference, err := InferDevelopment(primary)
+	inference, err := inferPanelWithAuthority(primary, inferenceAuthority)
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
@@ -129,27 +153,38 @@ func buildDevelopmentEvidence(domainsDir, implementationCommit string, power fun
 	}
 	payload := ReportPayload{
 		ReportVersion: ReportVersion, Manifest: preregisteredManifest(), PlanCommit: PlanCommit,
-		ImplementationCommit: implementationCommit, Panel: "development", Competence: primaryCompetence,
+		ImplementationCommit: implementationCommit, Panel: panel, Competence: primaryCompetence,
 		Execution: primarySemantic, Inference: inference, DevelopmentPower: powerEstimate, Gates: gates,
-		Limitations: []string{"bounded blocked-pair/v1 grammar", "development evidence is not validation or locked evidence"},
+		Limitations: []string{"bounded blocked-pair/v1 grammar", panel + " evidence does not extend beyond the preregistered blocked-pair task stream"},
 	}
 	payloadBytes, err := canonicalJSON(payload)
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	bundle, err := buildEvidenceBundle("development", primary, audit, digestHex(payloadBytes))
+	bundle, err := buildEvidenceBundle(panel, fixtureJSON, primary, audit, digestHex(payloadBytes))
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
-	report := Report{Payload: payload, PayloadSHA256: digestHex(payloadBytes), RootManifestSHA256: digestHex(bundle.RootManifestJSON), Classification: inference.Classification}
+	classification := stageClassification(panel, inference, powerEstimate)
+	report := Report{Payload: payload, PayloadSHA256: digestHex(payloadBytes), RootManifestSHA256: digestHex(bundle.RootManifestJSON), Classification: classification}
 	reportJSON, err := canonicalJSON(report)
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
 	if len(reportJSON) > ReportByteCap {
-		return DevelopmentEvidence{}, fmt.Errorf("development report exceeds byte cap")
+		return DevelopmentEvidence{}, fmt.Errorf("%s report exceeds byte cap", panel)
 	}
-	return DevelopmentEvidence{Report: report, Primary: primary, Audit: audit, ReportJSON: reportJSON, Bundle: bundle}, nil
+	return DevelopmentEvidence{Report: report, Primary: primary, Audit: audit, FixtureJSON: slices.Clone(fixtureJSON), ReportJSON: reportJSON, Bundle: bundle}, nil
+}
+
+func stageClassification(panel string, inference Inference, power PowerEstimate) string {
+	if panel == "development" && !power.Authorized {
+		return "valid-null"
+	}
+	if panel == "locked" {
+		return inference.Classification
+	}
+	return "interim"
 }
 
 func semanticPanel(execution PanelExecution) SemanticPanel {

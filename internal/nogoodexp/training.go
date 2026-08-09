@@ -131,5 +131,8 @@ func RunTraining(domainsDir string) (TrainingRun, error) {
 	if err != nil {
 		return TrainingRun{}, err
 	}
+	if store.Count() > 200000 {
+		return TrainingRun{}, fmt.Errorf("training store has %d attributed units", store.Count())
+	}
 	return TrainingRun{Store: store, TasksPopped: popped, Terminal: terminal, Artifact: artifact, MeterRecords: records}, nil
 }

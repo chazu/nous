@@ -215,7 +215,7 @@ func learnedArtifact(t *testing.T) (FrozenArtifact, ArtifactAuthority) {
 
 func TestLearnedArtifactProposesOnlyOnReusableDevelopmentCases(t *testing.T) {
 	artifact, authority := learnedArtifact(t)
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestLearnedArtifactProposesOnlyOnReusableDevelopmentCases(t *testing.T) {
 
 func TestBridgeRejectsInvalidDecisionWithoutCreatingRequest(t *testing.T) {
 	artifact, authority := learnedArtifact(t)
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestBridgeRejectsInvalidDecisionWithoutCreatingRequest(t *testing.T) {
 }
 
 func TestEmptyArtifactUsesSameBridgeAndNeverPrunes(t *testing.T) {
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestConcreteMemoPrunesOnlyItsExactTrainingTupleThroughBridge(t *testing.T) 
 
 func TestParsedOrMutatedArtifactCannotSelfAuthorize(t *testing.T) {
 	artifact, authority := learnedArtifact(t)
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}

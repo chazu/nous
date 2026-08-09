@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"math/rand/v2"
+	"slices"
 	"sort"
 )
 
@@ -43,17 +44,61 @@ type pairedTask struct {
 	m       int64
 }
 
+type statisticsAuthority struct {
+	panel string
+	root  any
+	seeds map[string][][2]uint64
+}
+
+func publicStatisticsAuthority(panel string, root any) statisticsAuthority {
+	return statisticsAuthority{panel: panel, root: root}
+}
+
+func lockedStatisticsAuthority(root string) statisticsAuthority {
+	authority := statisticsAuthority{panel: "locked", seeds: map[string][][2]uint64{}}
+	for _, purpose := range []string{"bootstrap/nous-vs-mac", "randomization/nous-vs-mac"} {
+		authority.seeds[purpose] = make([][2]uint64, InferenceReplicates)
+		for replicate := 0; replicate < InferenceReplicates; replicate++ {
+			authority.seeds[purpose][replicate] = statisticsSeeds("locked", root, replicate, purpose)
+		}
+	}
+	return authority
+}
+
+func (authority statisticsAuthority) stream(replicate int, purpose string) *rand.Rand {
+	if authority.seeds != nil {
+		seeds, ok := authority.seeds[purpose]
+		if !ok || replicate < 0 || replicate >= len(seeds) {
+			panic("invalid locked statistics stream")
+		}
+		return rand.New(rand.NewPCG(seeds[replicate][0], seeds[replicate][1]))
+	}
+	return statisticsStream(authority.panel, authority.root, replicate, purpose)
+}
+
 func InferDevelopment(execution PanelExecution) (Inference, error) {
-	if execution.Panel != "development" || len(execution.Policies) != len(RequiredPolicies) {
-		return Inference{}, fmt.Errorf("inference requires a complete development execution")
+	return inferPanelWithAuthority(execution, publicStatisticsAuthority("development", 832001))
+}
+
+func InferPanel(execution PanelExecution, root any) (Inference, error) {
+	return inferPanelWithAuthority(execution, publicStatisticsAuthority(execution.Panel, root))
+}
+
+func inferPanelWithAuthority(execution PanelExecution, authority statisticsAuthority) (Inference, error) {
+	if !slices.Contains([]string{"development", "validation", "locked"}, execution.Panel) || len(execution.Policies) != len(RequiredPolicies) {
+		return Inference{}, fmt.Errorf("inference requires a complete preregistered panel execution")
+	}
+	if authority.panel != execution.Panel {
+		return Inference{}, fmt.Errorf("statistics authority panel mismatch")
 	}
 	selected, err := policyByName(execution, "nous-generalized", "mac-cbj")
 	if err != nil {
 		return Inference{}, err
 	}
 	learned, mac := selected[0], selected[1]
-	if len(learned.Tasks) != 96 || len(mac.Tasks) != 96 {
-		return Inference{}, fmt.Errorf("development inference requires 96 paired tasks")
+	wantTasks := map[string]int{"development": DevelopmentTaskCount, "validation": ValidationTaskCount, "locked": LockedTaskCount}[execution.Panel]
+	if len(learned.Tasks) != wantTasks || len(mac.Tasks) != wantTasks {
+		return Inference{}, fmt.Errorf("%s inference requires %d paired tasks", execution.Panel, wantTasks)
 	}
 	paired := make([]pairedTask, len(mac.Tasks))
 	var numerator, denominator, harmNumerator, harmDenominator int64
@@ -102,7 +147,7 @@ func InferDevelopment(execution PanelExecution) (Inference, error) {
 		replicate int
 	}, InferenceReplicates)
 	for replicate := 0; replicate < InferenceReplicates; replicate++ {
-		rng := statisticsStream("development", 832001, replicate, "bootstrap/nous-vs-mac")
+		rng := authority.stream(replicate, "bootstrap/nous-vs-mac")
 		bootNumerator, bootDenominator := execution.AcquisitionWork, int64(0)
 		for _, cell := range orderedCells() {
 			members := strata[cell]
@@ -135,7 +180,7 @@ func InferDevelopment(execution PanelExecution) (Inference, error) {
 	}
 	extreme := 0
 	for replicate := 0; replicate < InferenceReplicates; replicate++ {
-		rng := statisticsStream("development", 832001, replicate, "randomization/nous-vs-mac")
+		rng := authority.stream(replicate, "randomization/nous-vs-mac")
 		var randomized int64
 		for _, cell := range orderedCells() {
 			for _, item := range strata[cell] {
@@ -193,6 +238,9 @@ func policyByName(execution PanelExecution, names ...string) ([]PolicyExecution,
 }
 
 func semanticCell(outcome TaskOutcome) string {
+	if outcome.SemanticCell != "" {
+		return outcome.SemanticCell
+	}
 	// Development fixture ordinals are frozen: reusable 0..55, near 56..79,
 	// irrelevant 80..87, independent-unsat 88..95.
 	switch outcome.Cohort {
@@ -238,9 +286,14 @@ func stratify(tasks []pairedTask) map[string][]pairedTask {
 }
 
 func statisticsStream(panel string, root any, replicate int, purpose string) *rand.Rand {
+	seeds := statisticsSeeds(panel, root, replicate, purpose)
+	return rand.New(rand.NewPCG(seeds[0], seeds[1]))
+}
+
+func statisticsSeeds(panel string, root any, replicate int, purpose string) [2]uint64 {
 	encoded, _ := json.Marshal([]any{"part3/nogoods/v1", panel, root, replicate, purpose})
 	digest := sha256.Sum256(encoded)
-	return rand.New(rand.NewPCG(binary.BigEndian.Uint64(digest[:8]), binary.BigEndian.Uint64(digest[8:16])))
+	return [2]uint64{binary.BigEndian.Uint64(digest[:8]), binary.BigEndian.Uint64(digest[8:16])}
 }
 
 func compareFraction(left, right Fraction) int {

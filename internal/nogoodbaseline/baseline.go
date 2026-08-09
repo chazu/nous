@@ -87,6 +87,18 @@ type solver struct {
 // consistency, MRV/degree ordering, exact local conflict sets, and
 // conflict-directed backjump returns.
 func MACCBJ(data []byte, decision Literal) (Result, error) {
+	return macCBJ(data, decision, false)
+}
+
+// MACCBJResume continues at the frozen post-decision pause. The caller has
+// already charged and validated the root domain read, proposal, bind, removal,
+// and empty check; this function materializes that handed-off state without
+// charging those five transitions a second time.
+func MACCBJResume(data []byte, decision Literal) (Result, error) {
+	return macCBJ(data, decision, true)
+}
+
+func macCBJ(data []byte, decision Literal, prepared bool) (Result, error) {
 	p, err := parse(data)
 	if err != nil {
 		return Result{}, err
@@ -98,19 +110,29 @@ func MACCBJ(data []byte, decision Literal) (Result, error) {
 	}
 	rootDomains := cloneDomains(s.domains)
 	rootExplanations := cloneExplanations(s.explanations)
-	s.meter.charge(2, "decision-domain-read", decision.Variable, decision.Color)
-	s.meter.charge(3, "decision-propose", decision.Variable, decision.Color)
 	if !contains(s.domains[decision.Variable], decision.Color) || s.assignment[decision.Variable] >= 0 {
 		return Result{}, fmt.Errorf("invalid supplied decision")
 	}
-	s.assignment[decision.Variable] = decision.Color
-	s.meter.charge(3, "decision-bind", decision.Variable, decision.Color)
-	for _, color := range slices.Clone(s.domains[decision.Variable]) {
-		if color == decision.Color {
-			continue
+	if prepared {
+		s.assignment[decision.Variable] = decision.Color
+		for _, color := range slices.Clone(s.domains[decision.Variable]) {
+			if color != decision.Color {
+				s.explanations[decision.Variable][color] = map[int]bool{decision.Variable: true}
+			}
 		}
-		s.remove(decision.Variable, color, map[int]bool{decision.Variable: true})
-		s.meter.charge(5, "domain-empty-check", decision.Variable)
+		s.domains[decision.Variable] = []int{decision.Color}
+	} else {
+		s.meter.charge(2, "decision-domain-read", decision.Variable, decision.Color)
+		s.meter.charge(3, "decision-propose", decision.Variable, decision.Color)
+		s.assignment[decision.Variable] = decision.Color
+		s.meter.charge(3, "decision-bind", decision.Variable, decision.Color)
+		for _, color := range slices.Clone(s.domains[decision.Variable]) {
+			if color == decision.Color {
+				continue
+			}
+			s.remove(decision.Variable, color, map[int]bool{decision.Variable: true})
+			s.meter.charge(5, "domain-empty-check", decision.Variable)
+		}
 	}
 	if !s.assignedEdgesConsistent(decision.Variable) {
 		s.finishRoot(&result, decision, rootDomains, rootExplanations)

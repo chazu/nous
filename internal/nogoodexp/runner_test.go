@@ -10,7 +10,7 @@ import (
 )
 
 func TestCompletePolicyMatrixOnUtilitySmokePanel(t *testing.T) {
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestCompletePolicyMatrixOnUtilitySmokePanel(t *testing.T) {
 }
 
 func TestMACCBJDevelopmentTranscriptIsDeterministic(t *testing.T) {
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}

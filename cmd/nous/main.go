@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/gameexp"
 	"github.com/chazu/nous/internal/kuberepairexp"
+	"github.com/chazu/nous/internal/nogoodexp"
 	"github.com/chazu/nous/internal/rewriteexp"
 	"github.com/chazu/nous/internal/ruleinductionexp"
 	"github.com/chazu/nous/internal/seed"
@@ -47,6 +49,8 @@ func main() {
 		kubeRepairTrialsCmd(os.Args[2:])
 	case "game-trials":
 		gameTrialsCmd(os.Args[2:])
+	case "nogood-trials":
+		nogoodTrialsCmd(os.Args[2:])
 	case "ruleinduction-trials":
 		ruleInductionTrialsCmd(os.Args[2:])
 	case "causal-trials":
@@ -57,6 +61,45 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
 	}
+}
+
+func nogoodTrialsCmd(args []string) {
+	fs := flag.NewFlagSet("nogood-trials", flag.ExitOnError)
+	repoRoot := fs.String("repo-root", ".", "canonical repository root")
+	domainsDir := fs.String("domains-dir", "domains", "canonical repository domains/ path")
+	panel := fs.String("panel", "development", "development, validation, or locked")
+	unlockToken := fs.String("unlock-token", "", "locked token nogoods/v2:<exact-clean-HEAD>")
+	fs.Parse(args)
+	root, err := filepath.Abs(*repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	domains := *domainsDir
+	if !filepath.IsAbs(domains) {
+		domains = filepath.Join(root, domains)
+	}
+	var report nogoodexp.Report
+	switch *panel {
+	case "development":
+		report, err = nogoodexp.ExecuteDevelopment(root, domains)
+	case "validation":
+		report, err = nogoodexp.ExecuteValidation(root, domains)
+	case "locked":
+		report, err = nogoodexp.ExecuteLocked(root, domains, *unlockToken)
+	default:
+		err = fmt.Errorf("unknown nogood panel %q", *panel)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: encode report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(encoded))
 }
 
 func kubeRepairTrialsCmd(args []string) {
@@ -396,6 +439,7 @@ Usage:
   nous configrepair-trials [flags]              Run Kubernetes/Terraform repair trials
   nous kuberepair-trials -panel NAME            Run atomic Kubernetes repair ordering trials
   nous game-trials [flags]                      Run iterated-game strategy trials
+  nous nogood-trials -panel NAME                Run guarded nogood development/validation/locked panel
   nous ruleinduction-trials [flags]             Run relational rule-induction development trials
   nous causal-trials -panel NAME                Run v2 causal development/training/replay/validation/locked panel
   nous help                                     Show this help

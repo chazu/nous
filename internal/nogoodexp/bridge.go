@@ -195,8 +195,13 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	if err := chargeMeterOperations(meterToken, 3, requestName, []string{"root-propose", "root-bind"}); err != nil {
 		return Disposition{}, err
 	}
-	if err := chargeMeterOperations(meterToken, 5, requestName, []string{"root-delete", "root-empty-check"}); err != nil {
-		return Disposition{}, err
+	for _, color := range problem.Variables[decision.Variable].Domain {
+		if color == decision.Color {
+			continue
+		}
+		if err := chargeMeterOperations(meterToken, 5, requestName, []string{"root-delete", "root-empty-check"}); err != nil {
+			return Disposition{}, err
+		}
 	}
 	request := unit.New(requestName)
 	request.Set("isA", []string{"NogoodRequest", "Anything"})
@@ -362,6 +367,24 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		return Disposition{}, err
 	}
 	result.MeterRecords = records
+	if result.Status == "resume" {
+		requestStart := -1
+		for index, record := range records {
+			if record.Operation == "request-write" {
+				requestStart = index
+				break
+			}
+		}
+		if requestStart < 0 {
+			return Disposition{}, fmt.Errorf("resume bridge lacks request-write boundary")
+		}
+		if work := len(records) - requestStart; work > NoMatchBridgeOverheadCap {
+			return Disposition{}, fmt.Errorf("zero-completion resume bridge work %d exceeds cap %d", work, NoMatchBridgeOverheadCap)
+		}
+	}
+	if store.Count() > 200000 {
+		return Disposition{}, fmt.Errorf("bridge store has %d attributed units", store.Count())
+	}
 	return result, nil
 }
 

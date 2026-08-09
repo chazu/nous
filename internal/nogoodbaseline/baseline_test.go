@@ -1,6 +1,7 @@
 package nogoodbaseline
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/chazu/nous/internal/nogoodfixture"
@@ -8,7 +9,7 @@ import (
 )
 
 func TestMACCBJMatchesIndependentOracleAcrossDevelopment(t *testing.T) {
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +49,34 @@ func TestMACCBJMatchesIndependentOracleAcrossDevelopment(t *testing.T) {
 	t.Logf("minimum reusable MAC-CBJ work=%d", minimumReusable)
 }
 
+func TestMACCBJResumeIsExactPostDecisionContinuation(t *testing.T) {
+	tasks, err := nogoodfixture.DevelopmentPanel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		decision := Literal{Variable: task.Decision.Variable, Color: task.Decision.Color}
+		standalone, err := MACCBJ(task.ProblemJSON, decision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resumed, err := MACCBJResume(task.ProblemJSON, decision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		problem, err := parse(task.ProblemJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefixEvents := 3 + 2*(len(problem.Variables[decision.Variable].Domain)-1)
+		if standalone.Satisfied != resumed.Satisfied || !reflect.DeepEqual(standalone.Witness, resumed.Witness) || !reflect.DeepEqual(standalone.Events[prefixEvents:], resumed.Events) {
+			t.Fatalf("task %d resume is not the exact post-decision continuation", task.Ordinal)
+		}
+	}
+}
+
 func TestConventionalPoliciesMatchIndependentOracleAcrossDevelopment(t *testing.T) {
-	tasks, err := nogoodfixture.Panel("development")
+	tasks, err := nogoodfixture.DevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}

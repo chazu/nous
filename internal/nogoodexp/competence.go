@@ -22,7 +22,7 @@ type CompetenceExecution struct {
 	Outcomes []CompetenceOutcome `json:"outcomes"`
 }
 
-func RunCompetence(domainsDir, panel string) (CompetenceExecution, error) {
+func runCompetence(domainsDir, panel string) (CompetenceExecution, error) {
 	training, err := RunTraining(domainsDir)
 	if err != nil {
 		return CompetenceExecution{}, err
@@ -31,7 +31,14 @@ func RunCompetence(domainsDir, panel string) (CompetenceExecution, error) {
 	if err != nil {
 		return CompetenceExecution{}, err
 	}
-	cases, err := nogoodfixture.Competence(panel)
+	var cases []nogoodfixture.CompetenceCase
+	if panel == "development" {
+		cases, err = nogoodfixture.DevelopmentCompetence()
+	} else if panel == "validation" {
+		cases, err = validationCompetence()
+	} else {
+		return CompetenceExecution{}, fmt.Errorf("unknown competence panel %q", panel)
+	}
 	if err != nil {
 		return CompetenceExecution{}, err
 	}
