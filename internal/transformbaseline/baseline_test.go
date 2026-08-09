@@ -1,6 +1,7 @@
 package transformbaseline
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -101,5 +102,61 @@ func TestIndependentApplicationEventsMatchGoldenVectors(t *testing.T) {
 func TestProfileBoundaryDoesNotImportSemantics(t *testing.T) {
 	if len(transformfixturecore.ProfileDigest()) != 64 {
 		t.Fatal("profile")
+	}
+}
+
+func TestApplicationEventsExposeReachedPredicatesAndSequentialEdits(t *testing.T) {
+	rows := []any{
+		[]any{0, "group", -1, "", "", "", "", -1},
+		[]any{1, "definition", 0, "d", "old", "", "", -1},
+		[]any{2, "request", 0, "q", "", "old", "new", 1},
+		[]any{3, "reference", 0, "a", "old", "", "", 1},
+	}
+	forest, _ := json.Marshal([]any{"typed-reference-forest/v1", rows})
+	schemaBytes := encodeSchema(schema{"request-target", "definition+references", "global", "any", "required"})
+	application, events, err := ApplySchemaMetered(forest, schemaBytes, "heldout")
+	if err != nil || application.Terminal != "applied" {
+		t.Fatalf("application=%+v err=%v", application, err)
+	}
+	var editApplies []Event
+	for _, event := range events {
+		if event.Operation == "schema-predicate" {
+			var selector []any
+			if json.Unmarshal(event.Inputs[2], &selector) != nil || selector[2] == "guard" {
+				t.Fatalf("placeholder selector remains: %s", event.Inputs[2])
+			}
+		}
+		if event.Operation == "edit-apply" {
+			editApplies = append(editApplies, event)
+		}
+	}
+	if len(editApplies) != 2 || bytes.Equal(editApplies[0].Outputs[0], application.Output) || !bytes.Equal(editApplies[1].Inputs[0], editApplies[0].Outputs[0]) || !bytes.Equal(editApplies[1].Outputs[0], application.Output) {
+		t.Fatalf("edits are not a causal sequence: %+v", editApplies)
+	}
+
+	rows = []any{
+		[]any{0, "group", -1, "", "", "", "", -1},
+		[]any{1, "group", -1, "", "", "", "", -1},
+		[]any{2, "definition", 1, "d", "old", "", "", -1},
+		[]any{3, "request", 0, "q", "", "old", "new", 2},
+	}
+	forest, _ = json.Marshal([]any{"typed-reference-forest/v1", rows})
+	application, events, err = ApplySchemaMetered(forest, schemaBytes, "heldout")
+	if err != nil || application.Terminal != "abstain/locality" {
+		t.Fatalf("abstention=%+v err=%v", application, err)
+	}
+	foundFalseLocality := false
+	for _, event := range events {
+		if event.Operation != "schema-predicate" {
+			continue
+		}
+		var selector []any
+		_ = json.Unmarshal(event.Inputs[2], &selector)
+		if len(selector) == 3 && selector[2] == "anchor-locality" && event.Outcome == "false" {
+			foundFalseLocality = true
+		}
+	}
+	if !foundFalseLocality {
+		t.Fatal("abstention omitted its reached failing predicate")
 	}
 }

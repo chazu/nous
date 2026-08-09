@@ -483,6 +483,9 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 		if err := validateReducedOperation(operation, applications, lastAttach, lastOutput, lastOperation); err != nil {
 			return TransformTranscriptBundle{}, fmt.Errorf("operation %d %s/%s/%s: %w", event.Sequence, operation.Phase, operation.Operation, operation.Outcome, err)
 		}
+		if err := validateTransformSemantics(operation, objects); err != nil {
+			return TransformTranscriptBundle{}, fmt.Errorf("operation %d %s semantic mismatch: %w", event.Sequence, operation.Operation, err)
+		}
 		usedObjects[event.Object] = true
 		if operation.Operation == "schema-application" || operation.Operation == "replay-application" {
 			applications++

@@ -194,7 +194,11 @@ func lggReferenceProjectionExact(observations []lggObservation, scope, guard str
 }
 
 func lggComparison(phase, value string, result bool) Event {
-	return Event{3, "compare", phase, map[bool]string{true: "true", false: "false"}[result], [][]byte{baselineAtom("enum", value), baselineAtom("boolean", true)}, [][]byte{baselineAtom("boolean", result)}}
+	observed := value
+	if !result {
+		observed = "not-" + value
+	}
+	return Event{3, "compare", phase, map[bool]string{true: "true", false: "false"}[result], [][]byte{baselineAtom("enum", value), baselineAtom("enum", observed)}, [][]byte{baselineAtom("boolean", result)}}
 }
 
 func cheapest(values []string, costs map[string]int, order []string) string {

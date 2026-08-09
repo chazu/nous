@@ -278,17 +278,16 @@ func recordSchemaApplication(vm *VM, f transformschema.Forest, s transformschema
 		return nil
 	}
 	start := transformMeterLength(vm)
-	if r.Terminal != "applied" || r.Output == nil {
-		resultWire, _ := json.Marshal([]any{"transform-result/v1", r.Terminal, ""})
-		certificate, _ := json.Marshal([]any{"transform-certificate/v1", transformDigest(schemaBytes), transformDigest(forestBytes), -1, -1, []int{}, []bool{}, []string{}, "", r.Terminal, start, start})
-		application, _ := json.Marshal([]any{"transform-schema-application/v1", json.RawMessage(resultWire), json.RawMessage(certificate)})
-		return recordTransform(vm, "schema-application", r.Terminal, 11, [][]byte{forestBytes, schemaBytes}, [][]byte{application})
-	}
 	byID := map[int]transformschema.Node{}
-	var references []transformschema.Node
+	var requests, definitions, references []transformschema.Node
 	for _, node := range f.Nodes {
 		byID[node.ID] = node
-		if node.Kind == "reference" {
+		switch node.Kind {
+		case "request":
+			requests = append(requests, node)
+		case "definition":
+			definitions = append(definitions, node)
+		case "reference":
 			references = append(references, node)
 		}
 		nodeFacts, _ := json.Marshal([]any{"transform-node-facts/v1", node.Kind, node.Value, node.From, node.To})
@@ -296,64 +295,158 @@ func recordSchemaApplication(vm *VM, f transformschema.Forest, s transformschema
 			return err
 		}
 	}
-	parentNodes := append(slices.Clone(references), byID[r.Certificate.RequestID], byID[r.Certificate.DefinitionID])
-	if s.Anchor == "first-local" {
-		parentNodes = append(parentNodes, byID[r.Certificate.DefinitionID])
+	var guards []bool
+	predicate := func(selector string, subject []byte, result bool) error {
+		outcome := "false"
+		if result {
+			outcome = "true"
+		}
+		guards = append(guards, result)
+		return recordTransform(vm, "schema-predicate", outcome, 8, [][]byte{forestBytes, schemaBytes, transformAtom("selector", selector), subject}, [][]byte{transformAtom("boolean", result)})
 	}
-	for _, node := range parentNodes {
-		parentFacts, _ := json.Marshal([]any{"transform-parent-facts/v1", node.Parent, node.Key})
-		if err := recordTransform(vm, "parent", "ok", 1, [][]byte{forestBytes, transformAtom("id", node.ID)}, [][]byte{parentFacts}); err != nil {
+	finish := func(requestID, definitionID int, referenceIDs []int, editDigests []string) error {
+		outputDigest := ""
+		if len(outputBytes) != 0 {
+			outputDigest = transformDigest(outputBytes)
+		}
+		resultWire, _ := json.Marshal([]any{"transform-result/v1", r.Terminal, outputDigest})
+		last := transformMeterLength(vm) + 1
+		certificate, _ := json.Marshal([]any{"transform-certificate/v1", transformDigest(schemaBytes), transformDigest(forestBytes), requestID, definitionID, referenceIDs, guards, editDigests, outputDigest, r.Terminal, start, last})
+		application, _ := json.Marshal([]any{"transform-schema-application/v1", json.RawMessage(resultWire), json.RawMessage(certificate)})
+		if err := recordTransform(vm, "schema-application", r.Terminal, 11, [][]byte{forestBytes, schemaBytes}, [][]byte{application}); err != nil {
 			return err
 		}
+		return recordTransform(vm, "evidence-link", "attached", 10, [][]byte{resultWire}, nil)
 	}
-	targetNodes := slices.Clone(references)
+	if err := predicate("request-count", transformAtom("count", len(requests)), len(requests) == 1); err != nil {
+		return err
+	}
+	if len(requests) != 1 {
+		return finish(-1, -1, nil, nil)
+	}
+	request := requests[0]
+	requestParent, _ := json.Marshal([]any{"transform-parent-facts/v1", request.Parent, request.Key})
+	if err := recordTransform(vm, "parent", "ok", 1, [][]byte{forestBytes, transformAtom("id", request.ID)}, [][]byte{requestParent}); err != nil {
+		return err
+	}
 	if s.Anchor == "request-target" {
-		targetNodes = append(targetNodes, byID[r.Certificate.RequestID])
-	}
-	for _, node := range targetNodes {
-		if err := recordTransform(vm, "target", "ok", 2, [][]byte{forestBytes, transformAtom("id", node.ID)}, [][]byte{transformAtom("id", node.Target)}); err != nil {
+		if err := recordTransform(vm, "target", "ok", 2, [][]byte{forestBytes, transformAtom("id", request.ID)}, [][]byte{transformAtom("id", request.Target)}); err != nil {
 			return err
 		}
 	}
-	predicates := 4 + 3*len(references) + len(r.Certificate.Edits)
+	var candidates []transformschema.Node
+	for _, candidate := range definitions {
+		if s.Anchor == "request-target" && candidate.ID == request.Target || s.Anchor == "from-value" && candidate.Value == request.From || s.Anchor == "first-local" && candidate.Parent == request.Parent {
+			candidates = append(candidates, candidate)
+			if s.Anchor == "first-local" {
+				break
+			}
+		}
+	}
+	if err := predicate("anchor-candidate", transformAtom("count", len(candidates)), len(candidates) == 1); err != nil {
+		return err
+	}
 	if s.Anchor != "request-target" {
-		predicates++
-	}
-	for index := range predicates {
-		selector := transformAtom("enum", "guard")
-		subject := transformAtom("id", index)
-		if err := recordTransform(vm, "schema-predicate", "true", 8, [][]byte{forestBytes, schemaBytes, selector, subject}, [][]byte{transformAtom("boolean", true)}); err != nil {
+		candidateID := -1
+		if len(candidates) != 0 {
+			candidateID = candidates[0].ID
+		}
+		if err := predicate("anchor-candidate", transformAtom("id", candidateID), len(candidates) == 1); err != nil {
 			return err
 		}
 	}
-	editDigests := make([]string, len(r.Certificate.Edits))
-	for i, edit := range r.Certificate.Edits {
+	if len(candidates) != 1 {
+		return finish(request.ID, -1, nil, nil)
+	}
+	definition := candidates[0]
+	definitionParent, _ := json.Marshal([]any{"transform-parent-facts/v1", definition.Parent, definition.Key})
+	if err := recordTransform(vm, "parent", "ok", 1, [][]byte{forestBytes, transformAtom("id", definition.ID)}, [][]byte{definitionParent}); err != nil {
+		return err
+	}
+	if s.Anchor == "first-local" {
+		if err := recordTransform(vm, "parent", "ok", 1, [][]byte{forestBytes, transformAtom("id", definition.ID)}, [][]byte{definitionParent}); err != nil {
+			return err
+		}
+	}
+	local := s.Locality == "none" || definition.Parent == request.Parent
+	if err := predicate("anchor-locality", transformAtom("id", definition.ID), local); err != nil {
+		return err
+	}
+	if !local {
+		return finish(request.ID, definition.ID, nil, nil)
+	}
+	var selectedReferences []transformschema.Node
+	for _, reference := range references {
+		parent, _ := json.Marshal([]any{"transform-parent-facts/v1", reference.Parent, reference.Key})
+		if err := recordTransform(vm, "parent", "ok", 1, [][]byte{forestBytes, transformAtom("id", reference.ID)}, [][]byte{parent}); err != nil {
+			return err
+		}
+		if err := recordTransform(vm, "target", "ok", 2, [][]byte{forestBytes, transformAtom("id", reference.ID)}, [][]byte{transformAtom("id", reference.Target)}); err != nil {
+			return err
+		}
+		targetMatch := reference.Target == definition.ID
+		scopeMatch := s.ReferenceScope == "global" || reference.Parent == request.Parent
+		guardMatch := s.OldGuard == "any" || reference.Value == request.From
+		if err := predicate("reference-target", transformAtom("id", reference.ID), targetMatch); err != nil {
+			return err
+		}
+		if err := predicate("reference-scope", transformAtom("id", reference.ID), scopeMatch); err != nil {
+			return err
+		}
+		if err := predicate("reference-old-guard", transformAtom("id", reference.ID), guardMatch); err != nil {
+			return err
+		}
+		if (s.Targets == "references" || s.Targets == "definition+references") && targetMatch && scopeMatch && guardMatch {
+			selectedReferences = append(selectedReferences, reference)
+		}
+	}
+	var edits []transformschema.Edit
+	if s.Targets == "definition" || s.Targets == "definition+references" {
+		edits = append(edits, transformschema.Edit{Target: definition.ID, Value: request.To})
+	}
+	for _, reference := range selectedReferences {
+		edits = append(edits, transformschema.Edit{Target: reference.ID, Value: request.To})
+	}
+	slices.SortFunc(edits, func(a, b transformschema.Edit) int { return a.Target - b.Target })
+	expansionOK := len(edits) >= 1 && len(edits) <= transformschema.MaxEdits
+	if err := predicate("expansion-bound", transformAtom("count", len(edits)), expansionOK); err != nil {
+		return err
+	}
+	if !expansionOK {
+		return finish(request.ID, definition.ID, nil, nil)
+	}
+	editDigests := make([]string, len(edits))
+	current := f
+	for i, edit := range edits {
 		editWire, _ := json.Marshal([]any{"set-value/v1", edit.Target, edit.Value})
 		editDigests[i] = transformDigest(editWire)
+		noOp := byID[edit.Target].Value == edit.Value
+		if err := predicate("edit-no-op", editWire, !noOp); err != nil {
+			return err
+		}
+		if noOp {
+			return finish(request.ID, definition.ID, nil, editDigests[:i+1])
+		}
 		status, _ := json.Marshal([]any{"transform-edit-status/v1", "valid", editDigests[i]})
-		if err := recordTransform(vm, "edit-validate", "valid", 6, [][]byte{forestBytes, editWire}, [][]byte{status}); err != nil {
+		currentBytes, _ := current.CanonicalJSON()
+		if err := recordTransform(vm, "edit-validate", "valid", 6, [][]byte{currentBytes, editWire}, [][]byte{status}); err != nil {
 			return err
 		}
-		if err := recordTransform(vm, "edit-apply", "applied", 7, [][]byte{forestBytes, editWire}, [][]byte{outputBytes}); err != nil {
+		next, err := (transformschema.Program{Edits: []transformschema.Edit{edit}}).Apply(current)
+		if err != nil {
 			return err
 		}
+		nextBytes, _ := next.CanonicalJSON()
+		if err := recordTransform(vm, "edit-apply", "applied", 7, [][]byte{currentBytes, editWire}, [][]byte{nextBytes}); err != nil {
+			return err
+		}
+		current = next
 	}
-	finalEventCount := len(f.Nodes) + len(parentNodes) + len(targetNodes) + predicates + 2*len(r.Certificate.Edits) + 1 + 1
-	last := start + finalEventCount - 1
-	resultWire, _ := json.Marshal([]any{"transform-result/v1", r.Terminal, transformDigest(outputBytes)})
-	guards := make([]bool, predicates)
-	for i := range guards {
-		guards[i] = true
+	referenceIDs := make([]int, len(selectedReferences))
+	for index, reference := range selectedReferences {
+		referenceIDs[index] = reference.ID
 	}
-	certificate, _ := json.Marshal([]any{"transform-certificate/v1", transformDigest(schemaBytes), transformDigest(forestBytes), r.Certificate.RequestID, r.Certificate.DefinitionID, r.Certificate.ReferenceIDs, guards, editDigests, transformDigest(outputBytes), r.Terminal, start, last})
-	application, _ := json.Marshal([]any{"transform-schema-application/v1", json.RawMessage(resultWire), json.RawMessage(certificate)})
-	if err := recordTransform(vm, "schema-application", r.Terminal, 11, [][]byte{forestBytes, schemaBytes}, [][]byte{application}); err != nil {
-		return err
-	}
-	if err := recordTransform(vm, "evidence-link", "attached", 10, [][]byte{resultWire}, nil); err != nil {
-		return err
-	}
-	return nil
+	return finish(request.ID, definition.ID, referenceIDs, editDigests)
 }
 
 func bTSOutputCompare(vm *VM) error {
@@ -376,15 +469,16 @@ func bTSOutputCompare(vm *VM) error {
 	for i := range left.Nodes {
 		leftNode, _ := json.Marshal(left.Nodes[i])
 		rightNode, _ := json.Marshal(right.Nodes[i])
-		nodeEqual := bytes.Equal(leftNode, rightNode)
-		if !nodeEqual {
+		if !bytes.Equal(leftNode, rightNode) {
 			equal = false
 		}
+	}
+	for range left.Nodes {
 		outcome := "different"
-		if nodeEqual {
+		if equal {
 			outcome = "equal"
 		}
-		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", nodeEqual)}); err != nil {
+		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", equal)}); err != nil {
 			return err
 		}
 	}
@@ -405,15 +499,16 @@ func CompareTransformOutputs(vm *VM, leftBytes, rightBytes []byte) (bool, error)
 	for i := range left.Nodes {
 		leftNode, _ := json.Marshal(left.Nodes[i])
 		rightNode, _ := json.Marshal(right.Nodes[i])
-		nodeEqual := bytes.Equal(leftNode, rightNode)
-		if !nodeEqual {
+		if !bytes.Equal(leftNode, rightNode) {
 			equal = false
 		}
+	}
+	for range left.Nodes {
 		outcome := "different"
-		if nodeEqual {
+		if equal {
 			outcome = "equal"
 		}
-		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", nodeEqual)}); err != nil {
+		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", equal)}); err != nil {
 			return false, err
 		}
 	}
@@ -468,17 +563,24 @@ func bTSProgramApply(vm *VM) error {
 		return nil
 	}
 	b, _ := out.CanonicalJSON()
-	forestBytes := []byte(forestValue.AsString())
+	current := f
 	for _, edit := range p.Edits {
+		forestBytes, _ := current.CanonicalJSON()
 		editWire, _ := json.Marshal([]any{"set-value/v1", edit.Target, edit.Value})
 		editDigest := transformDigest(editWire)
 		status, _ := json.Marshal([]any{"transform-edit-status/v1", "valid", editDigest})
 		if err := recordTransform(vm, "edit-validate", "valid", 6, [][]byte{forestBytes, editWire}, [][]byte{status}); err != nil {
 			return err
 		}
-		if err := recordTransform(vm, "edit-apply", "applied", 7, [][]byte{forestBytes, editWire}, [][]byte{b}); err != nil {
+		next, err := (transformschema.Program{Edits: []transformschema.Edit{edit}}).Apply(current)
+		if err != nil {
 			return err
 		}
+		nextBytes, _ := next.CanonicalJSON()
+		if err := recordTransform(vm, "edit-apply", "applied", 7, [][]byte{forestBytes, editWire}, [][]byte{nextBytes}); err != nil {
+			return err
+		}
+		current = next
 	}
 	vm.push(StringVal(string(b)))
 	return nil

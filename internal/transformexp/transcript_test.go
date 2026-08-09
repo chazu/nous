@@ -171,3 +171,25 @@ func TestTransformEventAdmissionRollsBackOnFailure(t *testing.T) {
 		t.Fatal("failed event left admitted objects or an event behind")
 	}
 }
+
+func TestReducerRejectsSemanticallyForgedObjectEvidence(t *testing.T) {
+	manifest := digestBytes([]byte("manifest"))
+	sink, _ := newTransformTranscriptSink(0, string(NousRefine), "0123456789abcdef", manifest)
+	forest := []byte(`["typed-reference-forest/v1",[[0,"group",-1,"","","","",-1]]]`)
+	id := []byte(`["transform-atom/v1","id",0]`)
+	forged := []byte(`["transform-node-facts/v1","definition","forged","",""]`)
+	if err := sink.EmitValues("node", "acquire", "ok", 0, [][]byte{forest, id}, [][]byte{forged}); err != nil {
+		t.Fatal(err)
+	}
+	terminal := []byte(`["transform-terminal/v1","completed",2,0,1]`)
+	if err := sink.EmitValues("terminal", "terminal", "completed", 11, [][]byte{id}, [][]byte{terminal}); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := sink.Bundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reduceTransformTranscript(bundle.Raw, bundle.Objects, manifest); err == nil {
+		t.Fatal("reducer accepted forged node facts")
+	}
+}
