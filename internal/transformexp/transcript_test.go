@@ -18,7 +18,7 @@ func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 	if err := sink.Emit(TransformOperation{"verify", "freeze", []string{atom}, []string{atom}, "verified", 11}); err != nil {
 		t.Fatal(err)
 	}
-	terminal, err := sink.Admit([]byte(`["transform-terminal/v1","completed",2,0,0]`))
+	terminal, err := sink.Admit([]byte(`["transform-terminal/v1","completed",2,0,1]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,9 +29,12 @@ func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reduced, err := reduceTransformTranscript(bundle.Raw, manifest)
+	reduced, err := reduceTransformTranscript(bundle.Raw, bundle.Objects, manifest)
 	if err != nil || reduced.Vector != bundle.Vector || reduced.Work != bundle.Work {
 		t.Fatalf("reduced=%+v err=%v", reduced, err)
+	}
+	if reduced.Terminal != "completed" || reduced.Applications != 0 || !equalTransformObjects(reduced.Objects, bundle.Objects) {
+		t.Fatalf("reducer did not reconstruct terminal/object state: %+v", reduced)
 	}
 	inflated, err := decodeTransformGzip(bundle.Gzip)
 	if err != nil || !bytes.Equal(inflated, bundle.Raw) {
@@ -42,8 +45,29 @@ func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 	}
 	corrupt := bytes.Clone(bundle.Raw)
 	corrupt[bytes.Index(corrupt, []byte("verified"))] = 'x'
-	if _, err := reduceTransformTranscript(corrupt, manifest); err == nil {
+	if _, err := reduceTransformTranscript(corrupt, bundle.Objects, manifest); err == nil {
 		t.Fatal("accepted corrupted transcript")
+	}
+	missing := make(map[string][]byte, len(bundle.Objects)-1)
+	skipped := false
+	for digest, value := range bundle.Objects {
+		if !skipped {
+			skipped = true
+			continue
+		}
+		missing[digest] = value
+	}
+	if _, err := reduceTransformTranscript(bundle.Raw, missing, manifest); err == nil {
+		t.Fatal("accepted transcript with a missing object")
+	}
+	extra := make(map[string][]byte, len(bundle.Objects)+1)
+	for digest, value := range bundle.Objects {
+		extra[digest] = value
+	}
+	unreferenced := []byte(`["transform-atom/v1","enum","unreferenced"]`)
+	extra[digestBytes(unreferenced)] = unreferenced
+	if _, err := reduceTransformTranscript(bundle.Raw, extra, manifest); err == nil {
+		t.Fatal("accepted transcript with an unreferenced object")
 	}
 }
 
@@ -126,5 +150,24 @@ func TestTransformTranscriptReservesTerminalWork(t *testing.T) {
 	}
 	if err := sink.Emit(operation); err == nil {
 		t.Fatal("nonterminal consumed terminal reserve")
+	}
+}
+
+func TestTransformEventAdmissionRollsBackOnFailure(t *testing.T) {
+	manifest := digestBytes([]byte("manifest"))
+	sink, _ := newTransformTranscriptSink(0, string(NousRefine), "0123456789abcdef", manifest)
+	atom := []byte(`["transform-atom/v1","boolean",true]`)
+	for range LifecycleWorkCap - 1 {
+		if err := sink.EmitValues("verify", "freeze", "verified", 11, [][]byte{atom}, [][]byte{atom}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	objects, bytesBefore, events := len(sink.Objects.Objects), sink.Objects.Bytes, len(sink.Events)
+	unique := []byte(`["transform-atom/v1","enum","must-rollback"]`)
+	if err := sink.EmitValues("hash", "freeze", "hashed", 11, [][]byte{unique}, [][]byte{atom}); err == nil {
+		t.Fatal("over-cap event unexpectedly succeeded")
+	}
+	if len(sink.Objects.Objects) != objects || sink.Objects.Bytes != bytesBefore || len(sink.Events) != events {
+		t.Fatal("failed event left admitted objects or an event behind")
 	}
 }

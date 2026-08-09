@@ -38,7 +38,7 @@ func TestSixPoliciesExposeExpectedSemanticControls(t *testing.T) {
 			if len(result.Transcript.Raw) == 0 {
 				t.Fatalf("family %d policy %s lacks transcript", family, policy)
 			}
-			if _, err := reduceTransformTranscript(result.Transcript.Raw, policyManifestDigest(view, policy)); err != nil {
+			if _, err := reduceTransformTranscript(result.Transcript.Raw, result.Transcript.Objects, policyManifestDigest(view, policy)); err != nil {
 				t.Fatalf("family %d policy %s transcript: %v", family, policy, err)
 			}
 		}
@@ -50,7 +50,7 @@ func TestSixPoliciesExposeExpectedSemanticControls(t *testing.T) {
 			t.Fatalf("family %d nous evidence/store boundary=%+v", family, nous)
 		}
 		view, _ := decodePolicyView(c)
-		if _, err := reduceTransformTranscript(nous.Transcript.Raw, policyManifestDigest(view, NousRefine)); err != nil {
+		if _, err := reduceTransformTranscript(nous.Transcript.Raw, nous.Transcript.Objects, policyManifestDigest(view, NousRefine)); err != nil {
 			t.Fatalf("family %d nous transcript: %v", family, err)
 		}
 		if got := results[PositiveLGG]; got.Terminal != "completed" || got.HeldoutCorrect >= 8 || got.FalseApplications == 0 {
@@ -67,7 +67,7 @@ func TestSixPoliciesExposeExpectedSemanticControls(t *testing.T) {
 			if len(got.Transcript.Raw) == 0 || got.Transcript.Work != int64(got.TrainingWork) {
 				t.Fatalf("family %d %s lacks authoritative transcript: %+v", family, policy, got)
 			}
-			if _, err := reduceTransformTranscript(got.Transcript.Raw, policyManifestDigest(view, policy)); err != nil {
+			if _, err := reduceTransformTranscript(got.Transcript.Raw, got.Transcript.Objects, policyManifestDigest(view, policy)); err != nil {
 				t.Fatalf("family %d %s transcript: %v", family, policy, err)
 			}
 		}

@@ -23,7 +23,7 @@ func TestAcquisitionSemanticRecordsReduceToTranscript(t *testing.T) {
 	if bundle.Work != work+1 || bundle.Vector[11] != vector[11]+1 {
 		t.Fatalf("bundle work=%d vector=%v", bundle.Work, bundle.Vector)
 	}
-	if _, err := reduceTransformTranscript(bundle.Raw, manifest); err != nil {
+	if _, err := reduceTransformTranscript(bundle.Raw, bundle.Objects, manifest); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -171,6 +171,88 @@ func newTransformTranscriptSink(ordinal int, policy, token, manifestDigest strin
 
 func (s *TransformTranscriptSink) Admit(data []byte) (string, error) { return s.Objects.admit(data) }
 
+func (s *TransformTranscriptSink) EmitValues(operation, phase, outcome string, category int, inputs, outputs [][]byte) error {
+	before := make(map[string]struct{}, len(s.Objects.Objects))
+	for digest := range s.Objects.Objects {
+		before[digest] = struct{}{}
+	}
+	beforeBytes := s.Objects.Bytes
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for digest := range s.Objects.Objects {
+			if _, existed := before[digest]; !existed {
+				delete(s.Objects.Objects, digest)
+			}
+		}
+		s.Objects.Bytes = beforeBytes
+	}()
+	inputDigests := make([]string, len(inputs))
+	for index, value := range inputs {
+		digest, err := s.Admit(value)
+		if err != nil {
+			return err
+		}
+		inputDigests[index] = digest
+	}
+	outputDigests := make([]string, len(outputs))
+	for index, value := range outputs {
+		digest, err := s.Admit(value)
+		if err != nil {
+			return err
+		}
+		outputDigests[index] = digest
+	}
+	if err := s.Emit(TransformOperation{operation, phase, inputDigests, outputDigests, outcome, category}); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (s *TransformTranscriptSink) EmitEvidenceLink(phase string, attemptedBytes []byte) error {
+	if !s.lastAttach || s.lastOutput == "" || s.lastObject == "" {
+		return errors.New("invalid evidence boundary")
+	}
+	before := make(map[string]struct{}, len(s.Objects.Objects))
+	for digest := range s.Objects.Objects {
+		before[digest] = struct{}{}
+	}
+	beforeBytes := s.Objects.Bytes
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		for digest := range s.Objects.Objects {
+			if _, existed := before[digest]; !existed {
+				delete(s.Objects.Objects, digest)
+			}
+		}
+		s.Objects.Bytes = beforeBytes
+	}()
+	attemptedDigest, err := s.Admit(attemptedBytes)
+	if err != nil {
+		return err
+	}
+	var attempted any
+	if json.Unmarshal(attemptedBytes, &attempted) != nil {
+		return errors.New("evidence value is not JSON")
+	}
+	attemptBytes, _ := json.Marshal([]any{"transform-evidence-attempt/v1", "attached", "result", attempted, attemptedDigest, s.lastOutput, s.lastObject})
+	attemptDigest, err := s.Admit(attemptBytes)
+	if err != nil {
+		return err
+	}
+	if err := s.Emit(TransformOperation{"evidence-link", phase, []string{attemptedDigest, s.lastOutput, s.lastObject}, []string{attemptDigest}, "attached", 10}); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	if s.terminal {
 		return errors.New("event after terminal")
@@ -182,10 +264,19 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	if err != nil {
 		return err
 	}
-	operationDigest, err := s.Admit(operationBytes)
+	operationDigest := digestBytes(operationBytes)
+	_, operationExisted := s.Objects.Objects[operationDigest]
+	operationDigest, err = s.Admit(operationBytes)
 	if err != nil {
 		return err
 	}
+	committed := false
+	defer func() {
+		if !committed && !operationExisted {
+			delete(s.Objects.Objects, operationDigest)
+			s.Objects.Bytes -= len(operationBytes)
+		}
+	}()
 	charge := lifecycleCharges[o.Category]
 	if len(s.Events) >= EventCountCap || s.Work+charge > LifecycleWorkCap || o.Phase != "terminal" && s.Work+charge >= LifecycleWorkCap {
 		return errors.New("transformation lifecycle cap")
@@ -204,6 +295,9 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	s.Work += charge
 	step, _ := json.Marshal([]any{"transform-chain-step/v1", json.RawMessage(eventBytes)})
 	s.Previous = digestBytes(step)
+	if o.Operation == "schema-application" || o.Operation == "replay-application" {
+		s.Applications++
+	}
 	if o.Operation == "evidence-link" {
 		s.lastAttach = false
 	} else {
@@ -217,6 +311,7 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	if o.Phase == "terminal" && o.Operation == "terminal" {
 		s.terminal = true
 	}
+	committed = true
 	return nil
 }
 
@@ -256,7 +351,6 @@ func (s *TransformTranscriptSink) validateOperation(o TransformOperation) error 
 		if len(o.Inputs) != 2 || len(o.Outputs) != 1 {
 			return errors.New("invalid application arity")
 		}
-		s.Applications++
 	}
 	if o.Operation == "terminal" {
 		if len(o.Inputs) != 1 || len(o.Outputs) != 1 || !oneOfString(o.Outcome, "completed", "no-discovery", "budget-exhausted") {
@@ -280,11 +374,13 @@ func (s *TransformTranscriptSink) applicationResultProjection(attempted string) 
 }
 
 type TransformTranscriptBundle struct {
-	Raw     []byte
-	Gzip    []byte
-	Vector  [12]int64
-	Work    int64
-	Objects map[string][]byte
+	Raw          []byte
+	Gzip         []byte
+	Vector       [12]int64
+	Work         int64
+	Objects      map[string][]byte
+	Terminal     string
+	Applications int
 }
 
 func (s *TransformTranscriptSink) Bundle() (TransformTranscriptBundle, error) {
@@ -320,10 +416,10 @@ func (s *TransformTranscriptSink) Bundle() (TransformTranscriptBundle, error) {
 	for digest, value := range s.Objects.Objects {
 		objects[digest] = bytes.Clone(value)
 	}
-	return TransformTranscriptBundle{Raw: raw.Bytes(), Gzip: compressed.Bytes(), Vector: s.Vector, Work: s.Work, Objects: objects}, nil
+	return TransformTranscriptBundle{Raw: raw.Bytes(), Gzip: compressed.Bytes(), Vector: s.Vector, Work: s.Work, Objects: objects, Terminal: s.Events[len(s.Events)-1].Outcome, Applications: s.Applications}, nil
 }
 
-func reduceTransformTranscript(raw []byte, manifestDigest string) (TransformTranscriptBundle, error) {
+func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDigest string) (TransformTranscriptBundle, error) {
 	if len(raw) == 0 || len(raw) > RawChunkByteCap || raw[len(raw)-1] != '\n' || !digestString(manifestDigest) {
 		return TransformTranscriptBundle{}, errors.New("invalid transcript framing")
 	}
@@ -334,6 +430,12 @@ func reduceTransformTranscript(raw []byte, manifestDigest string) (TransformTran
 	var work int64
 	previous := ""
 	terminal := false
+	terminalOutcome := ""
+	applications := 0
+	usedObjects := map[string]bool{}
+	lastOperation, lastOutput := "", ""
+	lastAttach := false
+	panelOrdinal, policy, taskToken := -1, "", ""
 	for scanner.Scan() {
 		line := bytes.Clone(scanner.Bytes())
 		event, err := parseTransformEvent(line)
@@ -341,26 +443,202 @@ func reduceTransformTranscript(raw []byte, manifestDigest string) (TransformTran
 			return TransformTranscriptBundle{}, errors.New("invalid transcript event")
 		}
 		if len(events) == 0 {
+			panelOrdinal, policy, taskToken = event.PanelOrdinal, event.Policy, event.TaskToken
 			initial, _ := json.Marshal([]any{"transform-chain/v1", manifestDigest, event.TaskToken})
 			previous = digestBytes(initial)
+		} else if event.PanelOrdinal != panelOrdinal || event.Policy != policy || event.TaskToken != taskToken {
+			return TransformTranscriptBundle{}, errors.New("transcript identity changed")
 		}
 		if event.Previous != previous {
 			return TransformTranscriptBundle{}, errors.New("transcript chain mismatch")
+		}
+		operationBytes, exists := objects[event.Object]
+		if !exists || digestBytes(operationBytes) != event.Object {
+			return TransformTranscriptBundle{}, errors.New("event operation object is absent")
+		}
+		operation, err := parseTransformOperation(operationBytes)
+		if err != nil || operation.Operation != event.Operation || operation.Phase != event.Phase || operation.Outcome != event.Outcome || operation.Category != event.Category {
+			return TransformTranscriptBundle{}, errors.New("event operation object mismatch")
+		}
+		subject := digestBytes([]byte("transform-empty-subject/v1"))
+		if len(operation.Inputs) != 0 && operation.Inputs[0] != "" {
+			subject = operation.Inputs[0]
+		}
+		if event.Subject != subject {
+			return TransformTranscriptBundle{}, errors.New("event subject mismatch")
+		}
+		for _, digest := range append(slices.Clone(operation.Inputs), operation.Outputs...) {
+			if digest == "" {
+				continue
+			}
+			value, ok := objects[digest]
+			if !ok || digestBytes(value) != digest {
+				return TransformTranscriptBundle{}, errors.New("operation references absent object")
+			}
+			if _, err := transformObjectCap(value); err != nil {
+				return TransformTranscriptBundle{}, errors.New("operation references invalid object")
+			}
+			usedObjects[digest] = true
+		}
+		if err := validateReducedOperation(operation, applications, lastAttach, lastOutput, lastOperation); err != nil {
+			return TransformTranscriptBundle{}, fmt.Errorf("operation %d %s/%s/%s: %w", event.Sequence, operation.Phase, operation.Operation, operation.Outcome, err)
+		}
+		usedObjects[event.Object] = true
+		if operation.Operation == "schema-application" || operation.Operation == "replay-application" {
+			applications++
+		}
+		if operation.Operation == "evidence-link" {
+			lastAttach = false
+		} else {
+			lastOperation = event.Object
+			lastOutput = ""
+			if len(operation.Outputs) == 1 {
+				lastOutput = operation.Outputs[0]
+			}
+			lastAttach = oneOfString(operation.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
 		}
 		step, _ := json.Marshal([]any{"transform-chain-step/v1", json.RawMessage(line)})
 		previous = digestBytes(step)
 		vector[event.Category]++
 		work += lifecycleCharges[event.Category]
-		if work > LifecycleWorkCap || len(events) >= EventCountCap {
+		if work > LifecycleWorkCap || len(events) >= EventCountCap || event.Phase != "terminal" && work >= LifecycleWorkCap {
 			return TransformTranscriptBundle{}, errors.New("transcript cap")
 		}
 		terminal = event.Phase == "terminal" && event.Operation == "terminal"
+		if terminal {
+			if err := validateTerminalObject(objects[operation.Outputs[0]], event.Outcome, work, applications, event.Sequence); err != nil {
+				return TransformTranscriptBundle{}, err
+			}
+			terminalOutcome = event.Outcome
+		}
 		events = append(events, event)
 	}
 	if err := scanner.Err(); err != nil || !terminal {
 		return TransformTranscriptBundle{}, errors.New("invalid transcript termination")
 	}
-	return TransformTranscriptBundle{Raw: bytes.Clone(raw), Vector: vector, Work: work}, nil
+	if len(usedObjects) != len(objects) {
+		return TransformTranscriptBundle{}, errors.New("object table contains unreferenced values")
+	}
+	cloned := make(map[string][]byte, len(objects))
+	for digest, value := range objects {
+		if digestBytes(value) != digest {
+			return TransformTranscriptBundle{}, errors.New("object table digest mismatch")
+		}
+		cloned[digest] = bytes.Clone(value)
+	}
+	return TransformTranscriptBundle{Raw: bytes.Clone(raw), Vector: vector, Work: work, Objects: cloned, Terminal: terminalOutcome, Applications: applications}, nil
+}
+
+func parseTransformOperation(data []byte) (TransformOperation, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var row []any
+	if decoder.Decode(&row) != nil || len(row) != 8 || row[0] != "transform-operation/v1" {
+		return TransformOperation{}, errors.New("operation wire")
+	}
+	operation, a := row[1].(string)
+	phase, b := row[2].(string)
+	inputRows, c := row[3].([]any)
+	outputRows, d := row[4].([]any)
+	outcome, e := row[5].(string)
+	categoryNumber, f := row[6].(json.Number)
+	chargeNumber, g := row[7].(json.Number)
+	category64, categoryErr := categoryNumber.Int64()
+	charge64, chargeErr := chargeNumber.Int64()
+	if !(a && b && c && d && e && f && g) || categoryErr != nil || chargeErr != nil || category64 < 0 || category64 >= int64(len(lifecycleCharges)) || charge64 != lifecycleCharges[category64] {
+		return TransformOperation{}, errors.New("operation fields")
+	}
+	inputs := make([]string, len(inputRows))
+	outputs := make([]string, len(outputRows))
+	for index, value := range inputRows {
+		var ok bool
+		inputs[index], ok = value.(string)
+		if !ok {
+			return TransformOperation{}, errors.New("operation input")
+		}
+	}
+	for index, value := range outputRows {
+		var ok bool
+		outputs[index], ok = value.(string)
+		if !ok {
+			return TransformOperation{}, errors.New("operation output")
+		}
+	}
+	operationValue := TransformOperation{operation, phase, inputs, outputs, outcome, int(category64)}
+	canonical, err := operationValue.canonicalJSON()
+	if err != nil || !bytes.Equal(canonical, data) {
+		return TransformOperation{}, errors.New("noncanonical operation")
+	}
+	return operationValue, nil
+}
+
+func validateReducedOperation(operation TransformOperation, applications int, lastAttach bool, lastOutput, lastOperation string) error {
+	categories := map[string]int{"node": 0, "parent": 1, "target": 2, "compare": 3, "candidate-allocate": 4, "refine": 5, "edit-validate": 6, "edit-apply": 7, "schema-predicate": 8, "output-compare": 9, "evidence-link": 10, "canonicalize": 11, "hash": 11, "verify": 11, "schema-application": 11, "replay-application": 11, "terminal": 11}
+	if category, ok := categories[operation.Operation]; !ok || category != operation.Category {
+		return errors.New("operation category mismatch")
+	}
+	if operation.Operation == "terminal" && operation.Phase != "terminal" || operation.Phase == "terminal" && operation.Operation != "terminal" {
+		return errors.New("terminal phase mismatch")
+	}
+	if operation.Operation == "evidence-link" && (!lastAttach || len(operation.Inputs) != 3 || operation.Inputs[1] != lastOutput || operation.Inputs[2] != lastOperation || len(operation.Outputs) != 1 || !oneOfString(operation.Outcome, "attached", "rejected")) {
+		return errors.New("invalid immediate evidence attachment")
+	}
+	if operation.Operation == "schema-application" || operation.Operation == "replay-application" {
+		if operation.Phase != "training-validate" && operation.Phase != "heldout" || operation.Phase == "training-validate" && applications >= 40 || applications >= 48 || len(operation.Inputs) != 2 || len(operation.Outputs) != 1 {
+			return errors.New("invalid application operation")
+		}
+	}
+	if operation.Operation == "terminal" && (len(operation.Inputs) != 1 || len(operation.Outputs) != 1 || !oneOfString(operation.Outcome, "completed", "no-discovery", "budget-exhausted")) {
+		return errors.New("invalid terminal operation")
+	}
+	type rule struct {
+		phases, outcomes                             []string
+		inputsMin, inputsMax, outputsMin, outputsMax int
+	}
+	nonterminal := []string{"acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "freeze", "heldout"}
+	nodePhases := []string{"acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "heldout"}
+	rules := map[string]rule{
+		"node":               {nodePhases, []string{"ok", "invalid-input"}, 2, 2, 1, 1},
+		"parent":             {nodePhases, []string{"ok", "absent", "invalid-input"}, 2, 2, 1, 1},
+		"target":             {nodePhases, []string{"ok", "absent", "invalid-input"}, 2, 2, 1, 1},
+		"compare":            {[]string{"acquire", "target", "anchor", "scope", "old-guard", "locality"}, []string{"true", "false", "invalid-input"}, 2, 2, 1, 1},
+		"candidate-allocate": {[]string{"target", "anchor", "scope", "old-guard", "locality", "freeze"}, []string{"allocated", "duplicate", "rejected"}, 1, 1, 0, 1},
+		"refine":             {[]string{"target", "anchor", "scope", "old-guard", "locality"}, []string{"refined", "rejected", "invalid-input"}, 2, 2, 0, 1},
+		"edit-validate":      {[]string{"acquire", "training-validate", "heldout"}, []string{"valid", "no-op", "invalid-input"}, 2, 2, 1, 1},
+		"edit-apply":         {[]string{"acquire", "training-validate", "heldout"}, []string{"applied", "invalid-input"}, 2, 2, 1, 1},
+		"schema-predicate":   {[]string{"training-validate", "heldout"}, []string{"true", "false", "invalid-input"}, 4, 4, 1, 1},
+		"output-compare":     {[]string{"acquire", "training-validate", "heldout"}, []string{"equal", "different", "invalid-input"}, 2, 2, 0, 1},
+		"evidence-link":      {[]string{"acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "freeze", "heldout"}, []string{"attached", "rejected"}, 3, 3, 1, 1},
+		"canonicalize":       {nonterminal, []string{"canonical", "invalid-input"}, 1, 1, 1, 1},
+		"hash":               {nonterminal, []string{"hashed", "invalid-input"}, 1, 1, 1, 1},
+		"verify":             {[]string{"acquire", "training-validate", "freeze", "heldout"}, []string{"verified", "rejected"}, 1, 2, 1, 1},
+		"schema-application": {[]string{"training-validate", "heldout"}, []string{"applied", "abstain/request-count", "abstain/anchor", "abstain/locality", "abstain/expansion", "abstain/no-op", "invalid-input"}, 2, 2, 1, 1},
+		"replay-application": {[]string{"training-validate", "heldout"}, []string{"applied", "abstain/replay-miss", "invalid-input"}, 2, 2, 1, 1},
+		"terminal":           {[]string{"terminal"}, []string{"completed", "no-discovery", "budget-exhausted"}, 1, 1, 1, 1},
+	}
+	r := rules[operation.Operation]
+	if !slices.Contains(r.phases, operation.Phase) || !slices.Contains(r.outcomes, operation.Outcome) || len(operation.Inputs) < r.inputsMin || len(operation.Inputs) > r.inputsMax || len(operation.Outputs) < r.outputsMin || len(operation.Outputs) > r.outputsMax {
+		return fmt.Errorf("operation violates normative matrix: inputs=%d outputs=%d", len(operation.Inputs), len(operation.Outputs))
+	}
+	return nil
+}
+
+func validateTerminalObject(data []byte, outcome string, work int64, applications, priorEvents int) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var row []any
+	if decoder.Decode(&row) != nil || len(row) != 5 || row[0] != "transform-terminal/v1" || row[1] != outcome {
+		return errors.New("terminal object wire")
+	}
+	values := []int64{work, int64(applications), int64(priorEvents)}
+	for index, expected := range values {
+		number, ok := row[index+2].(json.Number)
+		actual, err := number.Int64()
+		if !ok || err != nil || actual != expected {
+			return errors.New("terminal object totals mismatch")
+		}
+	}
+	return nil
 }
 
 func decodeTransformGzip(data []byte) ([]byte, error) {

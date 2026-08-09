@@ -564,7 +564,8 @@ func bTSNodeFacts(vm *VM) error {
 	inputs := [][]byte{forest, transformAtom("id", id)}
 	n, found := tsFindNode(f, id)
 	if !ok || !found {
-		if err := recordTransform(vm, "node", "invalid-input", 0, inputs, nil); err != nil {
+		missing, _ := json.Marshal([]any{"transform-node-facts/v1", "", "", "", ""})
+		if err := recordTransform(vm, "node", "invalid-input", 0, inputs, [][]byte{missing}); err != nil {
 			return err
 		}
 		vm.push(Nil())
@@ -588,7 +589,8 @@ func bTSParentFacts(vm *VM) error {
 		if !ok || !found {
 			outcome = "invalid-input"
 		}
-		if err := recordTransform(vm, "parent", outcome, 1, inputs, nil); err != nil {
+		missing, _ := json.Marshal([]any{"transform-parent-facts/v1", -1, ""})
+		if err := recordTransform(vm, "parent", outcome, 1, inputs, [][]byte{missing}); err != nil {
 			return err
 		}
 		vm.push(Nil())
@@ -612,7 +614,7 @@ func bTSTarget(vm *VM) error {
 		if !ok || !found {
 			outcome = "invalid-input"
 		}
-		if err := recordTransform(vm, "target", outcome, 2, inputs, nil); err != nil {
+		if err := recordTransform(vm, "target", outcome, 2, inputs, [][]byte{transformAtom("id", -1)}); err != nil {
 			return err
 		}
 		vm.push(Nil())

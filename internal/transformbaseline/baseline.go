@@ -125,7 +125,7 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 		}
 		candidateBytes := encodeSchema(candidate)
 		if metered {
-			events = append(events, Event{4, "candidate-allocate", "training-validate", "allocated", [][]byte{candidateBytes}, [][]byte{candidateBytes}})
+			events = append(events, Event{4, "candidate-allocate", "freeze", "allocated", [][]byte{candidateBytes}, [][]byte{candidateBytes}})
 		}
 		exact := true
 		for _, c := range training.Cases {
