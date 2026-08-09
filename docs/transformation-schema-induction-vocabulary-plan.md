@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Provisional Part 3 Vocabulary 2 implementation plan, revision 6. This document
+Provisional Part 3 Vocabulary 2 implementation plan, revision 7. This document
 is not implementation authority until independent architecture, transformation-
 semantics, and experimental-validity reviewers all accept the same committed
 revision.
@@ -48,6 +48,13 @@ authenticated. Its program-batch cap was also 88 bytes below the computed
 legal maximum. Revision 6 inlines the result kind and digest in evidence,
 references the already-admitted output object, freezes deterministic nested-
 projection authentication, and raises the program-batch cap.
+
+Revision 6 was blocked because a rejected attachment produced no evidence
+object, losing the policy-supplied value and making wrong, correct, stale, and
+zero-output attachment attempts indistinguishable. Revision 7 makes every
+attachment call produce one authenticated attempt object containing its status,
+the exact supplied semantic value and digest, and the preceding output/operation
+digests. Success and rejection therefore share the same bounded replay path.
 
 Vocabulary 1 ended `valid-null`; Vocabulary 2 does not consume its domain,
 artifacts, evidence, or learned state. It uses only the existing Store, Agenda,
@@ -425,9 +432,10 @@ legal only immediately after `node`, `parent`, `target`, `compare`,
 `schema-application`, `output-compare`, or `verify`. Internal predicate events
 are verifier-only and are never attach targets. `attach`
 accepts the canonical semantic value already returned by that operation and
-hashes it verifier-side before emitting the evidence-link event. The kind and
-digest are fields of the one evidence object, not a standalone semantic-
-reference object; the evidence also names the already-admitted output object.
+hashes it verifier-side before emitting the evidence-link event. The exact
+supplied value, kind, digest, and status are fields of the one evidence-attempt
+object, not a standalone semantic-reference object; the attempt also names the
+preceding output object when one exists.
 No separate `digest` call is required or permitted in between. It can bind only that most
 recent unattached operation in the same task, returns one boolean, and exposes
 no handle, digest, or ordinal. The sink rejects a second attachment, a value
@@ -868,16 +876,22 @@ where `priorCanonicalEvent` includes its own previous-digest field.
 
 Every top-level semantic input and output preimage resides in the curriculum's
 authenticated object table as `objects/<sha256>.json`, a regular canonical JSON
-leaf whose bytes hash to its filename. The sole nested projections are the
-exact `result` and `certificate` children of an application leaf. They are
-authenticated by that parent: reduction loads the unique application named by
+leaf whose bytes hash to its filename. The only nested semantic values are the
+exact `result` and `certificate` children of an application leaf and the exact
+attempted value at child index 3 of an evidence-attempt leaf. Application
+children are authenticated by their parent: reduction loads the unique application named by
 the immediately preceding operation's output digest, strict-decodes and
 canonical-reencodes it, selects child array index 1 for result or 2 for
 certificate, and hashes those exact child bytes. A nested digest is legal only
 in the immediately following evidence link or certificate/report
 reconstruction and can never stand in for an object-table path. Missing,
 nonunique, wrong-parent, wrong-index, or digest-mismatched projection is
-invalid. An operation object is exactly
+invalid. For an evidence attempt, reduction strict-decodes the attempt leaf,
+canonical-reencodes child index 3, verifies `attemptedDigest`, and compares that
+value and the preceding operation/output digests with the declared status.
+Because the current evidence-link operation hashes only those child/prior
+digests and its output names the attempt leaf, this nesting is noncyclic. An
+operation object is exactly
 `["transform-operation/v1",operation,phase,[inputDigest...],
 [outputDigest...],outcome,category,charge]`; digest arrays have at most eight
 items and are ordered by semantic operand position.
@@ -900,7 +914,7 @@ All semantic object wires and per-object canonical byte caps are frozen:
 | closure | `["transform-closure/v1",stage,parentDigest,[[alternativeDigest,resultDigest,status]...],survivorDigest]` | 1,024 |
 | certificate | `["transform-certificate/v1",schemaDigest,inputDigest,requestID,definitionID,[referenceID...],[guardBoolean...],[editDigest...],outputDigest,terminal,firstSequence,lastSequence]` | 2,048 |
 | application | `["transform-schema-application/v1",result,certificate]` | 2,560 |
-| evidence | `["transform-evidence/v1",semanticKind,semanticResultDigest,outputObjectDigest,operationDigest]` | 384 |
+| evidence attempt | `["transform-evidence-attempt/v1",status,attemptedKind,attemptedValue,attemptedDigest,outputObjectDigest,priorOperationDigest]` | 2,560 |
 | terminal | `["transform-terminal/v1",policyTerminal,work,applications,lastSequence]` | 256 |
 | store boundary | `["transform-store-boundary/v1",phase,storeBytesDigest]` | 256 |
 | operation | the `transform-operation/v1` wire | 1,536 |
@@ -915,12 +929,13 @@ most four alternatives. Certificate IDs/reference arrays obey forest/edit
 bounds. The exact maximum program batch is 1,104 bytes: four rows, each with a
 16-byte token, 64-byte digest, and a four-edit program using the largest four
 distinct legal target encodings and 16-byte literals. `edit-status.status` is
-exactly `valid`, `no-op`, or `invalid-input`. Evidence semantic kind is exactly
+exactly `valid`, `no-op`, or `invalid-input`. Evidence-attempt status is exactly
+`attached` or `rejected`, and its attempted semantic kind is exactly
 `node-facts`, `parent-facts`, `atom`, `partial`, `schema`, `edit-status`,
-`forest`, `result`, or `closure`; its result digest names the canonical
-policy-visible projection of the immediately preceding attachable operation,
-and `outputObjectDigest` names that operation's already-admitted top-level
-output object. An
+`forest`, `result`, or `closure`. `attemptedValue` is the exact canonical value
+supplied by policy code and `attemptedDigest` hashes its canonical bytes.
+`outputObjectDigest` names the immediately preceding operation's admitted
+top-level output object, or is `""` if that operation had no output. An
 inapplicable digest is `""`; it is never an object-table path.
 The event `subjectDigest` is the primary input object and `objectDigest` is this
 operation object's digest. Thus the reducer authenticates actual preimages
@@ -940,7 +955,7 @@ The normative operation matrix is:
 | edit-apply | acquire,training-validate,heldout | 7/1 | forest,edit -> forest | applied,invalid-input |
 | schema-predicate | training-validate,heldout | 8/1 | forest,schema,atom(selector),atom-or-edit(subject) -> atom(boolean) | true,false,invalid-input |
 | output-compare | acquire,training-validate,heldout | 9/1 | forest,forest -> atom(boolean) | equal,different,invalid-input |
-| evidence-link | acquire,target,anchor,scope,old-guard,locality,training-validate,freeze,heldout | 10/1 | authenticated-output,operation -> evidence | attached,rejected |
+| evidence-link | acquire,target,anchor,scope,old-guard,locality,training-validate,freeze,heldout | 10/1 | attempted-value,prior-output-or-empty,prior-operation -> evidence-attempt | attached,rejected |
 | canonicalize | all nonterminal phases | 11/1 | any one semantic kind -> same kind | canonical,invalid-input |
 | hash | all nonterminal phases | 11/1 | any one semantic kind -> atom(digest) | hashed,invalid-input |
 | verify | acquire,training-validate,freeze,heldout | 11/1 | one or two semantic kinds -> atom(boolean) | verified,rejected |
@@ -962,15 +977,16 @@ one boolean atom. Every edit-validation outcome produces one edit-status.
 Every schema-application outcome produces one application object, using `-1`,
 empty arrays, and empty digests in its certificate when a field is
 inapplicable; every replay-application outcome produces one result. `attached`
-produces one evidence object. `completed`, `no-discovery`, and
+and evidence-link `rejected` each produce one evidence-attempt object.
+`completed`, `no-discovery`, and
 `budget-exhausted` produce one terminal. `absent`, `duplicate`, every other
 `rejected`, and every other `invalid-input` produce zero outputs. For an
-evidence link, `authenticated-output` means the prior operation's top-level
-output leaf plus the inline kind/result digest supplied in the evidence wire;
-an application result uses the deterministic nested-projection rule above.
-The evidence-link operation input-digest array is exactly
-`[outputObjectDigest,priorOperationDigest]`; it does not name or admit another
-reference object. Other inputs always
+evidence link, the operation input-digest array is exactly
+`[attemptedDigest,outputObjectDigestOrEmpty,priorOperationDigest]`. The one
+attempt output authenticates the full supplied value and recomputes its digest;
+it also permits replay to distinguish a wrong value, the correct value after an
+intervening operation, a non-attachable prior operation, and a prior zero-output
+failure. It does not admit another reference object. Other inputs always
 have the exact arity shown and are present even on failure. Candidate allocation
 therefore records a complete-schema allocation for every PBE tuple rather than
 coercing it through a partial candidate.
@@ -1015,7 +1031,7 @@ most one operation object and one non-operation object are admitted per charged
 event. Compound node-facts, parent-facts, edit-status, and application objects
 make every matrix operation obey that rule; the policy-visible result of an
 application is a projection of the one authenticated compound object, and an
-evidence-link admits only its operation object plus its one inline evidence
+evidence-link admits only its operation object plus its one evidence-attempt
 object. Since
 every object is at most 2,560 bytes and work permits at most 12,001 events
 including terminal, the table has at most 24,002 leaves using 61,445,120 bytes.
