@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Provisional Part 3 Vocabulary 2 implementation plan, revision 4. This document
+Provisional Part 3 Vocabulary 2 implementation plan, revision 5. This document
 is not implementation authority until independent architecture, transformation-
 semantics, and experimental-validity reviewers all accept the same committed
 revision.
@@ -29,6 +29,17 @@ seed and referenced object wires were incomplete, a policy-visible evidence
 digest remained a behavior surface, several secondary controls were unplaced,
 and the report omitted its claimed evidence-graph digest. Revision 4 closes
 those remaining authority and accounting contracts.
+
+Revision 4 was blocked on the last executable-wire boundary. Its node result
+was not field-identifiable, schema predicate and whole-application events were
+conflated, factor evidence could not inhabit the result wire, edit validation
+had no valid result type, and `digest` necessarily intervened before `attach`.
+It also left three serialized preimages undefined and contradicted abstention
+scoring. Revision 5 adds exact compound fact/status/application/reference
+objects, separates predicate from application events, makes immediate attach
+hash the supplied semantic value inside the verifier, freezes success and
+failure arities, closes the missing preimages, and normalizes abstention and
+false-application scoring.
 
 Vocabulary 1 ended `valid-null`; Vocabulary 2 does not consume its domain,
 artifacts, evidence, or learned state. It uses only the existing Store, Agenda,
@@ -111,7 +122,7 @@ constant and reproduce it in every report:
   "transcript_raw_byte_cap_per_policy_curriculum": 19200000,
   "transcript_gzip_byte_cap_per_policy_curriculum": 19250000,
   "object_byte_cap_per_policy_curriculum": 67108864,
-  "object_leaf_byte_cap": 2048,
+  "object_leaf_byte_cap": 2560,
   "object_leaf_count_cap_per_policy_curriculum": 24002,
   "object_root_byte_cap_per_policy_curriculum": 4194304,
   "transcript_raw_byte_cap_per_policy_locked_panel": 2457600000,
@@ -213,8 +224,9 @@ An edit wire value is
 `["concrete-program/v1", [edit...]]`. Decoders enforce the same limits and EOF
 rule as forests. A positive case is
 `[opaqueCaseToken,"positive",before,after]`; an abstention case is
-`[opaqueCaseToken,"abstain",before,null]`. The 16-character case token is drawn
-independently and has no seed, ordinal, attempt, or family encoding.
+`[opaqueCaseToken,"abstain",before,null]`. The case token is exactly 16 ASCII
+bytes matching `[0-9a-f]{16}`, drawn independently, and has no seed, ordinal,
+attempt, or family encoding.
 
 The oracle independently applies edits, compares complete canonical forests,
 and enumerates every bounded concrete program for tiny competence cases. It
@@ -386,7 +398,7 @@ The scoped adapter exposes exactly these capability classes:
 
 | Capability | Explicit inputs | Policy-visible output | Allowed callers |
 | --- | --- | --- | --- |
-| `node` | forest bytes, node ID | kind and present scalar fields only | CUE |
+| `node` | forest bytes, node ID | one exact node-facts value containing kind and present scalar fields | CUE |
 | `parent` | forest bytes, node ID | parent ID and key | CUE |
 | `target` | forest bytes, node ID | target ID or absent | CUE |
 | `compare` | two explicit local values | boolean | CUE |
@@ -394,17 +406,25 @@ The scoped adapter exposes exactly these capability classes:
 | `schema` | forest bytes, one complete schema | terminal and output bytes if applied | CUE |
 | `refine` | one partial candidate, one explicit next value | child candidate bytes | CUE only |
 | `digest` | one canonical policy-visible semantic value | SHA-256 string | CUE only |
-| `attach` | semantic result digest | boolean attached/rejected | CUE only |
+| `attach` | the most recent operation's policy-visible semantic result value | boolean attached/rejected | CUE only |
 
 Every call also emits metered events to an unforgeable verifier-side sink.
 `schema` may internally derive a binding solely as the deterministic consequence
 of its two explicit inputs, but the binding, edit expansion, operation digest,
-and full certificate never cross into VM values or Store slots. After CUE has
-materialized a semantic result and supplies its digest, `attach` can bind only
-the most recent unattached operation in that task; it returns one boolean and
-exposes no handle or ordinal. The sink rejects a second attachment, wrong result
-digest, task change, intervening semantic operation, or attachment after phase
-closure. Independent reduction reconstructs the hidden operation/result link.
+and full certificate never cross into VM values or Store slots. `attach` is
+legal only immediately after `node`, `parent`, `target`, `compare`,
+`candidate-allocate`, `refine`, `edit-validate`, `edit-apply`,
+`schema-application`, `output-compare`, or `verify`. Internal predicate events
+are verifier-only and are never attach targets. `attach`
+accepts the canonical semantic value already returned by that operation and
+hashes it verifier-side before emitting the evidence-link event; no separate
+`digest` call is required or permitted in between. It can bind only that most
+recent unattached operation in the same task, returns one boolean, and exposes
+no handle, digest, or ordinal. The sink rejects a second attachment, a value
+whose canonical digest is not the recorded result projection, task change,
+any intervening capability call, a non-attachable operation, or attachment
+after phase closure. Independent reduction reconstructs the hidden
+operation/result link.
 Tests prove no evidence identifier can enter comparison, candidate identity,
 worth, priority, dispatch, or any persisted semantic slot.
 
@@ -521,16 +541,17 @@ no policy observation.
 
 Each accepted-attempt uniqueness check executes exactly 72 schemas over eight
 training and eight held-out cases, at most 1,152 applications, under 1,200-
-application and 200,000-work per-attempt caps. Its closed maximum is 144,000
-schema-application work + 8,000 decode/validation + 5,000 uniqueness/ordering +
-4,000 serialization + one terminal = 161,001. Across 100 attempts the caps are
+application and 200,000-work per-attempt caps. Its closed maximum is
+`1,152 * 80 = 92,160` schema-application work, plus 8,000
+decode/validation + 5,000 uniqueness/ordering + 4,000 serialization + one
+terminal = 109,161. Across 100 attempts the caps are
 120,000 applications and 20,000,000 work.
 
 Post-terminal oracle audit independently rechecks the 1,152-case acceptance
-matrix (144,000), up to `6 * 48 = 288` empirical applications (36,000), at most
+matrix (92,160), up to `6 * 48 = 288` empirical applications (23,040), at most
 16 promoted concrete programs at 64 work each (1,024), and has 25,000 for
 strict decode, certificate reconstruction, scoring, and its terminal. The
-closed maximum is 206,024, below its 250,000-work cap. These construction/audit
+closed maximum is 141,224, below its 250,000-work cap. These construction/audit
 ledgers are reported as integrity diagnostics and never debit or replenish a
 policy budget.
 
@@ -562,8 +583,12 @@ scorer := ["transform-scorer-curriculum/v1", family, seedCommitment,
 heldoutExpected := [opaqueCaseToken, terminal, outputOrNull]
 ```
 
-`profileDigest` hashes only public grammar/cost versions and cannot vary by
-family. Before execution, fixture construction generates, canonicalizes,
+`profileDigest` is the lowercase SHA-256 of the exact canonical preimage
+`["transform-profile/v1","typed-reference-forest/v1",
+"set-scalar-from-request/v1",
+"anchor-target-scope-old-guard-locality/v1",
+"transform-lifecycle-events/v1",12,4,72,48,12000]`. It cannot vary by family.
+Before execution, fixture construction generates, canonicalizes,
 serializes, and root-commits the held-out inputs and sealed expectations.
 The policy training envelope contains no held-out bytes. Only after schema
 freeze may orchestration decode the already committed held-out-input envelope
@@ -635,8 +660,9 @@ or changed-node set is forbidden.
 
 Negative cases are never used to construct edits. They are used only as
 candidate-schema counterexamples. A schema "rejects" a negative only when its
-own application returns `abstain`; producing the unchanged input counts as a
-false application unless the schema terminal was already `abstain`.
+own application returns a valid `abstain/<reason>`; producing the unchanged
+input counts as a false application unless the schema terminal was already a
+valid abstention.
 
 ## Policies and controls
 
@@ -682,9 +708,12 @@ Concrete acquisition is not shared across policy executions. For
 `positive-lgg`, orchestration first creates that policy's fresh Store and runs
 the same ordinary acquisition-only CUE heuristic used by Nous. After its closed
 barrier, orchestration byte-compares and serializes the promoted program units
-into a narrower envelope, destroys Store access, then invokes pure-Go LGG on
-that envelope and the four positive cases. The LGG package neither acquires nor
-calls the adapter. `nous-refine`, `concrete-replay`, and `no-equality-guard`
+into the exact narrower envelope `["transform-program-batch/v1",
+[[opaqueCaseToken,beforeForestDigest,concreteProgram]...]]`, with four rows
+sorted by token, unique tokens and digests, and strict canonical/EOF decoding.
+It destroys Store access, then invokes pure-Go LGG on that envelope and the
+four positive cases. The LGG package neither acquires nor calls the adapter.
+`nous-refine`, `concrete-replay`, and `no-equality-guard`
 likewise run acquisition independently in their own stores. The driver never
 creates, repairs, or copies a program across policies. `bounded-pbe` and
 `random-pbe` consume raw training cases directly and receive no changed-node or
@@ -739,7 +768,7 @@ There is one wall-clock-independent 12-category vector:
 | 8 | evaluate one schema guard or binding predicate | 1 |
 | 9 | compare one output node with expected output | 1 |
 | 10 | attach or check one evidence link | 1 |
-| 11 | hash, canonicalize, or verify one artifact | 1 |
+| 11 | hash, canonicalize, verify, or finalize one artifact/application | 1 |
 
 Total work is the checked signed-64-bit dot product of event counts and charges.
 Overflow is `invalid`. Cache lookup, hit, miss, duplicate rejection, abstention,
@@ -747,12 +776,12 @@ corruption rejection, and no-match paths emit their actual events; none is free.
 Candidate construction and all training work are lifecycle costs and are not
 amortized away. Held-out scoring shares the remaining cap.
 
-The schema-application cap is 48 per policy/curriculum: exactly eight credits
+The application cap is 48 per policy/curriculum: exactly eight credits
 are reserved for held-out cases, leaving at most 40 during training. A policy
 cannot consume the reservation. Factor checks made solely from explicit local
-observations are not schema applications; any call to the complete-schema
-capability is. Applied, mismatching, failed, and abstaining calls all consume
-one. Primitive edits do not consume schema credits.
+observations are not applications; every `schema-application` and
+`replay-application` is. Applied, mismatching, failed, and abstaining calls all
+consume one. Primitive edits do not consume application credits.
 
 Worst-case successful Nous work is bounded before fixtures as follows:
 
@@ -761,28 +790,39 @@ Worst-case successful Nous work is bounded before fixtures as follows:
 | decode/observe four positives and recover programs | 2,400 | 2,600 |
 | 12 factor alternatives over their required evidence | 4,800 | 4,800 |
 | candidates, closures, evidence, hashes | 1,000 | 1,000 |
-| eight complete training applications | 968 | 1,000 |
-| eight held-out applications and comparisons | 968 | 1,000 |
+| eight complete training applications | 608 | 640 |
+| eight held-out applications and comparisons | 608 | 640 |
 | terminal reserve | 1 | 1 |
-| total | 10,137 | 10,401 |
+| total | 9,417 | 9,681 |
 
 The bound charges every maximum-node scan even where semantics short-circuit.
-One complete-schema application has a static maximum of 121 events and 125
-work: at most 12 request-node observations, two definition observations, two
-locality-parent observations, 36 reference fact/predicate events, four edit-
-validation events charged two each, four edit applications, 12 output
-comparisons, and 49 canonicalization/evidence/application-terminal events.
-Events sum `12+2+2+36+4+4+12+49 = 121`; work adds four for the doubled validation
-charges, yielding 125. Precharge uses 125; the transcript retains actual
-events/work.
+One maximum-node, four-edit, applied complete-schema call plus its required
+immediate evidence attachment and complete-output scoring has one of three
+golden category vectors, in anchor enum order:
+
+```text
+request-target [12,8,7,0,0,0,4,4,26,12,1,1] = 75 events, 79 work
+from-value     [12,8,6,0,0,0,4,4,27,12,1,1] = 75 events, 79 work
+first-local    [12,9,6,0,0,0,4,4,27,12,1,1] = 76 events, 80 work
+```
+
+The twelve node-facts events scan the forest once and their values remain local
+to that call. Parent events are six reference parents plus anchor/locality
+parents; target events are six reference targets plus the request edge only for
+`request-target`. Predicate events are request count, one or two anchor tests,
+locality, three filters for each of six references, expansion bound, and four
+no-op checks. The remaining entries are four edit validations charged two,
+four edit executions, twelve output-node comparisons, one evidence link, and
+one final `schema-application` event. A strict precharge uses the applicable
+anchor vector and 80-work overall maximum; cap/golden tests pin all three.
 
 LGG's closed bound is acquisition 2,600 + factor work 4,800 + artifact work
-1,000 + four positive validation applications 500 + four externally scored
-negative-training applications 500 + eight held-out applications 1,000 + one
-terminal = 10,401. PBE's 48 applications cost at most 6,000 work, with at most
+1,000 + four positive validation applications 320 + four externally scored
+negative-training applications 320 + eight held-out applications 640 + one
+terminal = 9,681. PBE's 48 applications cost at most 3,840 work, with at most
 1,000 for 72 candidate allocations, ordering, comparisons, evidence, and its
-terminal, totaling 7,000. Replay, random, and ablation paths are bounded by the
-larger 10,401 figure. Thus 12,000 work, 50,000 events, 2,000 cycles, and 20,000
+terminal, totaling 4,840. Replay, random, and ablation paths are bounded by the
+larger 9,681 figure. Thus 12,000 work, 50,000 events, 2,000 cycles, and 20,000
 units are attainable for every intended policy. The 576
 universe matrix is deliberately **not** attainable under the application cap;
 bounded search is the experiment.
@@ -828,23 +868,39 @@ All semantic object wires and per-object canonical byte caps are frozen:
 | Kind | Exact wire | Cap |
 | --- | --- | ---: |
 | atom | `["transform-atom/v1",type,value]` | 128 |
+| node facts | `["transform-node-facts/v1",kind,value,from,to]` | 192 |
+| parent facts | `["transform-parent-facts/v1",parentID,key]` | 128 |
 | forest | the `typed-reference-forest/v1` wire | 2,048 |
 | edit | the `set-value/v1` wire | 128 |
+| edit status | `["transform-edit-status/v1",status,editDigest]` | 256 |
 | program | the `concrete-program/v1` wire containing one through four edit wires | 640 |
+| program batch | the `transform-program-batch/v1` wire | 1,024 |
 | partial | the `transform-partial/v1` wire | 256 |
 | schema | the `transform-schema/v1` wire | 256 |
 | result | `["transform-result/v1",terminal,outputDigest]` | 256 |
 | closure | `["transform-closure/v1",stage,parentDigest,[[alternativeDigest,resultDigest,status]...],survivorDigest]` | 1,024 |
 | certificate | `["transform-certificate/v1",schemaDigest,inputDigest,requestID,definitionID,[referenceID...],[guardBoolean...],[editDigest...],outputDigest,terminal,firstSequence,lastSequence]` | 2,048 |
-| evidence | `["transform-evidence/v1",semanticResultDigest,operationDigest]` | 256 |
+| application | `["transform-schema-application/v1",result,certificate]` | 2,560 |
+| semantic reference | `["transform-semantic-reference/v1",kind,semanticResultDigest]` | 256 |
+| evidence | `["transform-evidence/v1",semanticReferenceDigest,operationDigest]` | 256 |
 | terminal | `["transform-terminal/v1",policyTerminal,work,applications,lastSequence]` | 256 |
 | store boundary | `["transform-store-boundary/v1",phase,storeBytesDigest]` | 256 |
 | operation | the `transform-operation/v1` wire | 1,536 |
 
 Atom type is one of `id`, `kind`, `key`, `scalar`, `enum`, `boolean`, or
-`digest`, with the corresponding already bounded JSON primitive. Closure has at
+`digest`, with the corresponding already bounded JSON primitive. Node facts
+repeat the node's exact kind and use `""` for every scalar field absent under
+the kind table; they never contain ID, parent, key, or target. Parent facts
+contain the exact parent ID and child key and exist only for non-group nodes.
+Closure has at
 most four alternatives. Certificate IDs/reference arrays obey forest/edit
-bounds. An inapplicable digest is `""`; it is never an object-table path.
+bounds. `edit-status.status` is exactly `valid`, `no-op`, or `invalid-input`.
+The semantic-reference kind is exactly `node-facts`, `parent-facts`, `atom`,
+`partial`, `schema`, `edit-status`, `forest`, `result`, or `closure`;
+its digest names the canonical policy-visible result projection of the
+immediately preceding attachable operation. That projection may be nested in
+an application object and need not be a second object-table leaf. An
+inapplicable digest is `""`; it is never an object-table path.
 The event `subjectDigest` is the primary input object and `objectDigest` is this
 operation object's digest. Thus the reducer authenticates actual preimages
 rather than inferring semantics from category totals.
@@ -853,32 +909,64 @@ The normative operation matrix is:
 
 | Operation | Legal phases | Category/charge | Input kinds -> output kinds | Outcomes |
 | --- | --- | ---: | --- | --- |
-| node | acquire,target,anchor,scope,old-guard,locality,heldout | 0/1 | forest,id -> atom | ok,invalid-input |
-| parent | same as node | 1/1 | forest,id -> atom,atom | ok,absent,invalid-input |
+| node | acquire,target,anchor,scope,old-guard,locality,heldout | 0/1 | forest,id -> node-facts | ok,invalid-input |
+| parent | same as node | 1/1 | forest,id -> parent-facts | ok,absent,invalid-input |
 | target | same as node | 2/1 | forest,id -> atom | ok,absent,invalid-input |
 | compare | acquire,target,anchor,scope,old-guard,locality | 3/1 | atom,atom -> atom(boolean) | true,false,invalid-input |
-| candidate-allocate | target,anchor,scope,old-guard,locality,freeze | 4/1 | partial or atom(enum root) -> partial | allocated,duplicate,rejected |
+| candidate-allocate | target,anchor,scope,old-guard,locality,freeze | 4/1 | partial or schema -> same kind | allocated,duplicate,rejected |
 | refine | target,anchor,scope,old-guard,locality | 5/1 | partial,atom(enum) -> partial | refined,rejected,invalid-input |
-| edit-validate | acquire,training-validate,heldout | 6/2 | forest,edit -> result | valid,no-op,invalid-input |
+| edit-validate | acquire,training-validate,heldout | 6/2 | forest,edit -> edit-status | valid,no-op,invalid-input |
 | edit-apply | acquire,training-validate,heldout | 7/1 | forest,edit -> forest | applied,invalid-input |
-| schema-predicate | training-validate,heldout | 8/1 | forest,schema -> result,certificate | applied,abstain/request-count,abstain/anchor,abstain/locality,abstain/expansion,abstain/no-op,invalid-input |
+| schema-predicate | training-validate,heldout | 8/1 | forest,schema,atom(selector),atom-or-edit(subject) -> atom(boolean) | true,false,invalid-input |
 | output-compare | acquire,training-validate,heldout | 9/1 | forest,forest -> atom(boolean) | equal,different,invalid-input |
-| evidence-link | acquire,target,anchor,scope,old-guard,locality,training-validate,freeze,heldout | 10/1 | result,operation -> evidence | attached,rejected |
+| evidence-link | acquire,target,anchor,scope,old-guard,locality,training-validate,freeze,heldout | 10/1 | semantic-reference,operation -> evidence | attached,rejected |
 | canonicalize | all nonterminal phases | 11/1 | any one semantic kind -> same kind | canonical,invalid-input |
 | hash | all nonterminal phases | 11/1 | any one semantic kind -> atom(digest) | hashed,invalid-input |
 | verify | acquire,training-validate,freeze,heldout | 11/1 | one or two semantic kinds -> atom(boolean) | verified,rejected |
+| schema-application | training-validate,heldout | 11/1 plus one application credit | forest,schema -> application | applied,abstain/request-count,abstain/anchor,abstain/locality,abstain/expansion,abstain/no-op,invalid-input |
+| replay-application | training-validate,heldout | 11/1 plus one application credit | forest,program-batch -> result | applied,abstain/replay-miss,invalid-input |
 | terminal | terminal | 11/1 | closure or schema or store-boundary -> terminal | completed,no-discovery,budget-exhausted |
 
+The schema-predicate selector is exactly `request-count`, `anchor-candidate`,
+`anchor-locality`, `reference-target`, `reference-scope`,
+`reference-old-guard`, `expansion-bound`, or `edit-no-op`. Its subject is an
+ID/count atom for every selector except `edit-no-op`, whose subject is an edit.
+The reducer recomputes the boolean from all four inputs; a selector/subject
+kind mismatch is `invalid-input`.
+
+Output arity is exact by outcome. `ok`, `allocated`, `refined`, `applied`,
+`canonical`, and `hashed` produce the one output shown. Compare `true`/`false`,
+output-compare `equal`/`different`, and verify `verified`/`rejected` each produce
+one boolean atom. Every edit-validation outcome produces one edit-status.
+Every schema-application outcome produces one application object, using `-1`,
+empty arrays, and empty digests in its certificate when a field is
+inapplicable; every replay-application outcome produces one result. `attached`
+produces one evidence object. `completed`, `no-discovery`, and
+`budget-exhausted` produce one terminal. `absent`, `duplicate`, every other
+`rejected`, and every other `invalid-input` produce zero outputs. Inputs always
+have the exact arity shown and are present even on failure. Candidate allocation
+therefore records a complete-schema allocation for every PBE tuple rather than
+coercing it through a partial candidate.
+
+At a schema/replay call boundary the verifier atomically reserves the
+applicable maximum work and one application credit before emitting any internal
+predicate/edit event. Exactly one final schema-application or
+replay-application event commits that reservation and is the sole event counted
+as the application. A missing, duplicated, or nonfinal application event, or a
+crash between reservation and commit, is mechanical `invalid`; it cannot turn
+partial work into a free empirical attempt.
+
 No other phase/category/charge/kind/arity/outcome combination is valid. Result
-terminal is limited to the schema outcomes above plus `abstain/replay-miss` for
-the concrete-replay control. `ablated-ineligible`, `survivor`,
+terminal is limited to the schema-application outcomes above plus
+`abstain/replay-miss` for the concrete-replay control. `ablated-ineligible`, `survivor`,
 `redundant-noncanonical`, and `counterexample` occur only as closure status
 strings, not operation outcomes.
 
 Operation is closed by category: `node`; `parent`; `target`; `compare`;
 `candidate-allocate`; `refine`; `edit-validate`; `edit-apply`;
 `schema-predicate`; `output-compare`; `evidence-link`; or one of
-`canonicalize`, `hash`, `verify`, and `terminal`. Caches are disabled; a cache
+`canonicalize`, `hash`, `verify`, `schema-application`, `replay-application`,
+and `terminal`. Caches are disabled; a cache
 operation is invalid evidence and duplicate applications are fully charged.
 Phase is exactly `acquire`, `target`, `anchor`, `scope`,
 `old-guard`, `locality`, `training-validate`, `freeze`, `heldout`, or `terminal`.
@@ -897,13 +985,14 @@ caps of 50,000 events, 19,200,000 raw bytes (`50,000 * 384`), and 19,250,000
 gzip bytes. The gzip cap exceeds the implementation's frozen
 `compressBound(19,200,000)+18` result; cap-1/cap/cap+1 tests pin that bound. At
 most one operation object and one non-operation object are admitted per charged
-event. When one logical action produces result, certificate, and output forest,
-each auxiliary object is admitted by its own preceding `canonicalize` event and
-the final semantic operation references those existing digests. Since every
-object is at most 2,048 bytes and work permits at most 12,001 events including
-terminal, the table has at most 24,002 leaves using 49,156,096 bytes. Its sorted
-root has the exact object-root wire in the evidence section, a 4,194,304-byte cap, and counts
-inside the 67,108,864-byte curriculum cap, leaving 13,758,464 bytes margin. A
+event. Compound node-facts, parent-facts, edit-status, and application objects
+make every matrix operation obey that rule; the policy-visible result of an
+application is a projection of the one authenticated compound object. Since
+every object is at most 2,560 bytes and work permits at most 12,001 events
+including terminal, the table has at most 24,002 leaves using 61,445,120 bytes.
+Its sorted root has the exact object-root wire in the evidence section, a
+4,194,304-byte cap, and counts inside the 67,108,864-byte curriculum cap,
+leaving 1,469,440 bytes margin. A
 locked policy panel has exactly 128 chunks and caps of
 6,400,000 events, 2,457,600,000 raw bytes, 2,464,000,000 gzip bytes, and
 8,589,934,592 object bytes. Primary and audit bundles are separate; combined
@@ -953,14 +1042,23 @@ makes the run `invalid`.
 Competence has its own nonempirical caps of 26,000 schema applications, 8,000
 program applications, and 5,000,000 work. It cannot consume or replenish a
 curriculum budget, populate policy artifacts, or expose a panel fixture.
+Its exact root is `["transform-competence-root/v1",
+[[relativePath,sha256,byteLength,"100644"]...]]`, sorted under the same path
+rules as the evidence graph, over every canonical competence input and result
+leaf and excluding the root file itself. Empty and self-referential roots are
+invalid. The competence report's `rootSHA256` hashes these canonical root bytes.
 
 ## Endpoint and classification
 
 A held-out case is correct only if a positive output is byte-equal to the oracle
-output or an abstention case terminates exactly `abstain` without edits. A
+output or an expected-abstention case terminates with any valid
+`abstain/<reason>` result and has no edit or output digest. A
 curriculum succeeds only when all eight held-out cases are correct within its
-full lifecycle budget. Any application on an abstention case is a false
-application even if the resulting forest happens to equal the input.
+full lifecycle budget. A false application occurs only when an
+expected-abstention case terminates `applied`; an evaluated schema that returns
+a valid abstention still consumes its application credit but is a correct
+rejection, not a false application. Producing an unchanged forest with
+`applied` remains false even when its bytes equal the input.
 
 Held-out inputs are presented one at a time in opaque-token byte order. A
 policy cannot reorder, skip, batch, or inspect a later input. Refusal, crash,
@@ -1198,8 +1296,8 @@ POSIX ASCII path with no leading slash, empty component, `.` component, `..`
 component, backslash, or duplicate. The graph contains the review-authority
 leaf; every policy, scorer, queue, and family-assignment fixture leaf; the
 fixture root; every policy premanifest; both execution manifests; every
-transcript chunk; every object leaf and object root; and the competence root.
-Empty graphs are invalid. It
+transcript chunk; every object leaf and object root; and every competence leaf
+and competence root. Empty graphs are invalid. It
 excludes the graph file itself, report, and receipt. `evidenceGraphDigest` is
 the SHA-256 of these canonical graph bytes. The report contains that digest and
 its outer payload digest hashes the entire payload; after report persistence
@@ -1252,7 +1350,11 @@ Implementation review must establish, without executing any protected panel:
 - ordinary heuristic provenance for concrete edits, all 12 factor alternatives,
   rejections, stage closures, and the promoted schema;
 - transcript golden vectors for match, abstain, corruption, budget exhaustion,
-  and acquisition/application phase separation;
+  acquisition/application phase separation, and all three exact maximum
+  application vectors;
+- per-outcome operation arity tests for node-facts, parent-facts, edit status,
+  partial/schema allocation, predicate/application separation, replay, and
+  immediate attach, including rejection after an intervening `digest`;
 - overflow and every cap boundary at `cap-1`, `cap`, and `cap+1`;
 - complete primary/audit replay and report recomputation;
 - alternate aliases, occupied names, reordered children, and deletion tests;
@@ -1261,6 +1363,8 @@ Implementation review must establish, without executing any protected panel:
   lower bound;
 - policy-visible fixture scans and deletion/retargeting tests proving seed,
   ordinal, attempt, family, latent code, and held-out truth are absent;
+- canonical profile, program-batch, competence-root, ASCII-token, and evidence-
+  graph preimage tests;
 - exact sole-call-path tests for validation and locked constructors;
 - Git environment, ignored-input, symlink, non-blob, dirty-tree, receipt, and
   unlock-token adversarial tests; and
