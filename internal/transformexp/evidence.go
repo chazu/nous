@@ -23,17 +23,22 @@ type panelEvidence struct {
 }
 
 func buildPanelEvidence(domainsDir, panel string, curricula []curriculum, authority uint64, reviewAuthority []byte) (panelEvidence, error) {
-	return buildPanelEvidenceWithPairs(domainsDir, panel, curricula, authority, nil, reviewAuthority)
-}
-
-func buildPanelEvidenceWithPairs(domainsDir, panel string, curricula []curriculum, authority uint64, lockedPairs [][2]uint64, reviewAuthority []byte) (panelEvidence, error) {
-	// Construct exactly the bytes that protected execution persists before event
-	// zero. Execution can only refer to these committed leaves by digest.
+	if panel != "safe" {
+		return panelEvidence{}, fmt.Errorf("generic evidence builder cannot construct protected panel %q", panel)
+	}
 	files, fixtureRoot, err := buildPreparedEvidence(panel, curricula)
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	report, artifacts, err := runPanelDetailedWithPairs(domainsDir, panel, curricula, authority, lockedPairs)
+	return buildPanelEvidenceFromPrepared(domainsDir, panel, files, fixtureRoot, len(curricula), authority, nil, reviewAuthority)
+}
+
+func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][]byte, fixtureRoot []byte, count int, authority uint64, lockedPairs [][2]uint64, reviewAuthority []byte) (panelEvidence, error) {
+	executionCurricula, err := decodePreparedCurricula(files, panel, count)
+	if err != nil {
+		return panelEvidence{}, err
+	}
+	report, artifacts, err := runPanelDetailedWithPairs(domainsDir, panel, executionCurricula, authority, lockedPairs)
 	if err != nil {
 		return panelEvidence{}, err
 	}
@@ -44,11 +49,11 @@ func buildPanelEvidenceWithPairs(domainsDir, panel string, curricula []curriculu
 		}
 		files["review-authority.json"] = bytes.Clone(reviewAuthority)
 	}
-	primaryManifest, err := addExecutionEvidence(files, "primary", curricula, report.Rows, artifacts.Primary)
+	primaryManifest, err := addExecutionEvidence(files, "primary", executionCurricula, report.Rows, artifacts.Primary)
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	auditManifest, err := addExecutionEvidence(files, "audit", curricula, report.Rows, artifacts.Audit)
+	auditManifest, err := addExecutionEvidence(files, "audit", executionCurricula, report.Rows, artifacts.Audit)
 	if err != nil {
 		return panelEvidence{}, err
 	}
@@ -117,6 +122,7 @@ func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]by
 		fixtureFiles[base+"/scorer.json"] = scorer
 		fixtureFiles[base+"/family.json"] = mustJSON([]any{"transform-family-assignment/v1", c.Ordinal, c.Family})
 		fixtureFiles[base+"/acceptance.json"] = mustJSON([]any{"transform-generator-acceptance-ledger/v1", c.GeneratorLedger.Applications, c.GeneratorLedger.Work, c.GeneratorLedger.MatrixSHA256, c.GeneratorLedger.Accepted})
+		fixtureFiles[base+"/authority.json"] = mustJSON([]any{"transform-fixture-authority/v1", c.Ordinal, panel, c.PanelCommitment})
 		fixtureFiles[base+"/queue.json"] = policyQueueBytes(c)
 	}
 	fixtureRoot, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
@@ -124,6 +130,77 @@ func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]by
 		return nil, nil, err
 	}
 	return fixtureFiles, fixtureRoot, nil
+}
+
+func decodePreparedCurricula(files map[string][]byte, panel string, count int) ([]curriculum, error) {
+	result := make([]curriculum, count)
+	for ordinal := 0; ordinal < count; ordinal++ {
+		base := fmt.Sprintf("fixtures/%03d", ordinal)
+		read := func(name string) ([]byte, error) {
+			value, ok := files[base+"/"+name]
+			if !ok {
+				return nil, fmt.Errorf("missing prepared fixture %s/%s", base, name)
+			}
+			return bytes.Clone(value), nil
+		}
+		training, err := read("training.json")
+		if err != nil {
+			return nil, err
+		}
+		heldout, err := read("heldout.json")
+		if err != nil {
+			return nil, err
+		}
+		queue, err := read("queue.json")
+		if err != nil {
+			return nil, err
+		}
+		scorer, err := read("scorer.json")
+		if err != nil {
+			return nil, err
+		}
+		familyBytes, err := read("family.json")
+		if err != nil {
+			return nil, err
+		}
+		acceptanceBytes, err := read("acceptance.json")
+		if err != nil {
+			return nil, err
+		}
+		authorityBytes, err := read("authority.json")
+		if err != nil {
+			return nil, err
+		}
+		var familyWire, acceptanceWire, authorityWire []json.RawMessage
+		var familyVersion, acceptanceVersion, authorityVersion, gotPanel, panelCommitment string
+		var familyOrdinal, family, authorityOrdinal int
+		ledger := acceptanceLedger{}
+		if json.Unmarshal(familyBytes, &familyWire) != nil || len(familyWire) != 3 || json.Unmarshal(familyWire[0], &familyVersion) != nil || familyVersion != "transform-family-assignment/v1" || json.Unmarshal(familyWire[1], &familyOrdinal) != nil || familyOrdinal != ordinal || json.Unmarshal(familyWire[2], &family) != nil || family < 0 || family >= len(familySchemas) {
+			return nil, fmt.Errorf("invalid prepared family %d", ordinal)
+		}
+		if json.Unmarshal(acceptanceBytes, &acceptanceWire) != nil || len(acceptanceWire) != 5 || json.Unmarshal(acceptanceWire[0], &acceptanceVersion) != nil || acceptanceVersion != "transform-generator-acceptance-ledger/v1" || json.Unmarshal(acceptanceWire[1], &ledger.Applications) != nil || json.Unmarshal(acceptanceWire[2], &ledger.Work) != nil || json.Unmarshal(acceptanceWire[3], &ledger.MatrixSHA256) != nil || json.Unmarshal(acceptanceWire[4], &ledger.Accepted) != nil {
+			return nil, fmt.Errorf("invalid prepared acceptance ledger %d", ordinal)
+		}
+		if json.Unmarshal(authorityBytes, &authorityWire) != nil || len(authorityWire) != 4 || json.Unmarshal(authorityWire[0], &authorityVersion) != nil || authorityVersion != "transform-fixture-authority/v1" || json.Unmarshal(authorityWire[1], &authorityOrdinal) != nil || authorityOrdinal != ordinal || json.Unmarshal(authorityWire[2], &gotPanel) != nil || gotPanel != panel || json.Unmarshal(authorityWire[3], &panelCommitment) != nil || !digestString(panelCommitment) {
+			return nil, fmt.Errorf("invalid prepared authority %d", ordinal)
+		}
+		c := curriculum{Ordinal: ordinal, Family: family, Panel: panel, PanelCommitment: panelCommitment, Training: training, Heldout: heldout, Queue: queue, Scorer: scorer, GeneratorLedger: ledger}
+		scorerView, err := decodeScorerView(c)
+		if err != nil || scorerView.Family != family {
+			return nil, fmt.Errorf("invalid prepared scorer %d: %w", ordinal, err)
+		}
+		c.SeedCommitment, c.AcceptedAttempt, c.Latent, c.Expected = scorerView.SeedCommitment, scorerView.AcceptedAttempt, scorerView.Latent, scorerView.Expected
+		policyView, err := decodePolicyView(c)
+		if err != nil {
+			return nil, fmt.Errorf("invalid prepared policy view %d: %w", ordinal, err)
+		}
+		if _, err := decodeHeldoutInputs(c); err != nil {
+			return nil, fmt.Errorf("invalid prepared heldout %d: %w", ordinal, err)
+		}
+		c.PolicyTokens, c.PolicyRandomness = policyView.PolicyTokens, policyView.PolicyRandomness
+		result[ordinal] = c
+	}
+	return result, nil
 }
 
 func addExecutionEvidence(files map[string][]byte, role string, curricula []curriculum, reportRows []PolicyReportRow, bundles map[string]TransformTranscriptBundle) ([]byte, error) {

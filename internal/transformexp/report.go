@@ -137,6 +137,8 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
+			eraseScorerView(&primaryScorer)
+			eraseBytes(primaryScorerBytes)
 			auditView, err := decodePolicyView(c)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
@@ -169,6 +171,8 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
+			eraseScorerView(&auditScorer)
+			eraseBytes(auditScorerBytes)
 			if outcome.Terminal != audit.Terminal || outcome.Applications != audit.Applications || outcome.HeldoutCorrect != audit.HeldoutCorrect || outcome.HeldoutCorrectBits != audit.HeldoutCorrectBits || outcome.FalseApplications != audit.FalseApplications || outcome.NonmatchingWork != audit.NonmatchingWork || outcome.OracleParity != audit.OracleParity || outcome.ProgramsExact != audit.ProgramsExact || !bytes.Equal(outcome.Schema, audit.Schema) {
 				report.DualExecutionEqual = false
 			}
@@ -246,6 +250,25 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	slices.Sort(report.Limitations)
 	report.MechanicallyValid = report.DualExecutionEqual && report.TranscriptHashesEqual && report.Conservation && report.OracleParity && report.ProgramsExact && report.ApplicationsExact && report.ArtifactFrozen && report.HeldoutSealed && report.GeneratorAcceptance.Exact && report.OracleAcceptance.Exact
 	return report, artifacts, nil
+}
+
+func eraseScorerView(view *scorerCurriculum) {
+	eraseBytes(view.Latent)
+	for index := range view.Expected {
+		eraseBytes(view.Expected[index].Output)
+		view.Expected[index] = expectedCase{}
+	}
+	view.Family = 0
+	view.SeedCommitment = ""
+	view.AcceptedAttempt = 0
+	view.Latent = nil
+	view.Expected = nil
+}
+
+func eraseBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 func equalTransformObjects(left, right map[string][]byte) bool {

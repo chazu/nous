@@ -39,6 +39,8 @@ type curriculum struct {
 	PolicyTokens     map[Policy]string
 	PolicyRandomness map[Policy][2]uint64
 	GeneratorLedger  acceptanceLedger
+	Queue            []byte
+	Scorer           []byte
 }
 
 type acceptanceLedger struct {

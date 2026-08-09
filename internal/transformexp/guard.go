@@ -57,7 +57,7 @@ func ExecuteDevelopment(repoRoot, domainsDir string) (protectedReport, error) {
 	if _, err := persistPreparedFixtures(authority.Root, "development", curricula); err != nil {
 		return protectedReport{}, err
 	}
-	evidence, err := buildPanelEvidence(filepath.Join(authority.Root, "domains"), "development", curricula, 841001, authority.ReviewAuthority)
+	evidence, err := buildCommittedDevelopmentEvidence(authority)
 	if err != nil {
 		return protectedReport{}, err
 	}
@@ -112,7 +112,7 @@ func ExecuteValidation(repoRoot, domainsDir string) (report protectedReport, ret
 	if err := startAttempt(authority.Root, receipt, "", fixtureRoot); err != nil {
 		return protectedReport{}, err
 	}
-	evidence, err := buildPanelEvidence(filepath.Join(authority.Root, "domains"), "validation", curricula, 842001, authority.ReviewAuthority)
+	evidence, err := buildCommittedValidationEvidence(authority)
 	if err != nil {
 		return protectedReport{}, err
 	}
@@ -195,7 +195,7 @@ func ExecuteLocked(repoRoot, domainsDir, unlockToken string) (report protectedRe
 	for index := range curricula {
 		curricula[index].Seed = 0
 	}
-	evidence, err := buildPanelEvidenceWithPairs(filepath.Join(authority.Root, "domains"), "locked", curricula, 0, pairs, authority.ReviewAuthority)
+	evidence, err := buildCommittedLockedEvidence(authority, pairs)
 	for index := range pairs {
 		pairs[index] = [2]uint64{}
 	}
@@ -640,6 +640,92 @@ func persistPreparedFixtures(root, panel string, curricula []curriculum) (string
 		return "", err
 	}
 	return digestBytes(fixtureRoot), nil
+}
+
+func buildCommittedDevelopmentEvidence(authority repositoryAuthority) (panelEvidence, error) {
+	files, fixtureRoot, err := loadCommittedPreparedEvidence(authority.Root, "development", DevelopmentCount)
+	if err != nil {
+		return panelEvidence{}, err
+	}
+	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "development", files, fixtureRoot, DevelopmentCount, 841001, nil, authority.ReviewAuthority)
+}
+
+func buildCommittedValidationEvidence(authority repositoryAuthority) (panelEvidence, error) {
+	files, fixtureRoot, err := loadCommittedPreparedEvidence(authority.Root, "validation", ValidationCount)
+	if err != nil {
+		return panelEvidence{}, err
+	}
+	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "validation", files, fixtureRoot, ValidationCount, 842001, nil, authority.ReviewAuthority)
+}
+
+func buildCommittedLockedEvidence(authority repositoryAuthority, pairs [][2]uint64) (panelEvidence, error) {
+	files, fixtureRoot, err := loadCommittedPreparedEvidence(authority.Root, "locked", LockedCount)
+	if err != nil {
+		return panelEvidence{}, err
+	}
+	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "locked", files, fixtureRoot, LockedCount, 0, pairs, authority.ReviewAuthority)
+}
+
+func loadCommittedPreparedEvidence(root, panel string, count int) (map[string][]byte, []byte, error) {
+	if !oneOfString(panel, "development", "validation", "locked") || count <= 0 {
+		return nil, nil, errors.New("invalid committed prepared panel")
+	}
+	base := transcriptPath(root, panel)
+	files := map[string][]byte{}
+	totalBytes := 0
+	err := filepath.WalkDir(base, func(name string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if name == base {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("prepared evidence contains symlink")
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(base, name)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if relative != "fixture-root.json" && !strings.HasPrefix(relative, "fixtures/") && !strings.HasPrefix(relative, "pre/") || !validEvidencePath(relative) {
+			return fmt.Errorf("unexpected prepared evidence path %s", relative)
+		}
+		value, err := os.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		totalBytes += len(value)
+		if totalBytes > FixtureBundleByteCap {
+			return errors.New("prepared evidence exceeds fixture bundle cap")
+		}
+		files[relative] = value
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(files) != count*(7+len(empiricalPolicies))+1 {
+		return nil, nil, fmt.Errorf("prepared evidence file count %d", len(files))
+	}
+	fixtureRoot, ok := files["fixture-root.json"]
+	if !ok {
+		return nil, nil, errors.New("prepared fixture root absent")
+	}
+	fixtureFiles := map[string][]byte{}
+	for name, value := range files {
+		if strings.HasPrefix(name, "fixtures/") {
+			fixtureFiles[name] = value
+		}
+	}
+	rebuilt, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
+	if err != nil || !bytes.Equal(rebuilt, fixtureRoot) {
+		return nil, nil, errors.New("prepared fixture root does not reconstruct")
+	}
+	return files, fixtureRoot, nil
 }
 
 func persistProtected(root, panel string, evidence panelEvidence, report protectedReport) error {

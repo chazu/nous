@@ -34,6 +34,9 @@ type scorerCurriculum struct {
 }
 
 func policyQueueBytes(c curriculum) []byte {
+	if len(c.Queue) != 0 {
+		return bytes.Clone(c.Queue)
+	}
 	rows := make([]any, len(empiricalPolicies))
 	for index, policy := range empiricalPolicies {
 		randomness := c.PolicyRandomness[policy]
@@ -52,6 +55,9 @@ func policyQueueBytesFromView(c policyCurriculum) []byte {
 }
 
 func scorerFixtureBytes(c curriculum) ([]byte, error) {
+	if len(c.Scorer) != 0 {
+		return bytes.Clone(c.Scorer), nil
+	}
 	var latent any
 	if err := json.Unmarshal(c.Latent, &latent); err != nil {
 		return nil, err

@@ -111,3 +111,33 @@ func TestPreparedEvidencePersistsPremanifestBeforeExecution(t *testing.T) {
 		}
 	}
 }
+
+func TestProtectedExecutionReloadsPersistedFixtureBytes(t *testing.T) {
+	root := t.TempDir()
+	c, err := makeCurriculum(0, 0, 841777)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Panel = "development"
+	wantTraining := bytes.Clone(c.Training)
+	if _, err := persistPreparedFixtures(root, "development", []curriculum{c}); err != nil {
+		t.Fatal(err)
+	}
+	for index := range c.Training {
+		c.Training[index] = 0
+	}
+	files, fixtureRoot, err := loadCommittedPreparedEvidence(root, "development", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := decodePreparedCurricula(files, "development", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(fresh[0].Training, wantTraining) || !bytes.Equal(fixtureRoot, files["fixture-root.json"]) {
+		t.Fatal("protected fixture reload reused mutated in-memory curriculum")
+	}
+	if _, err := buildPanelEvidence("../../domains", "development", fresh, 841001, nil); err == nil {
+		t.Fatal("generic evidence builder accepted protected panel")
+	}
+}
