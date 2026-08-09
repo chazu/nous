@@ -44,7 +44,7 @@ func (p protectedPayload) wire() ([]byte, error) {
 	if err := json.Unmarshal(p.Manifest, &manifest); err != nil {
 		return nil, err
 	}
-	competence := []any{"transform-competence/v1", p.Competence.Forests, p.Competence.SchemaApplications, p.Competence.ProgramApplications, 0, p.Competence.Passed, p.CompetenceRoot}
+	competence := []any{"transform-competence/v1", p.Competence.Forests, p.Competence.SchemaApplications, p.Competence.ProgramApplications, p.Competence.Microcases, p.Competence.Passed, p.CompetenceRoot}
 	rows := make([]any, len(p.Rows))
 	for index, row := range p.Rows {
 		rows[index] = []any{row.Ordinal, row.Family, row.Policy, row.Terminal, row.Work, row.Applications, row.SchemaSHA256, row.HeldoutCorrectBits, row.FalseApplications, row.NonmatchingWork}
@@ -163,9 +163,11 @@ func decodeProtectedReport(data []byte) (protectedReport, error) {
 	}
 	var competenceVersion, competenceRoot string
 	var competence CompetenceReport
-	var microcases int
-	if json.Unmarshal(competenceWire[0], &competenceVersion) != nil || competenceVersion != "transform-competence/v1" || json.Unmarshal(competenceWire[1], &competence.Forests) != nil || json.Unmarshal(competenceWire[2], &competence.SchemaApplications) != nil || json.Unmarshal(competenceWire[3], &competence.ProgramApplications) != nil || json.Unmarshal(competenceWire[4], &microcases) != nil || json.Unmarshal(competenceWire[5], &competence.Passed) != nil || json.Unmarshal(competenceWire[6], &competenceRoot) != nil {
+	if json.Unmarshal(competenceWire[0], &competenceVersion) != nil || competenceVersion != "transform-competence/v1" || json.Unmarshal(competenceWire[1], &competence.Forests) != nil || json.Unmarshal(competenceWire[2], &competence.SchemaApplications) != nil || json.Unmarshal(competenceWire[3], &competence.ProgramApplications) != nil || json.Unmarshal(competenceWire[4], &competence.Microcases) != nil || json.Unmarshal(competenceWire[5], &competence.Passed) != nil || json.Unmarshal(competenceWire[6], &competenceRoot) != nil {
 		return protectedReport{}, fmt.Errorf("invalid competence values")
+	}
+	if competence != (CompetenceReport{351, 25272, 7020, 14, true}) || !isLowerHex(competenceRoot, 64) {
+		return protectedReport{}, fmt.Errorf("competence claim does not match frozen suite")
 	}
 	var rowWires [][]json.RawMessage
 	if json.Unmarshal(values[9], &rowWires) != nil {

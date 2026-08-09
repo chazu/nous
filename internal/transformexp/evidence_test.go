@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,15 @@ func TestPanelEvidenceGraphBindsFixturesTranscriptsAndObjects(t *testing.T) {
 		if len(evidence.Files[required]) == 0 {
 			t.Fatalf("missing evidence leaf %s", required)
 		}
+	}
+	competenceLeaves := 0
+	for name := range evidence.Files {
+		if strings.HasPrefix(name, "competence/cases/") {
+			competenceLeaves++
+		}
+	}
+	if competenceLeaves != 28 || evidence.Report.Competence.Microcases != 14 {
+		t.Fatalf("competence evidence leaves=%d report=%+v", competenceLeaves, evidence.Report.Competence)
 	}
 	for _, policy := range empiricalPolicies {
 		for _, c := range curricula {

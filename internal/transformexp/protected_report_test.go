@@ -15,7 +15,7 @@ func TestProtectedReportWireIsCanonicalStrictAndDigestBound(t *testing.T) {
 		PrimaryManifest:      digestBytes([]byte("primary")),
 		AuditManifest:        digestBytes([]byte("audit")),
 		EvidenceGraph:        digestBytes([]byte("graph")),
-		Competence:           CompetenceReport{351, 25272, 7020, true},
+		Competence:           CompetenceReport{351, 25272, 7020, 14, true},
 		CompetenceRoot:       digestBytes([]byte("competence")),
 		Rows:                 []PolicyReportRow{{Ordinal: 0, Family: 0, Policy: NousRefine, Terminal: "completed", Work: 1, Applications: 1, SchemaSHA256: digestBytes([]byte("schema")), HeldoutCorrectBits: "ff"}},
 		Inference:            transformInference{Point: rationalPoint{1, 1}, Lower: rationalPoint{1, 1}, Upper: rationalPoint{1, 1}, PValue: rationalPoint{1, 100}, NousSuccesses: 1},

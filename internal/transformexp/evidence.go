@@ -56,9 +56,16 @@ func buildPanelEvidenceWithPairs(domainsDir, panel string, curricula []curriculu
 	files["audit/execution-manifest.json"] = auditManifest
 	report.PrimaryManifestDigest = digestBytes(primaryManifest)
 	report.AuditManifestDigest = digestBytes(auditManifest)
+	competenceFiles, err := runTransformMicrocases()
+	if err != nil {
+		return panelEvidence{}, err
+	}
+	for name, value := range competenceFiles {
+		files[name] = value
+	}
 	competenceBytes, _ := json.Marshal(report.Competence)
 	files["competence/report.json"] = competenceBytes
-	competenceRoot, err := canonicalEvidenceRoot("transform-competence-root/v1", "", map[string][]byte{"competence/report.json": competenceBytes})
+	competenceRoot, err := canonicalEvidenceRoot("transform-competence-root/v1", "", competenceFiles)
 	if err != nil {
 		return panelEvidence{}, err
 	}

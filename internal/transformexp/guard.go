@@ -764,7 +764,7 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 		return err
 	}
 	var competence CompetenceReport
-	if json.Unmarshal(competenceBytes, &competence) != nil || competence != report.Payload.Competence || competence != (CompetenceReport{351, 25272, 7020, true}) {
+	if json.Unmarshal(competenceBytes, &competence) != nil || competence != report.Payload.Competence || competence != (CompetenceReport{351, 25272, 7020, 14, true}) {
 		return fmt.Errorf("%s competence evidence mismatch", panel)
 	}
 	wantRows := DevelopmentCount * len(empiricalPolicies)
