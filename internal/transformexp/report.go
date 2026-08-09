@@ -24,15 +24,17 @@ type PolicyReportRow struct {
 }
 
 type SafePanelReport struct {
-	Version           string             `json:"version"`
-	Panel             string             `json:"panel"`
-	PlanCommit        string             `json:"plan_commit"`
-	Manifest          json.RawMessage    `json:"manifest"`
-	Rows              []PolicyReportRow  `json:"rows"`
-	Inference         transformInference `json:"inference"`
-	Competence        CompetenceReport   `json:"competence"`
-	MechanicallyValid bool               `json:"mechanically_valid"`
-	Limitations       []string           `json:"limitations"`
+	Version               string             `json:"version"`
+	Panel                 string             `json:"panel"`
+	PlanCommit            string             `json:"plan_commit"`
+	Manifest              json.RawMessage    `json:"manifest"`
+	Rows                  []PolicyReportRow  `json:"rows"`
+	Inference             transformInference `json:"inference"`
+	Competence            CompetenceReport   `json:"competence"`
+	DualExecutionEqual    bool               `json:"dual_execution_equal"`
+	TranscriptHashesEqual bool               `json:"transcript_hashes_equal"`
+	MechanicallyValid     bool               `json:"mechanically_valid"`
+	Limitations           []string           `json:"limitations"`
 }
 
 func (r SafePanelReport) JSON() ([]byte, error) {
@@ -50,7 +52,7 @@ func runSafePanel(domainsDir, panel string, curricula []curriculum, authority ui
 	if panel != "safe" || len(curricula) == 0 {
 		return SafePanelReport{}, fmt.Errorf("safe runner cannot execute panel %q", panel)
 	}
-	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON)}
+	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true}
 	paired := make([]pairedTransformRow, len(curricula))
 	for index, c := range curricula {
 		if c.Ordinal != index {
@@ -61,6 +63,16 @@ func runSafePanel(domainsDir, panel string, curricula []curriculum, authority ui
 			outcome, err := executePolicy(domainsDir, c, policy)
 			if err != nil {
 				return SafePanelReport{}, fmt.Errorf("curriculum %d policy %s: %w", c.Ordinal, policy, err)
+			}
+			audit, err := executePolicy(domainsDir, c, policy)
+			if err != nil {
+				return SafePanelReport{}, fmt.Errorf("curriculum %d policy %s audit: %w", c.Ordinal, policy, err)
+			}
+			if outcome.Terminal != audit.Terminal || outcome.Applications != audit.Applications || outcome.HeldoutCorrect != audit.HeldoutCorrect || outcome.FalseApplications != audit.FalseApplications || outcome.NonmatchingWork != audit.NonmatchingWork || !bytes.Equal(outcome.Schema, audit.Schema) {
+				report.DualExecutionEqual = false
+			}
+			if !bytes.Equal(outcome.Transcript.Raw, audit.Transcript.Raw) || !bytes.Equal(outcome.Transcript.Gzip, audit.Transcript.Gzip) {
+				report.TranscriptHashesEqual = false
 			}
 			outcomes[policy] = outcome
 			work := int64(outcome.TrainingWork)
@@ -97,7 +109,7 @@ func runSafePanel(domainsDir, panel string, curricula []curriculum, authority ui
 	if err != nil {
 		return SafePanelReport{}, err
 	}
-	report.Limitations = []string{"authenticated baseline transcripts are not yet implemented", "safe runner is not protected-panel evidence"}
+	report.Limitations = []string{"evidence graph and protected repository authority are not yet implemented", "safe runner is not protected-panel evidence"}
 	slices.Sort(report.Limitations)
 	report.MechanicallyValid = false
 	return report, nil

@@ -468,6 +468,18 @@ func bTSProgramApply(vm *VM) error {
 		return nil
 	}
 	b, _ := out.CanonicalJSON()
+	forestBytes := []byte(forestValue.AsString())
+	for _, edit := range p.Edits {
+		editWire, _ := json.Marshal([]any{"set-value/v1", edit.Target, edit.Value})
+		editDigest := transformDigest(editWire)
+		status, _ := json.Marshal([]any{"transform-edit-status/v1", "valid", editDigest})
+		if err := recordTransform(vm, "edit-validate", "valid", 6, [][]byte{forestBytes, editWire}, [][]byte{status}); err != nil {
+			return err
+		}
+		if err := recordTransform(vm, "edit-apply", "applied", 7, [][]byte{forestBytes, editWire}, [][]byte{b}); err != nil {
+			return err
+		}
+	}
 	vm.push(StringVal(string(b)))
 	return nil
 }

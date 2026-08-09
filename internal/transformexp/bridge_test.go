@@ -27,7 +27,7 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 1693 {
+	if len(run.MeterRecords) != 1725 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
 	for i, record := range run.MeterRecords {
@@ -124,6 +124,29 @@ func TestAcquisitionRequiresOrdinaryCausalHeuristics(t *testing.T) {
 		if run.Terminal == "completed" || run.Artifact != "" {
 			t.Fatalf("delete %s still completed with artifact %s", heuristic, run.Artifact)
 		}
+	}
+}
+
+func TestAcquisitionOnlyStopsBeforeFactorSearch(t *testing.T) {
+	c, err := makeCurriculum(0, 8, 841001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runAcquisitionConfigured("../../domains", c.Training, "acquisition-only", func(store *unit.Store) {
+		store.Get("H-TransformAcquireConcretePrograms").Set("acquisitionOnly", true)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Terminal != "" || len(run.Programs) != 4 || len(run.Candidates) != 0 || run.TasksPopped != 1 {
+		t.Fatalf("acquisition-only terminal=%q programs=%d candidates=%d tasks=%d", run.Terminal, len(run.Programs), len(run.Candidates), run.TasksPopped)
+	}
+	operations := map[string]int{}
+	for _, record := range run.MeterRecords {
+		operations[record.Operation]++
+	}
+	if operations["edit-validate"] == 0 || operations["edit-apply"] == 0 || operations["schema-application"] != 0 || operations["refine"] != 0 {
+		t.Fatalf("acquisition-only operations=%v", operations)
 	}
 }
 

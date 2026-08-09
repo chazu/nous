@@ -64,7 +64,9 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 			out.Applications = 8
 		}
 	case PositiveLGG, ConcreteReplay:
-		run, err := runAcquisition(domainsDir, c.Training, policyToken(c, policy))
+		run, err := runAcquisitionConfigured(domainsDir, c.Training, policyToken(c, policy), func(store *unit.Store) {
+			store.Get("H-TransformAcquireConcretePrograms").Set("acquisitionOnly", true)
+		})
 		if err != nil {
 			return out, err
 		}
@@ -74,10 +76,11 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 			return out, err
 		}
 		if policy == PositiveLGG {
-			learned, err := transformbaseline.PositiveLGG(c.Training, batch)
+			learned, events, err := transformbaseline.PositiveLGGMetered(c.Training, batch)
 			if err != nil {
 				return out, err
 			}
+			out.baselineEvents = append(baselineEventsFromTransformMeter(run.MeterRecords), events...)
 			out.Terminal, out.Schema, out.Applications = learned.Terminal, learned.Schema, 4
 			if out.Terminal == "completed" {
 				out, err = scoreTrainingNegatives(c, out)
@@ -87,6 +90,7 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 			}
 		} else {
 			out.Terminal = "completed"
+			out.baselineEvents = baselineEventsFromTransformMeter(run.MeterRecords)
 			return scoreReplay(c, batch, out)
 		}
 	case BoundedPBE, RandomPBE:
@@ -167,7 +171,7 @@ func scoreSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
 			out.NonmatchingWork += baselineEventWork(out.baselineEvents[beforeEventCount:])
 		}
 	}
-	if out.Policy == BoundedPBE || out.Policy == RandomPBE {
+	if out.Policy == PositiveLGG || out.Policy == BoundedPBE || out.Policy == RandomPBE {
 		out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, out.Schema)
 		if err != nil {
 			return out, err
@@ -274,11 +278,12 @@ func scoreReplay(c curriculum, batch []byte, out PolicyOutcome) (PolicyOutcome, 
 		if test.Kind != "abstain" {
 			continue
 		}
-		application, replayErr := transformbaseline.Replay(batch, test.Token, test.Before)
+		application, events, replayErr := transformbaseline.ReplayMetered(batch, test.Token, test.Before, "training-validate")
 		if replayErr != nil {
 			return out, replayErr
 		}
 		out.Applications++
+		out.baselineEvents = append(out.baselineEvents, events...)
 		if len(application.Terminal) < 8 || application.Terminal[:8] != "abstain/" {
 			out.FalseApplications++
 		}
@@ -289,15 +294,26 @@ func scoreReplay(c curriculum, batch []byte, out PolicyOutcome) (PolicyOutcome, 
 	}
 	expected := expectedByToken(c)
 	for _, test := range heldout.Cases {
-		application, err := transformbaseline.Replay(batch, test.Token, test.Before)
+		beforeEventCount := len(out.baselineEvents)
+		application, events, err := transformbaseline.ReplayMetered(batch, test.Token, test.Before, "heldout")
 		if err != nil {
 			return out, err
 		}
 		out.Applications++
+		out.baselineEvents = append(out.baselineEvents, events...)
 		if correctApplication(application, expected[test.Token]) {
 			out.HeldoutCorrect++
 		}
+		if expected[test.Token].Terminal == "abstain" {
+			out.NonmatchingWork += baselineEventWork(out.baselineEvents[beforeEventCount:])
+		}
 	}
+	out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, batch)
+	if err != nil {
+		return out, err
+	}
+	out.TrainingWork = int(out.Transcript.Work)
+	out.baselineEvents = nil
 	return out, nil
 }
 
@@ -310,11 +326,12 @@ func scoreTrainingNegatives(c curriculum, out PolicyOutcome) (PolicyOutcome, err
 		if test.Kind != "abstain" {
 			continue
 		}
-		application, err := transformbaseline.ApplySchema(test.Before, out.Schema)
+		application, events, err := transformbaseline.ApplySchemaMetered(test.Before, out.Schema, "training-validate")
 		if err != nil {
 			return out, err
 		}
 		out.Applications++
+		out.baselineEvents = append(out.baselineEvents, events...)
 		if application.Terminal == "applied" {
 			out.FalseApplications++
 		}

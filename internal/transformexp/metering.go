@@ -31,6 +31,14 @@ func baselineEventWork(events []transformbaseline.Event) int64 {
 	return work
 }
 
+func baselineEventsFromTransformMeter(records []dsl.TransformMeterRecord) []transformbaseline.Event {
+	events := make([]transformbaseline.Event, len(records))
+	for i, record := range records {
+		events[i] = transformbaseline.Event{Category: int(record.Category), Operation: record.Operation, Phase: record.Phase, Outcome: record.Outcome, Inputs: record.Inputs, Outputs: record.Outputs}
+	}
+	return events
+}
+
 func transcriptFromBaselineEvents(events []transformbaseline.Event, c curriculum, policy Policy, terminal string, schema []byte) (TransformTranscriptBundle, error) {
 	sink, err := newTransformTranscriptSink(c.Ordinal, string(policy), caseToken(c.Seed, "policy-"+string(policy), 0), policyManifestDigest(c, policy))
 	if err != nil {

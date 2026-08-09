@@ -15,6 +15,19 @@ type Event struct {
 	Outputs   [][]byte
 }
 
+func ReplayMetered(programBatchBytes []byte, token string, forestBytes []byte, phase string) (Application, []Event, error) {
+	application, err := Replay(programBatchBytes, token, forestBytes)
+	if err != nil {
+		return Application{}, nil, err
+	}
+	outputDigest := ""
+	if len(application.Output) != 0 {
+		outputDigest = baselineDigest(application.Output)
+	}
+	result, _ := json.Marshal([]any{"transform-result/v1", application.Terminal, outputDigest})
+	return application, []Event{{11, "replay-application", phase, application.Terminal, [][]byte{forestBytes, programBatchBytes}, [][]byte{result}}}, nil
+}
+
 func ApplySchemaMetered(forestBytes, schemaBytes []byte, phase string) (Application, []Event, error) {
 	s, err := parseSchema(schemaBytes)
 	if err != nil {

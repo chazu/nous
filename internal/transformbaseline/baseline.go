@@ -79,55 +79,12 @@ func RandomPBEMetered(trainingBytes []byte, seed1, seed2 uint64) (Result, []Even
 // PositiveLGG generalizes only over positive examples and deliberately fixes
 // locality to none. Negative examples cannot specialize its frozen result.
 func PositiveLGG(trainingBytes, programBatchBytes []byte) (Result, error) {
-	training, err := transformfixturecore.ParseTraining(trainingBytes)
-	if err != nil {
-		return Result{}, err
-	}
-	batch, err := transformfixturecore.ParseProgramBatch(programBatchBytes)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := validateProgramBatch(training, batch); err != nil {
-		return Result{}, err
-	}
-	var exact []schema
-	applications := 0
-	for _, candidate := range schemas() {
-		if candidate.locality != "none" {
-			continue
-		}
-		matches := true
-		for _, c := range training.Cases {
-			if c.Kind != "positive" {
-				continue
-			}
-			applications++
-			terminal, output, applyErr := apply(c.Before, candidate)
-			if applyErr != nil {
-				return Result{}, applyErr
-			}
-			if terminal != "applied" || !bytes.Equal(output, c.After) {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			exact = append(exact, candidate)
-		}
-	}
-	if len(exact) == 0 {
-		return Result{Terminal: "no-discovery", Applications: applications}, nil
-	}
-	slices.SortFunc(exact, compareSchema)
-	best := description(exact[0])
-	result := Result{Terminal: "completed", Schema: encodeSchema(exact[0]), Applications: applications}
-	for _, candidate := range exact {
-		if description(candidate) != best {
-			break
-		}
-		result.Ties = append(result.Ties, encodeSchema(candidate))
-	}
-	return result, nil
+	result, _, err := PositiveLGGMetered(trainingBytes, programBatchBytes)
+	return result, err
+}
+
+func PositiveLGGMetered(trainingBytes, programBatchBytes []byte) (Result, []Event, error) {
+	return positiveLGG(trainingBytes, programBatchBytes)
 }
 
 func ApplySchema(forestBytes, schemaBytes []byte) (Application, error) {

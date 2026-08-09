@@ -30,7 +30,7 @@ func TestSafePanelReportIsDeterministicAndCannotNameProtectedPanel(t *testing.T)
 	if !bytes.Contains(left, []byte(`"point_denominator": 9`)) {
 		t.Fatalf("safe report omitted inference: %s", left)
 	}
-	if first.MechanicallyValid || len(first.Rows) != 9*len(empiricalPolicies) || first.Competence.Passed != true {
+	if first.MechanicallyValid || !first.DualExecutionEqual || !first.TranscriptHashesEqual || len(first.Rows) != 9*len(empiricalPolicies) || first.Competence.Passed != true {
 		t.Fatalf("safe report shape=%+v", first)
 	}
 	if _, err := runSafePanel("../../domains", "development", curricula, 841001); err == nil {

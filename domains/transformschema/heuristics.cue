@@ -66,7 +66,9 @@ units: [
 			"programs" @ "experiment" @ "programUnits" set-slot
 			"programs" @ list-length 4 = "positiveCount" @ 4 = and
 			if
-				700 "experiment" @ "tsRefine" "Materialize schema factor alternatives" add-task
+				"H-TransformAcquireConcretePrograms" "acquisitionOnly" get-slot true =
+				if true "experiment" @ "tsAcquisitionClosed" set-slot
+				else 700 "experiment" @ "tsRefine" "Materialize schema factor alternatives" add-task then
 			else
 				"no-discovery" "experiment" @ "terminal" set-slot
 			then
