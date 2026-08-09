@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: proposed Part 3 lane-specific implementation plan, revision 5.
+Status: proposed Part 3 lane-specific implementation plan, revision 6.
 
 Revision 1 was committed at
 `10eb2deafd4d8a203257026d0c7925a4f6eaba86` and blocked independently by all
@@ -25,8 +25,11 @@ counts. Revision 4 was committed at
 `778816b77a7ff7b37ebad9c106eefd06602e0d42` and resolved those semantics but
 was blocked on the umbrella's engine freeze, development rerun retention,
 engine bookkeeping/profile charges, per-template bounds, aggregate adapter
-validation, and an incomplete binary grammar. Revision 5 resolves that complete
-review union.
+validation, and an incomplete binary grammar. Revision 5 was committed at
+`c5119a6776e91b372a1d1c042c9a055dd76761ab`; it was blocked on the common
+`Heuristic` category dispatch, remaining task/certificate/prune/terminal
+charges, power-cell support, and acquisition transcript ownership. Revision 6
+resolves that complete review union.
 
 This document narrows Vocabulary 1 of the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). It is
@@ -117,8 +120,8 @@ it byte-for-byte in every report:
   "maximum_training_completions": 2,
   "target_certificate_completions": 1,
   "training_work_cap": 2000,
-  "target_prune_work_cap": 120,
-  "no_match_bridge_overhead_cap": 68,
+  "target_prune_work_cap": 128,
+  "no_match_bridge_overhead_cap": 80,
   "policy_work_cap_per_task": 2000000,
   "bridge_task_pop_cap": 2000,
   "attributed_unit_cap": 200000,
@@ -376,20 +379,21 @@ digest, exact-conflict-store digest, and artifact-store digest. It adds one
 `ngConsiderPrune` task. It may not insert a role, binding, match result,
 completion, certificate, or decision.
 
-The bridge store contains the core type/slot units needed by the interpreter and
-exactly one frozen `domains/nogoods` task heuristic,
-`NG-H-ConsiderPrune`, and no common-pack or other-domain heuristic instance.
-That heuristic has exactly one `ifWorkingOnTask` program and one ThenPart action
+The bridge store is a normal `domains/common` plus `domains/nogoods` load. Its
+exact `Examples("Heuristic")` result is
+`["Heuristic","NG-H-ConsiderPrune"]`: the first entry is the common category
+unit itself and the second is the sole lane heuristic. There is no other common-
+pack or other-domain heuristic instance. The category unit has no program; the
+lane heuristic has exactly one `ifWorkingOnTask` program and one ThenPart action
 program. A source-structure test compares the exact sorted
 `Examples("Heuristic")` set, nonempty program slots, and program hashes with the
 committed bridge profile once against each execution's canonical serialized
 bridge-seed bytes, before any task store is decoded or any request exists. The
-preflight enumerates the one heuristic (one store
-query and one identity read), reads all five IfPart and six ThenPart slots (11
-slot reads), compares each with its required empty/nonempty state (11
-comparisons), hashes the two nonempty programs (two source reads and two hashes),
-and compares the store/profile/source digests (three comparisons): exactly 31
-category-12 events. It is recorded in that
+preflight performs one example query and two identity reads, reads all five
+IfPart and six ThenPart slots on both units (22 slot reads), compares all 22 with
+their required empty/nonempty state, hashes the two nonempty programs (two
+source reads and two hashes), and compares the store/profile/source digests
+(three comparisons): exactly 54 category-12 events. It is recorded in that
 execution's acquisition transcript; primary inference charges it once inside
 `A`, while the audit execution reports its independent copy outside empirical
 work. Consequently an unrelated heuristic cannot create hidden work or change
@@ -420,16 +424,26 @@ Every successful phase materializes its individual fact/action units; the
 adapter audits those units and the final disposition through public store state.
 No log parsing or private-engine observation is part of correctness or work.
 
-Current unchanged engine bookkeeping is charged as a fixed 12-event category-12
-surcharge after a successful ThenPart: two `Store.Count` reads, two `Agenda.Len`
-reads, the `trackThenPartRecord` heuristic/record reads and write, and the five
-`trackApplics` heuristic/record/application reads and writes. Type-dispatch
-traversal, mutex operations, VM environment assignment, and logging are engine
-control mechanics rather than semantic events and are excluded for every
-policy. A source-structure test pins these 12 operations; any engine change that
-alters them requires a new experiment version. The post-store audit checks the
-corresponding counters and application entry, so the surcharge cannot be claimed
-without the bookkeeping effects.
+Current unchanged engine dispatch is charged as a fixed 22-event category-12
+surcharge per request: one `TaskNum` increment; nine events for the empty
+`Heuristic` category dispatch (two `Store.Count` reads, two `Agenda.Len` reads,
+and five `trackApplics` reads/writes); and 12 for `NG-H-ConsiderPrune` (the same
+nine plus the three `trackThenPartRecord` heuristic/record reads/write). A
+source-structure test pins these operations; any engine change that alters them
+requires a new experiment version. The post-store audit checks both application
+entries and the lane action counter, so the surcharge cannot be claimed without
+the bookkeeping effects.
+
+Mechanical integrity reads are outside the semantic-work ledger for every
+policy: `VM.InitError`, the pre/post `VM.DeletedUnits` checks, `Agenda.Len` guard
+checks performed by the adapter rather than by engine dispatch, residual-agenda
+and output-path checks, and post-termination oracle checks. They are counted in
+a separate integrity vector and any failure invalidates the panel, but they do
+not construct, inspect, or apply a candidate/domain artifact. Mutex operations,
+VM environment assignment, type-dispatch traversal, and logging are likewise
+control mechanics. In contrast, the request write, agenda enqueue/dequeue,
+request-digest check, `TaskNum`, and all persistent engine bookkeeping are
+semantic-work events as frozen above.
 
 CUE heuristics must end the request with exactly one sealed
 `NogoodDisposition`:
@@ -682,16 +696,26 @@ Distractor domains cycle by task ordinal through these four fixed tuples:
 ```
 
 Every reusable/near-miss template contains the five fan edges `a--d0` through
-`a--d4`. Its distractor edges, selected by ordinal modulo four, are:
+`a--d4`. Its distractor graph is a fixed complete tripartite `K(2,2,1)` selected
+with the domain template by ordinal modulo four:
 
 ```text
-0: d0--d1, d1--d2, d2--d3, d3--d4, d4--d0
-1: template 0 plus d0--d2, d1--d3
-2: template 1 plus d2--d4
-3: d0--d2, d0--d3, d0--d4, d1--d2, d1--d3, d1--d4, d2--d4, d3--d4
+0: d0--d1,d0--d2,d0--d3,d0--d4,d1--d3,d1--d4,d2--d3,d2--d4
+1: d0--d1,d0--d2,d0--d3,d1--d2,d1--d3,d1--d4,d2--d4,d3--d4
+2: d0--d1,d0--d2,d0--d3,d0--d4,d1--d3,d1--d4,d2--d3,d2--d4
+3: d0--d1,d0--d2,d0--d4,d1--d2,d1--d3,d2--d3,d2--d4,d3--d4
 ```
 
-No distractor edge touches `x` or `y`. A `reusable` case adds all three schema
+Each graph is three-colorable and every distractor has public static degree at
+least four after its fan edge. The partitions maximize the frozen requeue lower
+bound subject to the domain template; they are source constants rather than a
+generator search. Committed witnesses after `a=blocked` are respectively
+`(escape,only,only,spare,spare)`,
+`(spare,escape,only,only,spare)`,
+`(escape,only,only,spare,spare)`, and
+`(spare,escape,only,spare,escape)`. No distractor edge touches `x` or `y`.
+
+A `reusable` case adds all three schema
 edges. A `near-miss` case removes bit `(cohortOrdinal mod 3)` from those three.
 An `irrelevant` case gives every variable all four colors and uses its fan and
 distractor edges plus `a--x,x--y`. An `independent-unsat` case gives every
@@ -705,20 +729,29 @@ independent-unsat cases and satisfiable for near-miss and irrelevant cases.
 
 Development's 96 tasks contain:
 
-- 84 `reusable` cases with one full motif and no completion under the supplied
+- 64 `reusable` cases with one full motif and no completion under the supplied
   blocked anchor decision;
-- 4 `near-miss` cases with one required edge absent and a branch completion;
+- 24 `near-miss` cases with one required edge absent and a branch completion;
 - 4 `irrelevant` satisfiable branches with no guard-respecting binding; and
 - 4 `independent-unsat` branches whose contradiction does not match the schema.
 
-Validation doubles each count. Locked uses 384 tasks with exactly 336, 16, 16,
-and 16 cases respectively. Within every panel, contiguous ordinals map to
+Validation doubles each count. Locked uses 384 tasks with exactly 312, 48, 12,
+and 12 cases respectively. Within every panel, contiguous ordinals map to
 cohorts in the order listed; `cohortOrdinal` starts at zero within each cohort.
 The task seed is the matching manifest arithmetic-sequence member. Locked uses
 its root and global ordinal. There is no semantic rejection loop. Generation
 then verifies the stated cohort, stated normalized-binding cardinality, bounds,
 and oracle solution status; disagreement invalidates the panel instead of
 regenerating it.
+
+Inference and power use 24 frozen semantic strata, ordered as: four reusable
+template IDs; 12 near-miss `(template ID, missing-bit)` cells in template-major,
+then bit-major order; four irrelevant template IDs; and four independent-unsat
+template IDs. Development has respectively 16, 2, 1, and 1 task per such cell;
+validation has 32, 4, 2, and 2; locked has 78, 4, 3, and 3. Thus every locked
+cell is represented in development, including every anchor-edge and pair-edge
+near miss. Within a cell task order is global task ordinal. Broad cohort totals
+remain reporting groups only; bootstrap and power never pool distinct cells.
 
 `blocked` has a lower color descriptor position than `escape`, but the supplied
 decision—not search order—selects the branch and neither display name reveals
@@ -903,7 +936,7 @@ failed member.
 | Transition | Required events |
 | --- | --- |
 | schedule/pop one agenda task | one category 12 enqueue and one category 12 dequeue |
-| successful unchanged-engine task dispatch | the exact 12 category-12 bookkeeping surcharge specified at the bridge boundary |
+| successful unchanged-engine task dispatch | the exact 22 category-12 dispatch surcharge specified at the bridge boundary |
 | evaluate heuristic antecedent | one category 2 per requested public/store atom; one category 12 disposition even when rejected |
 | propose one candidate or one-bit edge | one category 1; one category 12 semantic-key read |
 | duplicate refinement path | the same proposal/key-read events; no candidate write |
@@ -946,7 +979,31 @@ exclusively create the root directory alongside their receipt/report and refuse
 any existing path or symlink. Development requires an absent output directory
 at command start. No panel may discard, replace, or alias a chunk from the other
 execution. Only the primary execution contributes empirical work; audit work and
-its independent 31-event profile preflight are reported as integrity evidence.
+its independent 54-event profile preflight are reported as integrity evidence.
+
+Acquisition has no separate chunk. In both execution roles, all profile,
+training, selection, promotion, and freeze events belong to
+`nous-generalized.ngt.gz` before its utility events. Event sequence is one
+zero-based, gap-free counter per policy chunk across all phases. The unsigned
+32-bit task ordinal encodes phase without collision:
+
+| Task ordinal | Meaning |
+| --- | --- |
+| `0xffffffff` | bridge-profile preflight |
+| `0x80000000..0x80000003` | training examples 0..3 |
+| `0x80000004` | cross-example refinement/evidence/selection |
+| `0x90000000..0x90000017` | promotion substitutions 0..23 |
+| `0x90000018` | artifact freeze/serialization |
+| `0..task_count-1` | utility task ordinal |
+
+No other high-bit ordinal is legal. `A` is exactly the sum of categories for
+all high-bit events in the primary `nous-generalized` chunk; the audit copy is
+reconstructed but excluded from inference. `recomputed` target-local
+acquisition uses that utility task's ordinary ordinal and an operation ID that
+names the recomputation phase. All other policy chunks begin at sequence zero
+with utility work. Execution manifests additionally report the high-bit event
+count/vector and reconstructed `A`, which the independent reducer checks against
+the chunk.
 
 Uncompressed `ngt/v1` begins with a 4 KiB header, followed by a canonical UTF-8
 dictionary capped at 1 MiB per policy. Header bytes `0:4` are ASCII
@@ -1001,7 +1058,7 @@ implementation-defined codes:
 | 13 | agenda | 12 | task id, unit id, slot id, priority n, operation id, outcome id |
 | 14 | bridge-request | 12 | request id, target id, decision id, digest id, operation id, outcome id |
 | 15 | bridge-disposition | 12 | request id, disposition id, artifact id?, barrier id?, operation id, outcome id |
-| 16 | engine-bookkeeping | 12 | heuristic id, slot id?, counter n, operation id, outcome id |
+| 16 | control-bookkeeping | 12 | heuristic id, slot id?, counter n, operation id, outcome id |
 | 17 | cache | 12 | key id, value id?, operation id, outcome id |
 | 18 | record-write | 12 | record id, subject id?, sequence n, operation id, outcome id |
 
@@ -1012,23 +1069,34 @@ an out-of-range ID, bad order/sequence, or a digest mismatch. Gzip uses DEFLATE
 level 9, empty name/comment, zero modification time, OS byte 255, and exactly one
 member.
 
-The complete one-event golden stream has dictionary hex
-`00000001000b6e6f2d736f6c7574696f6e` (`no-solution`), dictionary SHA-256
-`eaf4b93b06991885699fe0e38b6c3d7b3e3e65c981c44d010e0d3e0fc7865c3c`,
-dictionary length 17, and event count 1. Its header is the fields above followed
-by zero through byte 4095. Its record hex is:
+The complete acquisition-bearing golden stream contains one representative
+profile-preflight event at task ordinal `0xffffffff`; its counter operand is 54,
+the last operation in the full preflight. Its sorted dictionary maps IDs
+`1=ok`, `2=profile-preflight`, `3=NG-H-ConsiderPrune` and has hex
+`0000000300026f6b001170726f66696c652d707265666c6967687400124e472d482d436f6e73696465725072756e65`,
+SHA-256 `0acd1aa361e1264b0d44a4d4bd575b8acae7c3dc3ab1d5ca6aa478e1248f36f1`,
+length 47, and event count 1. Its header is the fields above followed by zero
+through byte 4095. Its record hex is:
 
 ```text
-010b0b0000000000000000000000000000000001000000010000000000000000000000000000000000000000000000000679752c16c42f1d88b226ff79fb656c08db8cc28eb6a1e05be0aa9997e4de4200000000000000000000000000000000
+010c1000ffffffff00000000000000000000000300000000000000360000000200000001000000000000000000000000e204c485551c6120b3757589a8ea9c9920114284c61ca8067613c0a271a0094300000000000000000000000000000000
 ```
 
-The raw stream is 4,209 bytes with SHA-256
-`85b227a05389d0776cf82aa4437fb9d5526be9e7aad62c5c39a87c2e5f5393f0`.
-Its complete 153-byte gzip member is this base64, with SHA-256
-`8d96d760a9e46d7159d0a6e1c2fd095424df6963505d736358d04660d4cfab7c`:
+The raw stream is 4,239 bytes with SHA-256
+`4ce62bdfec29e813e3b7aaffef74acd2416722d82f114a9a51efb5291c56d7bd`.
+Its complete 194-byte gzip member is this base64, with SHA-256
+`2d44c34dcbd9cb17136ebbc71478b70d0766d0251bcb27268040c912c91f85b9`:
 
 ```text
-H4sIAAAAAAAC//NzDzFkYGRIYIAAQSjN+OrLTmu2mRKtmfMfPO7Osa22s0s92XjEl5GP147/eFuMDcMoGAWjYBSMglEwCkbBKBgFo2AUjIJRMAqGEmBk4M7L1y3OzyktyczPY+TmxlQAwVgBW2WpjtgRfdmOTWr/K3+n5nDc7jnUt23hg+gHq2ZOf3LPCV09ACMLKZBxEAAA
+H4sIAAAAAAAC//NzDzFkYGRIYIAAfSjNyHVWanHiQzVvXpclV/aGR3eden74jtXGq6eyllQ8VOk3+8gwCkbBKBgFo2AUjIJRMApGwSgYBaNgFIyCoQSYGZjysxkEC4ry0zJzUnULilLTcjLTM0oYhPzcdT10nfPzijNTUosCikrzUhl5BBj+AwGKdggwA2Im0NABstmPWI60hsokKmwuLe1c8WrOTAVBp5ZjMivYyoQPLCpcwOmM7hYAEloDNo8QAAA=
+```
+
+The golden single-policy conformance manifest is the following canonical JSON
+(production manifests require all 13 entries), with SHA-256
+`b185448f2aa4df97eb5dafe231a7d704c7dd74c137c62e426ecec80296e61d0a`:
+
+```json
+{"acquisition_event_count":1,"acquisition_vector":[0,0,0,0,0,0,0,0,0,0,0,1],"acquisition_work":1,"execution_role":"primary","policies":[{"event_count":1,"first_sequence":0,"gzip_sha256":"2d44c34dcbd9cb17136ebbc71478b70d0766d0251bcb27268040c912c91f85b9","gzip_size":194,"last_sequence":0,"policy":"nous-generalized","raw_sha256":"4ce62bdfec29e813e3b7aaffef74acd2416722d82f114a9a51efb5291c56d7bd","raw_size":4239}]}
 ```
 
 Each execution manifest records execution role, policy, raw/compressed sizes,
@@ -1055,10 +1123,10 @@ formed.
 Scopes and abort boundaries are exact:
 
 - `training_work_cap=2000` covers the one complete acquisition transcript,
-  including the execution's 31-event bridge-profile preflight;
-- `target_prune_work_cap=120` covers one learned request from supplied-decision
+  including the execution's 54-event bridge-profile preflight;
+- `target_prune_work_cap=128` covers one learned request from supplied-decision
   validation through a prune terminal;
-- `no_match_bridge_overhead_cap=68` covers the learned/control target work in
+- `no_match_bridge_overhead_cap=80` covers the learned/control target work in
   excess of its byte-identical standalone continuation when no prune occurs;
 - `policy_work_cap_per_task=2000000` covers one policy on one utility task and
   aborts before the exceeding event;
@@ -1108,9 +1176,9 @@ full fixed-branch query—not a cancelled branch fragment—establishes:
 
 | Complete path | Frozen bound over every allowed template and descriptor/color permutation |
 | --- | ---: |
-| standalone MAC-CBJ on a reusable branch | at least 138 events |
-| generalized matching/certificate/prune on a reusable branch | at most 111 events; hard cap 120 |
-| no-match bridge overhead before the identical standalone continuation | at most 68 events |
+| standalone MAC-CBJ on a reusable branch | at least 150 events |
+| generalized matching/certificate/prune on a reusable branch | at most 124 events; hard cap 128 |
+| no-match bridge overhead before the identical standalone continuation | at most 78 events; hard cap 80 |
 | one complete acquisition | at most 2,000 events |
 
 Every distractor has static degree strictly above the degree-two `x,y`, so the
@@ -1122,10 +1190,10 @@ nogood, and terminal, are:
 
 | Template | initial comparisons | changed neighbors | distractor requeues | requeue comparisons | c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 | c11 | c12 | total |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 24 | 7 | 10 | 30 | 0 | 1 | 3 | 55 | 19 | 55 | 4 | 0 | 0 | 0 | 1 | 3 | 141 |
-| 1 | 21 | 6 | 11 | 29 | 0 | 1 | 3 | 51 | 17 | 58 | 4 | 0 | 0 | 0 | 1 | 3 | **138** |
+| 0 | 24 | 7 | 16 | 48 | 0 | 1 | 3 | 73 | 19 | 73 | 4 | 0 | 0 | 0 | 1 | 3 | 177 |
+| 1 | 21 | 6 | 13 | 35 | 0 | 1 | 3 | 57 | 17 | 64 | 4 | 0 | 0 | 0 | 1 | 3 | **150** |
 | 2 | 22 | 6 | 13 | 37 | 0 | 1 | 3 | 60 | 17 | 64 | 4 | 0 | 0 | 0 | 1 | 3 | 153 |
-| 3 | 21 | 6 | 13 | 34 | 0 | 1 | 3 | 56 | 17 | 64 | 4 | 0 | 0 | 0 | 1 | 3 | 149 |
+| 3 | 21 | 6 | 13 | 35 | 0 | 1 | 3 | 57 | 17 | 64 | 4 | 0 | 0 | 0 | 1 | 3 | **150** |
 
 For every template, category 4 is initial comparisons plus requeue comparisons
 plus the final pair comparison. Category 5 is three root delete/check/restore
@@ -1147,24 +1215,32 @@ is proposed. Its exact maximum vector is:
 | Path component | c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 | c11 | c12 | total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | root pre-bridge | 0 | 1 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
-| request, agenda, and engine bookkeeping | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 16 |
+| request, agenda, and both engine dispatches | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 26 | 26 |
 | anchor, seven visits, two candidates, one pair, one artifact | 3 | 17 | 0 | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 | 12 | 42 |
-| one completion and complete barrier | 0 | 5 | 0 | 3 | 0 | 0 | 0 | 0 | 1 | 18 | 0 | 6 | 33 |
-| disposition, adapter, root restore, terminal | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 6 | 1 | 6 | 15 |
-| **maximum** | **3** | **23** | **3** | **3** | **3** | **0** | **0** | **10** | **1** | **24** | **1** | **40** | **111** |
+| one completion and complete barrier | 0 | 5 | 0 | 3 | 0 | 0 | 0 | 0 | 1 | 19 | 0 | 6 | 34 |
+| disposition, adapter, omitted-prefix record, root restore, terminal | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 6 | 1 | 8 | 17 |
+| **maximum** | **3** | **23** | **3** | **3** | **3** | **0** | **0** | **10** | **1** | **25** | **1** | **52** | **124** |
 
-The guard row includes the explicit `only != escape` read/check. The request row
-is four request/agenda/digest events plus the exact 12-event unchanged-engine
-bookkeeping surcharge. The once-per-execution 31-event profile preflight is
+The guard row includes the explicit `only != escape` read/check. The matcher
+row's 12 category-12 events are seven visit records, two candidate writes, one
+binding write, and artifact match read/result. The completion row's six are the
+completion result, agreement, expected-key set, actual-key set, sealed barrier,
+and certificate-index writes; its 19 category-10 events are 18 barrier
+predicates plus certificate-record creation. The final eight category-12 events
+are disposition write plus five digest checks, omitted-prefix/prune record, and
+terminal-record write.
+
+The request row is four request/agenda/digest events plus the exact 22-event
+unchanged-engine dispatch surcharge. The once-per-execution 54-event profile preflight is
 inside acquisition `A`, not this request row. Any extra task makes the
-conformance test fail before a panel. The nine-event difference between 111 and
+conformance test fail before a panel. The four-event difference between 124 and
 the hard prune cap is abort headroom, not
 uncharged work and not part of this feasibility proof.
 
 For a no-prune target the shared root and resumed MAC-CBJ events are
-byte-identical and cancel. The maximum extra vector is the 16-event
+byte-identical and cancel. The maximum extra vector is the 26-event
 request/engine row plus the 42-event matcher row plus ten disposition/adapter
-events, exactly 68. Near misses have the same two candidates and one pair; irrelevant
+events, exactly 78. Near misses have the same two candidates and one pair; irrelevant
 and independent-unsat cases retain fewer candidates. Nonauthoritative controls
 stop after provenance diagnostics and never construct a completion, so they do
 not exceed this bound. The complete acquisition has its separately enforced
@@ -1177,11 +1253,11 @@ fixtures, baseline, engine, or experiment code. Architecture and experimental
 review accept that literal derivation before implementation; a disagreement
 requires another plan revision, not development observation.
 
-At the locked 336/16/16/16 proportions, the worst attainable total difference
+At the locked 312/48/12/12 proportions, the worst attainable total difference
 under these caps is already negative:
 
 ```text
-A + sum(L-M) <= 2000 + 336*(111-138) + 48*68 = -3808
+A + sum(L-M) <= 2000 + 312*(124-150) + 72*78 = -496
 ```
 
 The standalone denominator is strictly positive, so the corresponding primary
@@ -1218,9 +1294,9 @@ R = (A + sum_i d_i) / sum_i M_i
 ```
 
 For bootstrap replicate `r`, sample paired indices with replacement separately
-inside each cohort, preserving all cohort counts. In cohort order reusable,
-near-miss, irrelevant, independent-unsat and sampled-position order, draw
-`Uint64N(cohortCount)` from that replicate's fresh PCG. Recompute both numerator
+inside each of the 24 semantic strata, preserving all stratum counts. In the
+frozen stratum order above and sampled-position order, draw
+`Uint64N(stratumCount)` from that replicate's fresh PCG. Recompute both numerator
 and denominator:
 
 ```text
@@ -1237,7 +1313,7 @@ task sampling unit without division. Define `e_i = N*d_i + A`; then
 `sum(e_i) = N*(A + sum(d_i))`, so its sign exactly matches total lifecycle
 advantage. Under the sharp paired null, each task's two complete lifecycle
 outcomes are exchangeable. Replicate `r` draws exactly one `Uint64N(2)` per task
-from a fresh PCG in fixed cohort/task order. Zero means sign `+1`; one means
+from a fresh PCG in fixed stratum/task order. Zero means sign `+1`; one means
 `-1`:
 
 ```text
@@ -1282,11 +1358,13 @@ transcript hashes. Only primary work enters empirical estimates; audit work is
 reported separately. A mismatch is invalid and both executions remain in the
 bundle.
 
-Development supplies the only effect/variance population used for the frozen power simulation. Exactly
-2,000 synthetic locked panels are built by resampling the development strata to
-the locked 336/16/16/16 counts. The outer `panel` PCG draws paired
-development indices with replacement within each cohort in fixed cohort and
-sample-position order. `A` is copied once into the synthetic panel. Each uses
+Development supplies the only effect/variance population used for the frozen
+power simulation. Exactly 2,000 synthetic locked panels are built by resampling
+the 24 development strata to the locked 312/48/12/12 broad-cohort counts and
+the exact per-cell counts frozen above. The outer `panel` PCG draws paired
+development indices with replacement within each semantic cell in fixed
+stratum/sample-position order. No locked semantic cell is estimated from a
+different template or missing bit. `A` is copied once into the synthetic panel. Each uses
 2,000 inner stratified bootstrap
 replicates, 2,000 independently seeded within-task label-swap replicates, and
 the same equations, recomputed denominators, point, interval, p-value, and
@@ -1365,8 +1443,9 @@ Before any empirical run, tests must cover:
   cross-request task rejection, and proof that `Engine.Run`, unit-focus, and
   deletion bookkeeping are unreachable;
 - exact bridge heuristic-set/program-hash profile with no common-pack or
-  other-domain heuristic instance, its once-per-execution 31-event charge, and
-  the unchanged engine bookkeeping's 12-event per-request surcharge;
+  other-domain heuristic instance beyond the common category unit, its
+  once-per-execution 54-event charge, and the unchanged engine dispatch's
+  22-event per-request surcharge;
 - byte-equal no-artifact and `mac-cbj-empty` solution/transcript projections;
 - concrete-memo failure under complete alias renaming;
 - corrupted, wrong-family, random, recomputed, and match-only behavior crossed
@@ -1378,6 +1457,8 @@ Before any empirical run, tests must cover:
   revisited;
 - literal full-task attainability multiplicities and acquisition/prune/no-match
   cap enforcement without importing experiment code;
+- exact 24-cell development/validation/locked support, stratum draw order, and
+  power resampling with no template or missing-bit substitution;
 - satisfiability parity and complete omitted-branch solution-set audit for every
   development fixture;
 - exact work conservation under success, no-solution, and budget exhaustion;
@@ -1387,7 +1468,8 @@ Before any empirical run, tests must cover:
   reports;
 - deterministic stream/randomization vectors, reruns, statistics, report
   encoding, exact 96-byte record layout/operand reconstruction, transcript
-  reducer parity, all 13/26 chunk hashes, acyclic payload/manifest/report hashes,
+  reducer parity, acquisition ordinal/chunk ownership and golden reconstruction
+  of `A`, all 13/26 chunk hashes, acyclic payload/manifest/report hashes,
   raw/gzip worst-case bounds, and every per-execution/bundle cap scope;
 - validation and locked refusal before their gates; and
 - one-shot locked refusal after an existing or partial receipt.
