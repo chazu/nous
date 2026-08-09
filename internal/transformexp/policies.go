@@ -50,6 +50,7 @@ type PolicyOutcome struct {
 	heldoutObservations   []heldoutObservation
 	frozenReplayBatch     []byte
 	frozenPrograms        []byte
+	ordinal               int
 }
 
 type heldoutObservation struct {
@@ -58,8 +59,8 @@ type heldoutObservation struct {
 	Work            int64
 }
 
-func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (PolicyOutcome, error) {
-	out := PolicyOutcome{Policy: policy, HeldoutTotal: 8}
+func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Policy) (PolicyOutcome, error) {
+	out := PolicyOutcome{Policy: policy, HeldoutTotal: 8, ordinal: ordinal}
 	switch policy {
 	case NousRefine, NoEqualityGuard:
 		var configure func(*unit.Store)
@@ -93,11 +94,12 @@ func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (Policy
 		}
 		out.frozenPrograms = bytes.Clone(batch)
 		if policy == PositiveLGG {
-			learned, events, err := transformbaseline.PositiveLGGMetered(c.Training, batch)
+			prefix := baselineEventsFromTransformMeter(run.MeterRecords)
+			learned, events, err := transformbaseline.PositiveLGGMeteredAt(c.Training, batch, len(prefix))
 			if err != nil {
 				return out, err
 			}
-			out.baselineEvents = append(baselineEventsFromTransformMeter(run.MeterRecords), events...)
+			out.baselineEvents = append(prefix, events...)
 			out.Terminal, out.Schema, out.Applications = learned.Terminal, learned.Schema, 4
 			if out.Terminal == "completed" {
 				out, err = scoreTrainingNegatives(c, out)
@@ -132,7 +134,7 @@ func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (Policy
 		if out.acquisition != nil {
 			run := *out.acquisition
 			out.acquisition = nil
-			transcript, transcriptErr := transcriptFromAcquisition(run, c.Ordinal, policy, c.PolicyTokens[policy], policyManifestDigest(c, policy))
+			transcript, transcriptErr := transcriptFromAcquisition(run, ordinal, policy, c.PolicyTokens[policy], policyManifestDigest(c, policy))
 			if transcriptErr != nil {
 				return out, transcriptErr
 			}
@@ -140,7 +142,7 @@ func executePolicy(domainsDir string, c policyCurriculum, policy Policy) (Policy
 			out.TrainingWork = int(out.Transcript.Work)
 			out.Applications = out.Transcript.Applications
 		} else if len(out.baselineEvents) != 0 {
-			transcript, transcriptErr := transcriptFromBaselineEvents(out.baselineEvents, c, policy, out.Terminal, nil)
+			transcript, transcriptErr := transcriptFromBaselineEvents(out.baselineEvents, c, ordinal, policy, out.Terminal, nil)
 			if transcriptErr != nil {
 				return out, transcriptErr
 			}
@@ -177,7 +179,7 @@ func scoreSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (Po
 	}
 	for _, test := range heldout.Cases {
 		beforeEventCount := len(out.baselineEvents)
-		application, events, applyErr := transformbaseline.ApplySchemaMetered(test.Before, out.Schema, "heldout")
+		application, events, applyErr := transformbaseline.ApplySchemaMeteredAt(test.Before, out.Schema, "heldout", len(out.baselineEvents))
 		err = applyErr
 		if err != nil {
 			return out, err
@@ -187,7 +189,7 @@ func scoreSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (Po
 		out.heldoutObservations = append(out.heldoutObservations, heldoutObservation{test.Token, application.Terminal, bytes.Clone(application.Output), baselineEventWork(out.baselineEvents[beforeEventCount:])})
 	}
 	if out.Policy == PositiveLGG || out.Policy == BoundedPBE || out.Policy == RandomPBE {
-		out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, out.Schema)
+		out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.ordinal, out.Policy, out.Terminal, out.Schema)
 		if err != nil {
 			return out, err
 		}
@@ -258,7 +260,7 @@ func scoreProductionSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOu
 	}
 	run.MeterRecords = records
 	manifest := policyManifestDigest(c, out.Policy)
-	out.Transcript, err = transcriptFromAcquisition(run, c.Ordinal, out.Policy, c.PolicyTokens[out.Policy], manifest)
+	out.Transcript, err = transcriptFromAcquisition(run, out.ordinal, out.Policy, c.PolicyTokens[out.Policy], manifest)
 	experimentUnit.Set("meterToken", oldMeter)
 	storeAfter, storeErr := run.Store.CanonicalJSON()
 	if storeErr != nil {
@@ -311,7 +313,7 @@ func scoreReplayHeldout(c policyCurriculum, heldoutBytes []byte, out PolicyOutco
 		out.baselineEvents = append(out.baselineEvents, events...)
 		out.heldoutObservations = append(out.heldoutObservations, heldoutObservation{test.Token, application.Terminal, bytes.Clone(application.Output), baselineEventWork(out.baselineEvents[beforeEventCount:])})
 	}
-	out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, out.frozenReplayBatch)
+	out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.ordinal, out.Policy, out.Terminal, out.frozenReplayBatch)
 	if err != nil {
 		return out, err
 	}
@@ -330,7 +332,7 @@ func scoreTrainingNegatives(c policyCurriculum, out PolicyOutcome) (PolicyOutcom
 		if test.Kind != "abstain" {
 			continue
 		}
-		application, events, err := transformbaseline.ApplySchemaMetered(test.Before, out.Schema, "training-validate")
+		application, events, err := transformbaseline.ApplySchemaMeteredAt(test.Before, out.Schema, "training-validate", len(out.baselineEvents))
 		if err != nil {
 			return out, err
 		}

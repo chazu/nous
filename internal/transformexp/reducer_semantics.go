@@ -118,7 +118,7 @@ func validateTransformSemantics(operation TransformOperation, objects map[string
 			return errors.New("replay result mismatch")
 		}
 	case "evidence-link":
-		return validateEvidenceAttempt(operation, inputs, outputs)
+		return validateEvidenceAttempt(operation, objects, outputs)
 	case "canonicalize":
 		if operation.Outcome == "canonical" && !bytes.Equal(inputs[0], outputs[0]) {
 			return errors.New("canonicalize changed canonical value")
@@ -159,17 +159,14 @@ func validateFactSemantics(operation TransformOperation, inputs, outputs [][]byt
 	case "node":
 		if node == nil {
 			wantOutcome = "invalid-input"
-			want, _ = json.Marshal([]any{"transform-node-facts/v1", "", "", "", ""})
 		} else {
 			want, _ = json.Marshal([]any{"transform-node-facts/v1", node.Kind, node.Value, node.From, node.To})
 		}
 	case "parent":
 		if node == nil {
 			wantOutcome = "invalid-input"
-			want, _ = json.Marshal([]any{"transform-parent-facts/v1", -1, ""})
 		} else if node.Parent < 0 {
 			wantOutcome = "absent"
-			want, _ = json.Marshal([]any{"transform-parent-facts/v1", -1, ""})
 		} else {
 			want, _ = json.Marshal([]any{"transform-parent-facts/v1", node.Parent, node.Key})
 		}
@@ -181,10 +178,19 @@ func validateFactSemantics(operation TransformOperation, inputs, outputs [][]byt
 			wantOutcome = "absent"
 		} else {
 			target = node.Target
+			want, _ = json.Marshal([]any{"transform-atom/v1", "id", target})
 		}
-		want, _ = json.Marshal([]any{"transform-atom/v1", "id", target})
 	}
-	if operation.Outcome != wantOutcome || len(outputs) != 1 || !bytes.Equal(want, outputs[0]) {
+	if operation.Outcome != wantOutcome {
+		return errors.New("fact outcome mismatch")
+	}
+	if want == nil {
+		if len(outputs) != 0 {
+			return errors.New("failed fact operation produced output")
+		}
+		return nil
+	}
+	if len(outputs) != 1 || !bytes.Equal(want, outputs[0]) {
 		return errors.New("fact result mismatch")
 	}
 	return nil
@@ -300,18 +306,16 @@ func validateSchemaApplication(operation TransformOperation, inputs, outputs [][
 	return nil
 }
 
-func validateEvidenceAttempt(operation TransformOperation, inputs, outputs [][]byte) error {
-	var attempted any
-	if json.Unmarshal(inputs[0], &attempted) != nil {
-		return errors.New("evidence attempted value")
-	}
+func validateEvidenceAttempt(operation TransformOperation, objects map[string][]byte, outputs [][]byte) error {
 	var row []any
-	if json.Unmarshal(outputs[0], &row) != nil || len(row) != 7 || row[0] != "transform-evidence-attempt/v1" || row[1] != operation.Outcome || row[2] != "result" || row[4] != operation.Inputs[0] || row[5] != operation.Inputs[1] || row[6] != operation.Inputs[2] {
+	if json.Unmarshal(outputs[0], &row) != nil || len(row) != 7 || row[0] != "transform-evidence-attempt/v1" || row[1] != operation.Outcome || row[4] != operation.Inputs[0] || row[5] != operation.Inputs[1] || row[6] != operation.Inputs[2] {
 		return errors.New("evidence attempt mismatch")
 	}
 	encoded, _ := json.Marshal(row[3])
-	if !bytes.Equal(encoded, inputs[0]) {
-		return errors.New("evidence attempt changed value")
+	kind, err := transformSemanticKind(encoded)
+	claimedKind, ok := row[2].(string)
+	if err != nil || !ok || claimedKind != kind || digestBytes(encoded) != operation.Inputs[0] || len(objects[operation.Inputs[2]]) == 0 {
+		return errors.New("evidence attempt changed value or kind")
 	}
 	return nil
 }

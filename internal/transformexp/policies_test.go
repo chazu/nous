@@ -14,7 +14,7 @@ func TestSixPoliciesExposeExpectedSemanticControls(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := executePolicy("../../domains", view, policy)
+			result, err := executePolicy("../../domains", view, c.Ordinal, policy)
 			if err != nil {
 				t.Fatalf("family %d policy %s: %v", family, policy, err)
 			}

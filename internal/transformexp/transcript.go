@@ -87,8 +87,11 @@ func newTransformObjectTable() TransformObjectTable {
 
 func (t *TransformObjectTable) admit(data []byte) (string, error) {
 	cap, err := transformObjectCap(data)
-	if err != nil || len(data) > cap {
-		return "", errors.New("invalid transformation object")
+	if err != nil {
+		return "", fmt.Errorf("invalid transformation object: %w", err)
+	}
+	if len(data) > cap {
+		return "", fmt.Errorf("invalid transformation object: size %d exceeds cap %d", len(data), cap)
 	}
 	digest := digestBytes(data)
 	if prior, ok := t.Objects[digest]; ok {
@@ -193,7 +196,7 @@ func (s *TransformTranscriptSink) EmitValues(operation, phase, outcome string, c
 	for index, value := range inputs {
 		digest, err := s.Admit(value)
 		if err != nil {
-			return err
+			return fmt.Errorf("input %d: %w", index, err)
 		}
 		inputDigests[index] = digest
 	}
@@ -201,7 +204,7 @@ func (s *TransformTranscriptSink) EmitValues(operation, phase, outcome string, c
 	for index, value := range outputs {
 		digest, err := s.Admit(value)
 		if err != nil {
-			return err
+			return fmt.Errorf("output %d: %w", index, err)
 		}
 		outputDigests[index] = digest
 	}
@@ -233,15 +236,16 @@ func (s *TransformTranscriptSink) EmitEvidenceLink(phase string, attemptedBytes 
 		}
 		s.Objects.Bytes = beforeBytes
 	}()
-	attemptedDigest, err := s.Admit(attemptedBytes)
-	if err != nil {
-		return err
-	}
+	attemptedDigest := digestBytes(attemptedBytes)
 	var attempted any
 	if json.Unmarshal(attemptedBytes, &attempted) != nil {
 		return errors.New("evidence value is not JSON")
 	}
-	attemptBytes, _ := json.Marshal([]any{"transform-evidence-attempt/v1", "attached", "result", attempted, attemptedDigest, s.lastOutput, s.lastObject})
+	attemptedKind, err := transformSemanticKind(attemptedBytes)
+	if err != nil {
+		return err
+	}
+	attemptBytes, _ := json.Marshal([]any{"transform-evidence-attempt/v1", "attached", attemptedKind, attempted, attemptedDigest, s.lastOutput, s.lastObject})
 	attemptDigest, err := s.Admit(attemptBytes)
 	if err != nil {
 		return err
@@ -306,7 +310,7 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 		if len(o.Outputs) == 1 {
 			s.lastOutput = o.Outputs[0]
 		}
-		s.lastAttach = oneOfString(o.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "replay-application", "output-compare", "verify")
+		s.lastAttach = oneOfString(o.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
 	}
 	if o.Phase == "terminal" && o.Operation == "terminal" {
 		s.terminal = true
@@ -337,8 +341,11 @@ func (s *TransformTranscriptSink) validateOperation(o TransformOperation) error 
 			return errors.New("evidence attempted digest mismatch")
 		}
 	}
-	for _, digest := range append(slices.Clone(o.Inputs), o.Outputs...) {
+	for index, digest := range append(slices.Clone(o.Inputs), o.Outputs...) {
 		if digest != "" {
+			if o.Operation == "evidence-link" && index == 0 {
+				continue
+			}
 			if _, exists := s.Objects.Objects[digest]; !exists {
 				return errors.New("operation references absent object")
 			}
@@ -357,7 +364,7 @@ func (s *TransformTranscriptSink) validateOperation(o TransformOperation) error 
 			return errors.New("invalid terminal operation")
 		}
 	}
-	return nil
+	return validateReducedOperation(o, s.Applications, s.lastAttach, s.lastOutput, s.lastObject)
 }
 
 func (s *TransformTranscriptSink) applicationResultProjection(attempted string) bool {
@@ -469,8 +476,11 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 		if event.Subject != subject {
 			return TransformTranscriptBundle{}, errors.New("event subject mismatch")
 		}
-		for _, digest := range append(slices.Clone(operation.Inputs), operation.Outputs...) {
+		for index, digest := range append(slices.Clone(operation.Inputs), operation.Outputs...) {
 			if digest == "" {
+				continue
+			}
+			if operation.Operation == "evidence-link" && index == 0 {
 				continue
 			}
 			value, ok := objects[digest]
@@ -503,7 +513,7 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 			if len(operation.Outputs) == 1 {
 				lastOutput = operation.Outputs[0]
 			}
-			lastAttach = oneOfString(operation.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "replay-application", "output-compare", "verify")
+			lastAttach = oneOfString(operation.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
 		}
 		step, _ := json.Marshal([]any{"transform-chain-step/v1", json.RawMessage(line)})
 		previous = digestBytes(step)
@@ -606,10 +616,10 @@ func validateReducedOperation(operation TransformOperation, applications int, la
 	nonterminal := []string{"acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "freeze", "heldout"}
 	nodePhases := []string{"acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "heldout"}
 	rules := map[string]rule{
-		"node":               {nodePhases, []string{"ok", "invalid-input"}, 2, 2, 1, 1},
-		"parent":             {nodePhases, []string{"ok", "absent", "invalid-input"}, 2, 2, 1, 1},
-		"target":             {nodePhases, []string{"ok", "absent", "invalid-input"}, 2, 2, 1, 1},
-		"compare":            {[]string{"acquire", "target", "anchor", "scope", "old-guard", "locality"}, []string{"true", "false", "invalid-input"}, 2, 2, 1, 1},
+		"node":               {nodePhases, []string{"ok", "invalid-input"}, 2, 2, 0, 1},
+		"parent":             {nodePhases, []string{"ok", "absent", "invalid-input"}, 2, 2, 0, 1},
+		"target":             {nodePhases, []string{"ok", "absent", "invalid-input"}, 2, 2, 0, 1},
+		"compare":            {[]string{"acquire", "target", "anchor", "scope", "old-guard", "locality"}, []string{"true", "false", "invalid-input"}, 2, 2, 0, 1},
 		"candidate-allocate": {[]string{"target", "anchor", "scope", "old-guard", "locality", "freeze"}, []string{"allocated", "duplicate", "rejected"}, 1, 1, 0, 1},
 		"refine":             {[]string{"target", "anchor", "scope", "old-guard", "locality"}, []string{"refined", "rejected", "invalid-input"}, 2, 2, 0, 1},
 		"edit-validate":      {[]string{"acquire", "training-validate", "heldout"}, []string{"valid", "no-op", "invalid-input"}, 2, 2, 1, 1},
@@ -626,9 +636,70 @@ func validateReducedOperation(operation TransformOperation, applications int, la
 	}
 	r := rules[operation.Operation]
 	if !slices.Contains(r.phases, operation.Phase) || !slices.Contains(r.outcomes, operation.Outcome) || len(operation.Inputs) < r.inputsMin || len(operation.Inputs) > r.inputsMax || len(operation.Outputs) < r.outputsMin || len(operation.Outputs) > r.outputsMax {
-		return fmt.Errorf("operation violates normative matrix: inputs=%d outputs=%d", len(operation.Inputs), len(operation.Outputs))
+		return fmt.Errorf("operation %q phase %q outcome %q violates normative matrix: inputs=%d outputs=%d", operation.Operation, operation.Phase, operation.Outcome, len(operation.Inputs), len(operation.Outputs))
+	}
+	if err := validateTransformOutcomeArity(operation); err != nil {
+		return err
 	}
 	return nil
+}
+
+func validateTransformOutcomeArity(operation TransformOperation) error {
+	want := 1
+	switch operation.Operation {
+	case "node", "parent", "target":
+		if operation.Outcome != "ok" {
+			want = 0
+		}
+	case "compare":
+		if operation.Outcome == "invalid-input" {
+			want = 0
+		}
+	case "candidate-allocate":
+		if operation.Outcome != "allocated" {
+			want = 0
+		}
+	case "refine":
+		if operation.Outcome != "refined" {
+			want = 0
+		}
+	case "edit-apply":
+		if operation.Outcome != "applied" {
+			want = 0
+		}
+	case "output-compare", "canonicalize", "hash":
+		if operation.Outcome == "invalid-input" {
+			want = 0
+		}
+	}
+	if len(operation.Outputs) != want {
+		return fmt.Errorf("operation outcome requires %d outputs, got %d", want, len(operation.Outputs))
+	}
+	return nil
+}
+
+func transformSemanticKind(data []byte) (string, error) {
+	var wire []json.RawMessage
+	var version string
+	if json.Unmarshal(data, &wire) != nil || len(wire) == 0 || json.Unmarshal(wire[0], &version) != nil {
+		return "", errors.New("evidence value has no semantic kind")
+	}
+	kinds := map[string]string{
+		"transform-node-facts/v1":   "node-facts",
+		"transform-parent-facts/v1": "parent-facts",
+		"transform-atom/v1":         "atom",
+		"transform-partial/v1":      "partial",
+		"transform-schema/v1":       "schema",
+		"transform-edit-status/v1":  "edit-status",
+		"typed-reference-forest/v1": "forest",
+		"transform-result/v1":       "result",
+		"transform-closure/v1":      "closure",
+	}
+	kind, ok := kinds[version]
+	if !ok {
+		return "", errors.New("value is not attachable evidence")
+	}
+	return kind, nil
 }
 
 func validateTerminalObject(data []byte, outcome string, work int64, applications, priorEvents int) error {

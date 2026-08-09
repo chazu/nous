@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 )
 
 type Event struct {
@@ -25,13 +26,14 @@ func ReplayMetered(programBatchBytes []byte, token string, forestBytes []byte, p
 		outputDigest = baselineDigest(application.Output)
 	}
 	result, _ := json.Marshal([]any{"transform-result/v1", application.Terminal, outputDigest})
-	return application, []Event{
-		{11, "replay-application", phase, application.Terminal, [][]byte{forestBytes, programBatchBytes}, [][]byte{result}},
-		{10, "evidence-link", phase, "attached", [][]byte{result}, nil},
-	}, nil
+	return application, []Event{{11, "replay-application", phase, application.Terminal, [][]byte{forestBytes, programBatchBytes}, [][]byte{result}}}, nil
 }
 
 func ApplySchemaMetered(forestBytes, schemaBytes []byte, phase string) (Application, []Event, error) {
+	return ApplySchemaMeteredAt(forestBytes, schemaBytes, phase, 0)
+}
+
+func ApplySchemaMeteredAt(forestBytes, schemaBytes []byte, phase string, sequenceOffset int) (Application, []Event, error) {
 	s, err := parseSchema(schemaBytes)
 	if err != nil {
 		return Application{}, nil, err
@@ -40,7 +42,7 @@ func ApplySchemaMetered(forestBytes, schemaBytes []byte, phase string) (Applicat
 	if err != nil {
 		return Application{}, nil, err
 	}
-	return Application{terminal, output}, applicationEvents(forestBytes, schemaBytes, s, terminal, output, phase), nil
+	return Application{terminal, output}, applicationEvents(forestBytes, schemaBytes, s, terminal, output, phase, sequenceOffset), nil
 }
 
 func CompareOutputsMetered(left, right []byte, phase string) (bool, []Event, error) {
@@ -66,13 +68,13 @@ func CompareOutputsMetered(left, right []byte, phase string) (bool, []Event, err
 	return equal, events, nil
 }
 
-func applicationEvents(forestBytes, schemaBytes []byte, s schema, terminal string, output []byte, phase string) []Event {
+func applicationEvents(forestBytes, schemaBytes []byte, s schema, terminal string, output []byte, phase string, sequenceOffset int) []Event {
 	f, err := parseForest(forestBytes)
 	if err != nil {
 		result, _ := json.Marshal([]any{"transform-result/v1", terminal, ""})
-		certificate, _ := json.Marshal([]any{"transform-certificate/v1", baselineDigest(schemaBytes), baselineDigest(forestBytes), -1, -1, []int{}, []bool{}, []string{}, "", terminal, -1, -1})
+		certificate, _ := json.Marshal([]any{"transform-certificate/v1", baselineDigest(schemaBytes), baselineDigest(forestBytes), -1, -1, []int{}, []bool{}, []string{}, "", terminal, sequenceOffset, sequenceOffset + 1})
 		application, _ := json.Marshal([]any{"transform-schema-application/v1", json.RawMessage(result), json.RawMessage(certificate)})
-		return []Event{{11, "schema-application", phase, terminal, [][]byte{forestBytes, schemaBytes}, [][]byte{application}}}
+		return []Event{{11, "schema-application", phase, terminal, [][]byte{forestBytes, schemaBytes}, [][]byte{application}}, {10, "evidence-link", phase, "attached", [][]byte{result}, nil}}
 	}
 	var requests, definitions, references []node
 	for _, n := range f.nodes {
@@ -100,12 +102,18 @@ func applicationEvents(forestBytes, schemaBytes []byte, s schema, terminal strin
 		guardResults = append(guardResults, result)
 	}
 	finish := func(requestID, definitionID int, referenceIDs []int, editDigests []string) []Event {
+		if referenceIDs == nil {
+			referenceIDs = []int{}
+		}
+		if editDigests == nil {
+			editDigests = []string{}
+		}
 		outputDigest := ""
 		if len(output) != 0 {
 			outputDigest = baselineDigest(output)
 		}
 		result, _ := json.Marshal([]any{"transform-result/v1", terminal, outputDigest})
-		certificate, _ := json.Marshal([]any{"transform-certificate/v1", baselineDigest(schemaBytes), baselineDigest(forestBytes), requestID, definitionID, referenceIDs, guardResults, editDigests, outputDigest, terminal, -1, -1})
+		certificate, _ := json.Marshal([]any{"transform-certificate/v1", baselineDigest(schemaBytes), baselineDigest(forestBytes), requestID, definitionID, referenceIDs, guardResults, editDigests, outputDigest, terminal, sequenceOffset, sequenceOffset + len(events) + 1})
 		application, _ := json.Marshal([]any{"transform-schema-application/v1", json.RawMessage(result), json.RawMessage(certificate)})
 		events = append(events, Event{11, "schema-application", phase, terminal, [][]byte{forestBytes, schemaBytes}, [][]byte{application}}, Event{10, "evidence-link", phase, "attached", [][]byte{result}, nil})
 		return events
@@ -174,28 +182,41 @@ func applicationEvents(forestBytes, schemaBytes []byte, s schema, terminal strin
 			}
 		}
 	}
+	slices.SortFunc(editWires, func(left, right []byte) int {
+		var a, b []any
+		_ = json.Unmarshal(left, &a)
+		_ = json.Unmarshal(right, &b)
+		return int(a[1].(float64) - b[1].(float64))
+	})
 	expansionOK := len(editWires) >= 1 && len(editWires) <= 4
 	predicate("expansion-bound", baselineAtom("count", len(editWires)), expansionOK)
 	if !expansionOK {
 		return finish(rq.id, definition.id, nil, nil)
 	}
 	editDigests := make([]string, len(editWires))
-	current := forestBytes
+	noOp := false
 	for i, wire := range editWires {
 		editDigests[i] = baselineDigest(wire)
 		var editRow []any
 		_ = json.Unmarshal(wire, &editRow)
 		targetID := int(editRow[1].(float64))
 		value := editRow[2].(string)
-		noOp := false
+		thisNoOp := false
 		for _, n := range f.nodes {
 			if n.id == targetID {
-				noOp = n.value == value
+				thisNoOp = n.value == value
 			}
 		}
-		predicate("edit-no-op", wire, !noOp)
-		if noOp {
-			return finish(rq.id, definition.id, nil, editDigests[:i+1])
+		predicate("edit-no-op", wire, !thisNoOp)
+		noOp = noOp || thisNoOp
+	}
+	if noOp {
+		return finish(rq.id, definition.id, nil, editDigests)
+	}
+	current := forestBytes
+	for i, wire := range editWires {
+		if editDigests[i] != baselineDigest(wire) {
+			panic("edit digest changed after no-op validation")
 		}
 		status, _ := json.Marshal([]any{"transform-edit-status/v1", "valid", editDigests[i]})
 		one, _ := parseProgram(mustProgram(wire))

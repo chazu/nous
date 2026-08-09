@@ -81,18 +81,16 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	}
 	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true, Conservation: true, OracleParity: true, ProgramsExact: true, ApplicationsExact: true, ArtifactFrozen: true, HeldoutSealed: true}
 	artifacts := panelArtifacts{Primary: map[string]TransformTranscriptBundle{}, Audit: map[string]TransformTranscriptBundle{}}
-	paired := make([]pairedTransformRow, len(curricula))
 	for index, c := range curricula {
 		if c.Ordinal != index {
 			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("noncanonical curriculum ordinal")
 		}
-		outcomes := map[Policy]PolicyOutcome{}
 		for _, policy := range empiricalPolicies {
 			primaryView, err := decodePolicyView(c)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
-			outcome, err := executePolicy(domainsDir, primaryView, policy)
+			outcome, err := executePolicy(domainsDir, primaryView, c.Ordinal, policy)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d policy %s: %w", c.Ordinal, policy, err)
 			}
@@ -124,7 +122,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
-			audit, err := executePolicy(domainsDir, auditView, policy)
+			audit, err := executePolicy(domainsDir, auditView, c.Ordinal, policy)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d policy %s audit: %w", c.Ordinal, policy, err)
 			}
@@ -176,7 +174,6 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			key := fmt.Sprintf("%s/%03d", policy, c.Ordinal)
 			artifacts.Primary[key] = outcome.Transcript
 			artifacts.Audit[key] = audit.Transcript
-			outcomes[policy] = outcome
 			work := int64(outcome.TrainingWork)
 			transcriptDigest := ""
 			if len(outcome.Transcript.Raw) != 0 {
@@ -197,10 +194,11 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			bits := outcome.HeldoutCorrectBits
 			report.Rows = append(report.Rows, PolicyReportRow{c.Ordinal, c.Family, policy, outcome.Terminal, work, outcome.Applications, schemaDigest, outcome.HeldoutCorrect, hex.EncodeToString([]byte{bits}), outcome.FalseApplications, nonmatchingWork, transcriptDigest})
 		}
-		nous, pbe := outcomes[NousRefine], outcomes[BoundedPBE]
-		paired[index] = pairedTransformRow{index, c.Family, nous.HeldoutCorrect == 8, pbe.HeldoutCorrect == 8, nous.FalseApplications, nous.NonmatchingWork, pbe.NonmatchingWork}
 	}
-	var err error
+	paired, err := pairedRows(report.Rows, len(curricula))
+	if err != nil {
+		return SafePanelReport{}, panelArtifacts{}, err
+	}
 	report.Inference, err = computeTransformInferenceWithPairs(paired, panel, authority, lockedPairs, 10000, 10000)
 	if err != nil {
 		return SafePanelReport{}, panelArtifacts{}, err

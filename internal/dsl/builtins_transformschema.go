@@ -31,8 +31,81 @@ func init() {
 		"ts-make-schema":        bTSMakeSchema,
 		"ts-close-stage":        bTSCloseStage,
 		"ts-freeze-schema":      bTSFreezeSchema,
+		"ts-eq":                 bTSEqual,
+		"ts-factor-result":      bTSFactorResult,
 		"ts-meter":              bTSMeter,
 	})
+}
+
+func bTSEqual(vm *VM) error {
+	right, left := vm.pop(), vm.pop()
+	leftBytes, leftOK := transformComparisonAtom(left)
+	rightBytes, rightOK := transformComparisonAtom(right)
+	if !leftOK || !rightOK {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	equal := bytes.Equal(leftBytes, rightBytes)
+	outcome := "false"
+	if equal {
+		outcome = "true"
+	}
+	if err := recordTransform(vm, "compare", outcome, 3, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", equal)}); err != nil {
+		return err
+	}
+	vm.push(BoolVal(equal))
+	return nil
+}
+
+func bTSFactorResult(vm *VM) error {
+	value := vm.pop()
+	if value.Kind() != VBool {
+		vm.push(BoolVal(false))
+		return nil
+	}
+	result := value.AsBool()
+	resultBytes := transformAtom("boolean", result)
+	outcome := "false"
+	if result {
+		outcome = "true"
+	}
+	if err := recordTransform(vm, "compare", outcome, 3, [][]byte{resultBytes, transformAtom("boolean", true)}, [][]byte{resultBytes}); err != nil {
+		return err
+	}
+	if err := recordTransform(vm, "evidence-link", "attached", 10, [][]byte{resultBytes}, nil); err != nil {
+		return err
+	}
+	vm.push(BoolVal(result))
+	return nil
+}
+
+func transformComparisonAtom(value Value) ([]byte, bool) {
+	switch value.Kind() {
+	case VString:
+		return boundedTransformComparisonAtom("enum", value.AsString())
+	case VInt:
+		return boundedTransformComparisonAtom("count", value.AsInt())
+	case VBool:
+		return boundedTransformComparisonAtom("boolean", value.AsBool())
+	case VNil:
+		return boundedTransformComparisonAtom("enum", nil)
+	case VList:
+		return boundedTransformComparisonAtom("scalar", tsSerializable(value))
+	default:
+		return nil, false
+	}
+}
+
+func boundedTransformComparisonAtom(kind string, value any) ([]byte, bool) {
+	atom := transformAtom(kind, value)
+	if len(atom) <= 128 {
+		return atom, true
+	}
+	preimage, err := json.Marshal([]any{"transform-comparison-preimage/v1", kind, value})
+	if err != nil {
+		return nil, false
+	}
+	return transformAtom("digest", transformDigest(preimage)), true
 }
 
 func bTSCandidateAllocate(vm *VM) error {
@@ -223,7 +296,7 @@ func bTSCloseStage(vm *VM) error {
 	}
 	for _, name := range experiment.GetStrings("candidateUnits") {
 		candidate := vm.Store.Get(name)
-		if candidate != nil && candidate.Name != experiment.GetString("rootCandidate") && (candidate.GetString("status") == "pending" || candidate.GetString("evidenceUnit") == "") {
+		if candidate != nil && candidate.GetString("stage") == stage && (candidate.GetString("status") == "pending" || candidate.GetString("evidenceUnit") == "") {
 			vm.push(BoolVal(false))
 			return nil
 		}
@@ -448,6 +521,12 @@ func recordSchemaApplication(vm *VM, f transformschema.Forest, s transformschema
 		return recordTransform(vm, "schema-predicate", outcome, 8, [][]byte{forestBytes, schemaBytes, transformAtom("selector", selector), subject}, [][]byte{transformAtom("boolean", result)})
 	}
 	finish := func(requestID, definitionID int, referenceIDs []int, editDigests []string) error {
+		if referenceIDs == nil {
+			referenceIDs = []int{}
+		}
+		if editDigests == nil {
+			editDigests = []string{}
+		}
 		outputDigest := ""
 		if len(outputBytes) != 0 {
 			outputDigest = transformDigest(outputBytes)
@@ -559,16 +638,24 @@ func recordSchemaApplication(vm *VM, f transformschema.Forest, s transformschema
 		return finish(request.ID, definition.ID, nil, nil)
 	}
 	editDigests := make([]string, len(edits))
-	current := f
+	noOp := false
 	for i, edit := range edits {
 		editWire, _ := json.Marshal([]any{"set-value/v1", edit.Target, edit.Value})
 		editDigests[i] = transformDigest(editWire)
-		noOp := byID[edit.Target].Value == edit.Value
-		if err := predicate("edit-no-op", editWire, !noOp); err != nil {
+		thisNoOp := byID[edit.Target].Value == edit.Value
+		if err := predicate("edit-no-op", editWire, !thisNoOp); err != nil {
 			return err
 		}
-		if noOp {
-			return finish(request.ID, definition.ID, nil, editDigests[:i+1])
+		noOp = noOp || thisNoOp
+	}
+	if noOp {
+		return finish(request.ID, definition.ID, nil, editDigests)
+	}
+	current := f
+	for i, edit := range edits {
+		editWire, _ := json.Marshal([]any{"set-value/v1", edit.Target, edit.Value})
+		if editDigests[i] != transformDigest(editWire) {
+			return errors.New("edit digest changed after no-op validation")
 		}
 		status, _ := json.Marshal([]any{"transform-edit-status/v1", "valid", editDigests[i]})
 		currentBytes, _ := current.CanonicalJSON()
@@ -809,8 +896,7 @@ func bTSNodeFacts(vm *VM) error {
 	inputs := [][]byte{forest, transformAtom("id", id)}
 	n, found := tsFindNode(f, id)
 	if !ok || !found {
-		missing, _ := json.Marshal([]any{"transform-node-facts/v1", "", "", "", ""})
-		if err := recordTransform(vm, "node", "invalid-input", 0, inputs, [][]byte{missing}); err != nil {
+		if err := recordTransform(vm, "node", "invalid-input", 0, inputs, nil); err != nil {
 			return err
 		}
 		vm.push(Nil())
@@ -834,8 +920,7 @@ func bTSParentFacts(vm *VM) error {
 		if !ok || !found {
 			outcome = "invalid-input"
 		}
-		missing, _ := json.Marshal([]any{"transform-parent-facts/v1", -1, ""})
-		if err := recordTransform(vm, "parent", outcome, 1, inputs, [][]byte{missing}); err != nil {
+		if err := recordTransform(vm, "parent", outcome, 1, inputs, nil); err != nil {
 			return err
 		}
 		vm.push(Nil())
@@ -859,7 +944,7 @@ func bTSTarget(vm *VM) error {
 		if !ok || !found {
 			outcome = "invalid-input"
 		}
-		if err := recordTransform(vm, "target", outcome, 2, inputs, [][]byte{transformAtom("id", -1)}); err != nil {
+		if err := recordTransform(vm, "target", outcome, 2, inputs, nil); err != nil {
 			return err
 		}
 		vm.push(Nil())

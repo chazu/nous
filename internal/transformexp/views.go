@@ -16,7 +16,6 @@ import (
 // no family, generator seed, accepted attempt, latent schema, or expected
 // output field.
 type policyCurriculum struct {
-	Ordinal          int
 	Panel            string
 	PanelCommitment  string
 	Training         []byte
@@ -89,7 +88,7 @@ func decodePolicyView(c curriculum) (policyCurriculum, error) {
 	if json.Unmarshal(wire[0], &version) != nil || version != "transform-policy-queue/v1" || json.Unmarshal(wire[1], &rows) != nil || len(rows) != len(empiricalPolicies) {
 		return policyCurriculum{}, fmt.Errorf("invalid policy queue wire")
 	}
-	view := policyCurriculum{Ordinal: c.Ordinal, Panel: c.Panel, PanelCommitment: c.PanelCommitment, Training: trainingBytes, HeldoutDigest: digestBytes(c.Heldout), PolicyTokens: map[Policy]string{}, PolicyRandomness: map[Policy][2]uint64{}}
+	view := policyCurriculum{Panel: c.Panel, PanelCommitment: c.PanelCommitment, Training: trainingBytes, HeldoutDigest: digestBytes(c.Heldout), PolicyTokens: map[Policy]string{}, PolicyRandomness: map[Policy][2]uint64{}}
 	for index, row := range rows {
 		var policy Policy
 		var token, first, second string

@@ -17,7 +17,7 @@ func TestCommittedResultsReconstructEveryPolicyScoreAndArtifact(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			outcome, err := executePolicy("../../domains", view, policy)
+			outcome, err := executePolicy("../../domains", view, c.Ordinal, policy)
 			if err != nil {
 				t.Fatal(err)
 			}

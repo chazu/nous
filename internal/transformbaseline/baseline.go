@@ -84,7 +84,11 @@ func PositiveLGG(trainingBytes, programBatchBytes []byte) (Result, error) {
 }
 
 func PositiveLGGMetered(trainingBytes, programBatchBytes []byte) (Result, []Event, error) {
-	return positiveLGG(trainingBytes, programBatchBytes)
+	return PositiveLGGMeteredAt(trainingBytes, programBatchBytes, 0)
+}
+
+func PositiveLGGMeteredAt(trainingBytes, programBatchBytes []byte, sequenceOffset int) (Result, []Event, error) {
+	return positiveLGG(trainingBytes, programBatchBytes, sequenceOffset)
 }
 
 func ApplySchema(forestBytes, schemaBytes []byte) (Application, error) {
@@ -138,7 +142,7 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 				return Result{}, nil, err
 			}
 			if metered {
-				events = append(events, applicationEvents(c.Before, candidateBytes, candidate, terminal, output, "training-validate")...)
+				events = append(events, applicationEvents(c.Before, candidateBytes, candidate, terminal, output, "training-validate", len(events))...)
 			}
 			match := c.Kind == "positive" && terminal == "applied" && bytes.Equal(output, c.After) ||
 				c.Kind == "abstain" && len(output) == 0 && len(terminal) > 8 && terminal[:8] == "abstain/"

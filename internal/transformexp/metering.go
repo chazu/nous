@@ -6,6 +6,7 @@ import (
 
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/transformbaseline"
+	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
 )
 
 func transformMeterWork(records []dsl.TransformMeterRecord) (int64, [12]int64, error) {
@@ -39,8 +40,8 @@ func baselineEventsFromTransformMeter(records []dsl.TransformMeterRecord) []tran
 	return events
 }
 
-func transcriptFromBaselineEvents(events []transformbaseline.Event, c policyCurriculum, policy Policy, terminal string, schema []byte) (TransformTranscriptBundle, error) {
-	sink, err := newTransformTranscriptSink(c.Ordinal, string(policy), c.PolicyTokens[policy], policyManifestDigest(c, policy))
+func transcriptFromBaselineEvents(events []transformbaseline.Event, c policyCurriculum, ordinal int, policy Policy, terminal string, schema []byte) (TransformTranscriptBundle, error) {
+	sink, err := newTransformTranscriptSink(ordinal, string(policy), c.PolicyTokens[policy], policyManifestDigest(c, policy))
 	if err != nil {
 		return TransformTranscriptBundle{}, err
 	}
@@ -59,8 +60,8 @@ func transcriptFromBaselineEvents(events []transformbaseline.Event, c policyCurr
 		}
 	}
 	input := schema
-	if len(input) == 0 {
-		input, _ = json.Marshal([]any{"transform-atom/v1", "enum", "no-schema"})
+	if _, parseErr := transformschema.ParseSchema(input); parseErr != nil {
+		input, _ = json.Marshal([]any{"transform-store-boundary/v1", "freeze", digestBytes(schema)})
 	}
 	terminalBytes, _ := json.Marshal([]any{"transform-terminal/v1", terminal, sink.Work + 1, sink.Applications, len(sink.Events)})
 	if err := sink.EmitValues("terminal", "terminal", terminal, 11, [][]byte{input}, [][]byte{terminalBytes}); err != nil {
@@ -85,14 +86,15 @@ func transcriptFromAcquisition(run acquisitionRun, ordinal int, policy Policy, t
 			continue
 		}
 		if err := sink.EmitValues(record.Operation, record.Phase, record.Outcome, int(record.Category), record.Inputs, record.Outputs); err != nil {
-			return TransformTranscriptBundle{}, fmt.Errorf("meter %d: %w", index, err)
+			return TransformTranscriptBundle{}, fmt.Errorf("meter %d %s/%s/%s: %w", index, record.Phase, record.Operation, record.Outcome, err)
 		}
 	}
 	terminal := run.Terminal
 	if terminal == "" {
 		terminal = "no-discovery"
 	}
-	inputBytes := []byte(run.Store.Get(run.Root).GetString("partial"))
+	storeBytes, _ := run.Store.CanonicalJSON()
+	inputBytes, _ := json.Marshal([]any{"transform-store-boundary/v1", "freeze", digestBytes(storeBytes)})
 	if run.Artifact != "" {
 		inputBytes = []byte(run.Store.Get(run.Artifact).GetString("schema"))
 	}

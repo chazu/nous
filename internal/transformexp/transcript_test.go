@@ -18,11 +18,15 @@ func TestTransformTranscriptRoundTripAndChainTamper(t *testing.T) {
 	if err := sink.Emit(TransformOperation{"verify", "freeze", []string{atom}, []string{atom}, "verified", 11}); err != nil {
 		t.Fatal(err)
 	}
+	boundary, err := sink.Admit([]byte(`["transform-store-boundary/v1","freeze","0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	terminal, err := sink.Admit([]byte(`["transform-terminal/v1","completed",2,0,1]`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.Emit(TransformOperation{"terminal", "terminal", []string{atom}, []string{terminal}, "completed", 11}); err != nil {
+	if err := sink.Emit(TransformOperation{"terminal", "terminal", []string{boundary}, []string{terminal}, "completed", 11}); err != nil {
 		t.Fatal(err)
 	}
 	bundle, err := sink.Bundle()

@@ -30,7 +30,7 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 1737 {
+	if len(run.MeterRecords) != 3459 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
 	closures, frozen := 0, 0

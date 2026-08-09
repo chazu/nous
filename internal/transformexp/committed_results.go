@@ -60,7 +60,12 @@ func reconstructHeldoutResults(raw []byte, objects map[string][]byte, heldoutByt
 				return nil, err
 			}
 			observations = append(observations, observed{terminal: terminal, output: output})
-			awaitingAttachment = true
+			if operation.Operation == "replay-application" {
+				observations[len(observations)-1].work = pending
+				pending = 0
+			} else {
+				awaitingAttachment = true
+			}
 			continue
 		}
 		if awaitingAttachment {

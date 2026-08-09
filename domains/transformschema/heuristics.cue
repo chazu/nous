@@ -95,6 +95,7 @@ units: [
 			0 list-of "candidates" !
 			"candidates" @ "root" @ list-append "candidates" !
 			"root" @ "experiment" @ "rootCandidate" set-slot
+			"target" "experiment" @ "currentStage" set-slot
 			0 list-of "edges" !
 			"edges" @ "experiment" @ "edgeUnits" set-slot
 			"target" "definition" "target" "references" "target" "definition+references"
@@ -120,7 +121,7 @@ units: [
 				"stage" @ "anchor" = if 850 "priority" ! then
 				"stage" @ "scope" = if 800 "priority" ! then
 				"stage" @ "old-guard" = if 750 "priority" ! then
-				"priority" @ "candidate" @ "tsEvaluateFactor" "Evaluate one explicit factor alternative" add-task
+				"stage" @ "target" = if "priority" @ "candidate" @ "tsEvaluateFactor" "Evaluate one explicit factor alternative" add-task then
 			end
 			"candidates" @ "experiment" @ "candidateUnits" set-slot
 			true "experiment" @ "tsRefined" set-slot
@@ -150,19 +151,19 @@ units: [
 				"anchor" "scope" "old-guard" "locality" 4 list-of "successors" !
 				4 iota each
 					it "stageIndex" !
-					"successors" @ "stageIndex" @ list-get "stage" @ =
+					"successors" @ "stageIndex" @ list-get "stage" @ ts-eq
 					if
 						"predecessors" @ "stageIndex" @ list-get "predecessor" !
 						"experiment" @ "candidateUnits" get-slot each
 							it "other" !
-							"other" @ "stage" get-slot "predecessor" @ = "other" @ "status" get-slot "survivor" = and
+							"other" @ "stage" get-slot "predecessor" @ ts-eq "other" @ "status" get-slot "survivor" ts-eq and
 							if "other" @ "parent" ! then
 						end
 					then
 				end
 			then
 			"parent" @ "partial" get-slot "value" @ ts-refine "childPartial" !
-			"childPartial" @ nil = if false "exact" ! then
+			"childPartial" @ nil ts-eq if false "exact" ! then
 			"childPartial" @ ts-candidate-allocate drop
 			"childPartial" @ "candidate" @ "partial" set-slot
 			"parent" @ "candidate" @ "parentCandidate" set-slot
@@ -178,7 +179,7 @@ units: [
 			"H-TransformEvaluateFactor" "edge" @ "creditors" set-slot
 			"edge" @ "candidate" @ "refinementEdge" set-slot
 			"experiment" @ "edgeUnits" get-slot "edge" @ list-append "experiment" @ "edgeUnits" set-slot
-			"stage" @ "target" =
+			"stage" @ "target" ts-eq
 			if
 				"experiment" @ "programUnits" get-slot each
 					it "programUnit" !
@@ -188,17 +189,17 @@ units: [
 					"edits" @ each
 						it 0 list-get "editID" !
 						"before" @ "editID" @ ts-node-facts 0 list-get "kind" !
-						"kind" @ "definition" = if true "hasDefinition" ! then
-						"kind" @ "reference" = if true "hasReference" ! then
+						"kind" @ "definition" ts-eq if true "hasDefinition" ! then
+						"kind" @ "reference" ts-eq if true "hasReference" ! then
 					end
-					"value" @ "definition" = "hasDefinition" @ "hasReference" @ not and and
-					"value" @ "references" = "hasReference" @ "hasDefinition" @ not and and or
-					"value" @ "definition+references" = "hasDefinition" @ "hasReference" @ and and or
+					"value" @ "definition" ts-eq "hasDefinition" @ "hasReference" @ not and and
+					"value" @ "references" ts-eq "hasReference" @ "hasDefinition" @ not and and or
+					"value" @ "definition+references" ts-eq "hasDefinition" @ "hasReference" @ and and or
 					"caseExact" !
 					"caseExact" @ not if false "exact" ! then
 				end
 			else
-				"stage" @ "anchor" =
+				"stage" @ "anchor" ts-eq
 				if
 					"experiment" @ "programUnits" get-slot each
 						it "programUnit" !
@@ -209,50 +210,50 @@ units: [
 							it "nodeID" !
 							"before" @ "nodeID" @ ts-node-facts "facts" !
 							"facts" @ nil !=
-							if "facts" @ 0 list-get "request" = if "nodeID" @ "requestID" ! then then
+							if "facts" @ 0 list-get "request" ts-eq if "nodeID" @ "requestID" ! then then
 						end
 						"edits" @ each
 							it 0 list-get "editID" !
 							"before" @ "editID" @ ts-node-facts 0 list-get "kind" !
-							"kind" @ "definition" = if "editID" @ "definitionID" ! then
-							"kind" @ "reference" = if "before" @ "editID" @ ts-target "definitionID" ! then
+							"kind" @ "definition" ts-eq if "editID" @ "definitionID" ! then
+							"kind" @ "reference" ts-eq if "before" @ "editID" @ ts-target "definitionID" ! then
 						end
 						false "caseExact" !
-						"value" @ "request-target" =
-						if "before" @ "requestID" @ ts-target "definitionID" @ = "caseExact" ! then
-						"value" @ "from-value" =
+						"value" @ "request-target" ts-eq
+						if "before" @ "requestID" @ ts-target "definitionID" @ ts-eq "caseExact" ! then
+						"value" @ "from-value" ts-eq
 						if
 							"before" @ "requestID" @ ts-node-facts 2 list-get "fromValue" !
 							0 "matchingDefinitions" ! nil "matchingID" !
 							12 iota each
 								it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
-								"facts" @ nil != if "facts" @ 0 list-get "definition" = "facts" @ 1 list-get "fromValue" @ = and if "matchingDefinitions" @ 1 + "matchingDefinitions" ! "nodeID" @ "matchingID" ! then then
+								"facts" @ nil != if "facts" @ 0 list-get "definition" ts-eq "facts" @ 1 list-get "fromValue" @ ts-eq and if "matchingDefinitions" @ 1 + "matchingDefinitions" ! "nodeID" @ "matchingID" ! then then
 							end
-							"matchingDefinitions" @ 1 = "matchingID" @ "definitionID" @ = and "caseExact" !
+							"matchingDefinitions" @ 1 ts-eq "matchingID" @ "definitionID" @ ts-eq and "caseExact" !
 						then
-						"value" @ "first-local" =
+						"value" @ "first-local" ts-eq
 						if
 							"before" @ "requestID" @ ts-parent-facts 0 list-get "requestParent" !
 							nil "firstID" !
 							12 iota each
 								it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
-								"facts" @ nil != if "facts" @ 0 list-get "definition" = "firstID" @ nil = and if "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ = if "nodeID" @ "firstID" ! then then then
+								"facts" @ nil != if "facts" @ 0 list-get "definition" ts-eq "firstID" @ nil ts-eq and if "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-eq if "nodeID" @ "firstID" ! then then then
 							end
-							"firstID" @ "definitionID" @ = "caseExact" !
+							"firstID" @ "definitionID" @ ts-eq "caseExact" !
 						then
 						"caseExact" @ not if false "exact" ! then
 					end
 				else
-					"stage" @ "scope" =
+					"stage" @ "scope" ts-eq
 					if
 						"" "selectedTarget" !
 						"experiment" @ "candidateUnits" get-slot each
 							it "other" !
-							"other" @ "stage" get-slot "target" = "other" @ "status" get-slot "survivor" = and if "other" @ "value" get-slot "selectedTarget" ! then
+							"other" @ "stage" get-slot "target" ts-eq "other" @ "status" get-slot "survivor" ts-eq and if "other" @ "value" get-slot "selectedTarget" ! then
 						end
-						"selectedTarget" @ "definition" =
+						"selectedTarget" @ "definition" ts-eq
 						if
-							"value" @ "local" = "exact" !
+							"value" @ "local" ts-eq "exact" !
 						else
 							0 "equalsMatches" ! 0 "anyMatches" !
 							"experiment" @ "programUnits" get-slot each
@@ -260,45 +261,45 @@ units: [
 								"programUnit" @ "program" get-slot ts-program-edits "edits" !
 								"programUnit" @ "example" get-slot "before" get-slot "before" !
 								nil "requestID" ! nil "definitionID" ! 0 list-of "editedReferences" !
-								12 iota each it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" ! "facts" @ nil != if "facts" @ 0 list-get "request" = if "nodeID" @ "requestID" ! then then end
+								12 iota each it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" ! "facts" @ nil != if "facts" @ 0 list-get "request" ts-eq if "nodeID" @ "requestID" ! then then end
 								"edits" @ each
 									it 0 list-get "editID" ! "before" @ "editID" @ ts-node-facts 0 list-get "kind" !
-									"kind" @ "definition" = if "editID" @ "definitionID" ! then
-									"kind" @ "reference" = if "before" @ "editID" @ ts-target "definitionID" ! "editedReferences" @ "editID" @ list-append "editedReferences" ! then
+									"kind" @ "definition" ts-eq if "editID" @ "definitionID" ! then
+									"kind" @ "reference" ts-eq if "before" @ "editID" @ ts-target "definitionID" ! "editedReferences" @ "editID" @ list-append "editedReferences" ! then
 								end
 								"before" @ "requestID" @ ts-parent-facts 0 list-get "requestParent" !
 								"before" @ "requestID" @ ts-node-facts 2 list-get "fromValue" !
 								0 list-of "equalsPredicted" ! 0 list-of "anyPredicted" !
 								12 iota each
 									it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
-									"facts" @ nil != if "facts" @ 0 list-get "reference" = if
-										"before" @ "nodeID" @ ts-target "definitionID" @ =
-										"value" @ "global" = "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ = or and
+									"facts" @ nil != if "facts" @ 0 list-get "reference" ts-eq if
+										"before" @ "nodeID" @ ts-target "definitionID" @ ts-eq
+										"value" @ "global" ts-eq "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-eq or and
 										if
 											"anyPredicted" @ "nodeID" @ list-append "anyPredicted" !
-											"facts" @ 1 list-get "fromValue" @ = if "equalsPredicted" @ "nodeID" @ list-append "equalsPredicted" ! then
+											"facts" @ 1 list-get "fromValue" @ ts-eq if "equalsPredicted" @ "nodeID" @ list-append "equalsPredicted" ! then
 										then
 									then then
 								end
 								"equalsPredicted" @ "editedReferences" @ list-equal? if "equalsMatches" @ 1 + "equalsMatches" ! then
 								"anyPredicted" @ "editedReferences" @ list-equal? if "anyMatches" @ 1 + "anyMatches" ! then
 							end
-							"equalsMatches" @ 4 = "anyMatches" @ 4 = or "exact" !
+							"equalsMatches" @ 4 ts-eq "anyMatches" @ 4 ts-eq or "exact" !
 						then
 					else
-						"stage" @ "old-guard" =
+						"stage" @ "old-guard" ts-eq
 						if
 							"" "selectedTarget" ! "" "selectedScope" !
 							"experiment" @ "candidateUnits" get-slot each
 								it "other" !
-								"other" @ "status" get-slot "survivor" = if
-									"other" @ "stage" get-slot "target" = if "other" @ "value" get-slot "selectedTarget" ! then
-									"other" @ "stage" get-slot "scope" = if "other" @ "value" get-slot "selectedScope" ! then
+								"other" @ "status" get-slot "survivor" ts-eq if
+									"other" @ "stage" get-slot "target" ts-eq if "other" @ "value" get-slot "selectedTarget" ! then
+									"other" @ "stage" get-slot "scope" ts-eq if "other" @ "value" get-slot "selectedScope" ! then
 								then
 							end
-							"selectedTarget" @ "definition" =
+							"selectedTarget" @ "definition" ts-eq
 							if
-								"value" @ "any" = "exact" !
+								"value" @ "any" ts-eq "exact" !
 							else
 								0 "matches" !
 								"experiment" @ "programUnits" get-slot each
@@ -306,39 +307,39 @@ units: [
 									"programUnit" @ "program" get-slot ts-program-edits "edits" !
 									"programUnit" @ "example" get-slot "before" get-slot "before" !
 									nil "requestID" ! nil "definitionID" ! 0 list-of "editedReferences" !
-									12 iota each it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" ! "facts" @ nil != if "facts" @ 0 list-get "request" = if "nodeID" @ "requestID" ! then then end
+									12 iota each it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" ! "facts" @ nil != if "facts" @ 0 list-get "request" ts-eq if "nodeID" @ "requestID" ! then then end
 									"edits" @ each
 										it 0 list-get "editID" ! "before" @ "editID" @ ts-node-facts 0 list-get "kind" !
-										"kind" @ "definition" = if "editID" @ "definitionID" ! then
-										"kind" @ "reference" = if "before" @ "editID" @ ts-target "definitionID" ! "editedReferences" @ "editID" @ list-append "editedReferences" ! then
+										"kind" @ "definition" ts-eq if "editID" @ "definitionID" ! then
+										"kind" @ "reference" ts-eq if "before" @ "editID" @ ts-target "definitionID" ! "editedReferences" @ "editID" @ list-append "editedReferences" ! then
 									end
 									"before" @ "requestID" @ ts-parent-facts 0 list-get "requestParent" !
 									"before" @ "requestID" @ ts-node-facts 2 list-get "fromValue" !
 									0 list-of "predicted" !
 									12 iota each
 										it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" !
-										"facts" @ nil != if "facts" @ 0 list-get "reference" = if
-											"before" @ "nodeID" @ ts-target "definitionID" @ =
-											"selectedScope" @ "global" = "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ = or and
-											"value" @ "any" = "facts" @ 1 list-get "fromValue" @ = or and
+										"facts" @ nil != if "facts" @ 0 list-get "reference" ts-eq if
+											"before" @ "nodeID" @ ts-target "definitionID" @ ts-eq
+											"selectedScope" @ "global" ts-eq "before" @ "nodeID" @ ts-parent-facts 0 list-get "requestParent" @ ts-eq or and
+											"value" @ "any" ts-eq "facts" @ 1 list-get "fromValue" @ ts-eq or and
 											if "predicted" @ "nodeID" @ list-append "predicted" ! then
 										then then
 									end
 									"predicted" @ "editedReferences" @ list-equal? if "matches" @ 1 + "matches" ! then
 								end
-								"matches" @ 4 = "exact" !
+								"matches" @ 4 ts-eq "exact" !
 							then
 						else
-							"stage" @ "locality" =
+							"stage" @ "locality" ts-eq
 							if
 								false "sawWrongContext" !
 								"TransformTrainingCase" examples each
 									it "example" !
-									"example" @ "TransformTrainingCase" != "example" @ "experiment" get-slot "experiment" @ = and "example" @ "kind" get-slot "abstain" = and
+									"example" @ "TransformTrainingCase" != "example" @ "experiment" get-slot "experiment" @ ts-eq and "example" @ "kind" get-slot "abstain" ts-eq and
 									if
 										"example" @ "before" get-slot "before" ! nil "requestID" ! 0 "requestCount" !
-										12 iota each it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" ! "facts" @ nil != if "facts" @ 0 list-get "request" = if "requestCount" @ 1 + "requestCount" ! "nodeID" @ "requestID" ! then then end
-										"requestCount" @ 1 =
+										12 iota each it "nodeID" ! "before" @ "nodeID" @ ts-node-facts "facts" ! "facts" @ nil != if "facts" @ 0 list-get "request" ts-eq if "requestCount" @ 1 + "requestCount" ! "nodeID" @ "requestID" ! then then end
+										"requestCount" @ 1 ts-eq
 										if
 											"before" @ "requestID" @ ts-target "definitionID" !
 											"before" @ "requestID" @ ts-parent-facts 0 list-get
@@ -347,7 +348,7 @@ units: [
 										then
 									then
 								end
-								"value" @ "required" = "sawWrongContext" @ and "exact" !
+								"value" @ "required" ts-eq "sawWrongContext" @ and "exact" !
 							else
 								false "exact" !
 							then
@@ -355,9 +356,10 @@ units: [
 					then
 				then
 			then
-			"H-TransformEvaluateFactor" "ablateEquality" get-slot true =
-			"stage" @ "old-guard" = and "value" @ "equals-from" = and
+			"H-TransformEvaluateFactor" "ablateEquality" get-slot true ts-eq
+			"stage" @ "old-guard" ts-eq and "value" @ "equals-from" ts-eq and
 			if false "exact" ! "ablated-ineligible" "candidate" @ "disposition" set-slot then
+			"exact" @ ts-factor-result "exact" !
 			"exact" @ if "survivor" else "rejected" then "candidate" @ "status" set-slot
 			"TS.Evidence." "candidate" @ concat "evidence" !
 			"evidence" @ "TransformFactorEvidence" create-unit drop
@@ -385,6 +387,35 @@ units: [
 			"""#
 		thenCompute: #"""
 			"CurUnit" @ "experiment" !
+			"experiment" @ "currentStage" get-slot "currentStage" !
+			0 "stagePending" !
+			"experiment" @ "candidateUnits" get-slot each
+				it "stageCandidate" !
+				"stageCandidate" @ "stage" get-slot "currentStage" @ =
+				"stageCandidate" @ "status" get-slot "pending" = and
+				if "stagePending" @ 1 + "stagePending" ! then
+			end
+			"stagePending" @ 0 =
+			if
+				"experiment" @ "currentStage" @ ts-close-stage "stageClosed" !
+				"stageClosed" @ "currentStage" @ "locality" != and
+				if
+					"target" "anchor" "scope" "old-guard" 4 list-of "predecessors" !
+					"anchor" "scope" "old-guard" "locality" 4 list-of "successors" !
+					"" "nextStage" !
+					4 iota each
+						it "stageIndex" !
+						"predecessors" @ "stageIndex" @ list-get "currentStage" @ =
+						if "successors" @ "stageIndex" @ list-get "nextStage" ! then
+					end
+					"nextStage" @ "experiment" @ "currentStage" set-slot
+					"experiment" @ "candidateUnits" get-slot each
+						it "nextCandidate" !
+						"nextCandidate" @ "stage" get-slot "nextStage" @ =
+						if 700 "nextCandidate" @ "tsEvaluateFactor" "Evaluate one explicit factor alternative" add-task then
+					end
+				then
+			then
 			0 "pending" !
 			0 "targetCount" ! 0 "anchorCount" ! 0 "scopeCount" ! 0 "guardCount" ! 0 "localityCount" !
 			"" "target" ! "" "anchor" ! "" "scope" ! "" "guard" ! "" "locality" !

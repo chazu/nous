@@ -15,7 +15,7 @@ type lggObservation struct {
 	editedReference []int
 }
 
-func positiveLGG(trainingBytes, programBatchBytes []byte) (Result, []Event, error) {
+func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int) (Result, []Event, error) {
 	training, err := transformfixturecore.ParseTraining(trainingBytes)
 	if err != nil {
 		return Result{}, nil, err
@@ -162,7 +162,7 @@ func positiveLGG(trainingBytes, programBatchBytes []byte) (Result, []Event, erro
 		if c.Kind != "positive" {
 			continue
 		}
-		application, applicationEvents, err := ApplySchemaMetered(c.Before, schemaBytes, "training-validate")
+		application, applicationEvents, err := ApplySchemaMeteredAt(c.Before, schemaBytes, "training-validate", sequenceOffset+len(events))
 		if err != nil || application.Terminal != "applied" {
 			return Result{}, nil, errInvalid
 		}
