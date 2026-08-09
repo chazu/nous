@@ -14,7 +14,6 @@ units: [
 			"""#
 		thenCompute: #"""
 			"CurUnit" @ "experiment" !
-			"experiment" @ "meterToken" get-slot "meter" !
 			0 list-of "programs" !
 			0 "positiveCount" !
 			"TransformTrainingCase" examples
@@ -32,8 +31,6 @@ units: [
 						it "nodeID" !
 						"before" @ "nodeID" @ ts-node-facts "beforeFacts" !
 						"after" @ "nodeID" @ ts-node-facts "afterFacts" !
-						"meter" @ 0 "node" "example" @ "beforeFacts" @ ts-digest "ok" ts-meter drop
-						"meter" @ 0 "node" "example" @ "afterFacts" @ ts-digest "ok" ts-meter drop
 						"beforeFacts" @ nil != "afterFacts" @ nil != and
 						if
 							"beforeFacts" @ 0 list-get "kind" !
@@ -90,6 +87,7 @@ units: [
 		thenCompute: #"""
 			"CurUnit" @ "experiment" !
 			"TransformRootPartial" "root" !
+			"root" @ "partial" get-slot ts-candidate-allocate drop
 			"experiment" @ "root" @ "experiment" set-slot
 			"H-TransformRefineSchemaFactors" "root" @ "creditors" set-slot
 			0 list-of "candidates" !
@@ -163,6 +161,7 @@ units: [
 			then
 			"parent" @ "partial" get-slot "value" @ ts-refine "childPartial" !
 			"childPartial" @ nil = if false "exact" ! then
+			"childPartial" @ ts-candidate-allocate drop
 			"childPartial" @ "candidate" @ "partial" set-slot
 			"parent" @ "candidate" @ "parentCandidate" set-slot
 			"TS.Edge." "candidate" @ concat "edge" !

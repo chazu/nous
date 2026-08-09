@@ -14,20 +14,44 @@ import (
 
 func init() {
 	registerVocabularyWords("transformschema", map[string]builtinFn{
-		"ts-forest-valid?": bTSForestValid,
-		"ts-schema-apply":  bTSSchemaApply,
-		"ts-program-apply": bTSProgramApply,
-		"ts-refine":        bTSRefine,
-		"ts-digest":        bTSDigest,
-		"ts-node-facts":    bTSNodeFacts,
-		"ts-parent-facts":  bTSParentFacts,
-		"ts-target":        bTSTarget,
-		"ts-make-edit":     bTSMakeEdit,
-		"ts-make-program":  bTSMakeProgram,
-		"ts-program-edits": bTSProgramEdits,
-		"ts-make-schema":   bTSMakeSchema,
-		"ts-meter":         bTSMeter,
+		"ts-forest-valid?":      bTSForestValid,
+		"ts-schema-apply":       bTSSchemaApply,
+		"ts-program-apply":      bTSProgramApply,
+		"ts-refine":             bTSRefine,
+		"ts-candidate-allocate": bTSCandidateAllocate,
+		"ts-digest":             bTSDigest,
+		"ts-node-facts":         bTSNodeFacts,
+		"ts-parent-facts":       bTSParentFacts,
+		"ts-target":             bTSTarget,
+		"ts-make-edit":          bTSMakeEdit,
+		"ts-make-program":       bTSMakeProgram,
+		"ts-program-edits":      bTSProgramEdits,
+		"ts-make-schema":        bTSMakeSchema,
+		"ts-meter":              bTSMeter,
 	})
+}
+
+func bTSCandidateAllocate(vm *VM) error {
+	value := vm.pop()
+	if value.Kind() != VString {
+		vm.push(Nil())
+		return nil
+	}
+	data := []byte(value.AsString())
+	if _, err := transformschema.ParsePartial(data); err != nil {
+		if _, schemaErr := transformschema.ParseSchema(data); schemaErr != nil {
+			if recordErr := recordTransform(vm, "candidate-allocate", "rejected", 4, [][]byte{data}, nil); recordErr != nil {
+				return recordErr
+			}
+			vm.push(Nil())
+			return nil
+		}
+	}
+	if err := recordTransform(vm, "candidate-allocate", "allocated", 4, [][]byte{data}, [][]byte{data}); err != nil {
+		return err
+	}
+	vm.push(value)
+	return nil
 }
 
 type TransformMeterRecord struct {
@@ -36,6 +60,9 @@ type TransformMeterRecord struct {
 	Subject   string
 	Object    string
 	Outcome   string
+	Phase     string
+	Inputs    [][]byte
+	Outputs   [][]byte
 }
 
 type transformMeter struct {
@@ -91,8 +118,67 @@ func chargeTransform(token, operation, subject, object, outcome string, category
 	}
 	m.Lock()
 	defer m.Unlock()
-	m.records = append(m.records, TransformMeterRecord{uint8(category), operation, subject, object, outcome})
+	m.records = append(m.records, TransformMeterRecord{Category: uint8(category), Operation: operation, Subject: subject, Object: object, Outcome: outcome})
 	return nil
+}
+
+func recordTransform(vm *VM, operation, outcome string, category int, inputs, outputs [][]byte) error {
+	if vm.CurrentTask == nil || vm.Store == nil {
+		return nil
+	}
+	current := vm.Store.Get(vm.CurrentTask.UnitName)
+	if current == nil {
+		return nil
+	}
+	experiment := current
+	if name := current.GetString("experiment"); name != "" {
+		experiment = vm.Store.Get(name)
+	}
+	if experiment == nil || experiment.GetString("meterToken") == "" {
+		return nil
+	}
+	phase := map[string]string{"tsAcquire": "acquire", "tsRefine": "target", "tsClose": "training-validate"}[vm.CurrentTask.SlotName]
+	if vm.CurrentTask.SlotName == "tsEvaluateFactor" {
+		phase = current.GetString("stage")
+	}
+	if phase == "" {
+		return errors.New("unknown transformation semantic phase")
+	}
+	token := experiment.GetString("meterToken")
+	transformMeters.Lock()
+	m := transformMeters.items[token]
+	transformMeters.Unlock()
+	if m == nil {
+		return errors.New("unknown transformation meter")
+	}
+	clone := func(values [][]byte) [][]byte {
+		out := make([][]byte, len(values))
+		for i := range values {
+			out[i] = slices.Clone(values[i])
+		}
+		return out
+	}
+	subject, object := "", ""
+	if len(inputs) > 0 {
+		subject = transformDigest(inputs[0])
+	}
+	if len(outputs) > 0 {
+		object = transformDigest(outputs[0])
+	}
+	m.Lock()
+	m.records = append(m.records, TransformMeterRecord{uint8(category), operation, subject, object, outcome, phase, clone(inputs), clone(outputs)})
+	m.Unlock()
+	return nil
+}
+
+func transformDigest(value []byte) string {
+	d := sha256.Sum256(value)
+	return hex.EncodeToString(d[:])
+}
+
+func transformAtom(kind string, value any) []byte {
+	b, _ := json.Marshal([]any{"transform-atom/v1", kind, value})
+	return b
 }
 
 func ChargeTransformMeter(token, operation, subject, object, outcome string, category int) error {
@@ -144,6 +230,14 @@ func bTSSchemaApply(vm *VM) error {
 		b, _ := r.Output.CanonicalJSON()
 		output = string(b)
 	}
+	resultWire, _ := json.Marshal([]any{"transform-result/v1", r.Terminal, transformDigest([]byte(output))})
+	if output == "" {
+		resultWire, _ = json.Marshal([]any{"transform-result/v1", r.Terminal, ""})
+	}
+	applicationWire, _ := json.Marshal([]any{"transform-schema-application/v1", json.RawMessage(resultWire), nil})
+	if err := recordTransform(vm, "schema-application", r.Terminal, 11, [][]byte{[]byte(forestValue.AsString()), []byte(schemaValue.AsString())}, [][]byte{applicationWire}); err != nil {
+		return err
+	}
 	vm.push(ListVal([]Value{StringVal(r.Terminal), StringVal(output)}))
 	return nil
 }
@@ -194,6 +288,9 @@ func bTSRefine(vm *VM) error {
 	if err != nil {
 		vm.push(Nil())
 		return nil
+	}
+	if err := recordTransform(vm, "refine", "refined", 5, [][]byte{[]byte(partialValue.AsString()), transformAtom("enum", value.AsString())}, [][]byte{encoded}); err != nil {
+		return err
 	}
 	vm.push(StringVal(string(encoded)))
 	return nil
@@ -247,10 +344,19 @@ func tsFindNode(f transformschema.Forest, id int) (transformschema.Node, bool) {
 
 func bTSNodeFacts(vm *VM) error {
 	f, id, ok := tsForestAndID(vm)
+	forest, _ := f.CanonicalJSON()
+	inputs := [][]byte{forest, transformAtom("id", id)}
 	n, found := tsFindNode(f, id)
 	if !ok || !found {
+		if err := recordTransform(vm, "node", "invalid-input", 0, inputs, nil); err != nil {
+			return err
+		}
 		vm.push(Nil())
 		return nil
+	}
+	output, _ := json.Marshal([]any{"transform-node-facts/v1", n.Kind, n.Value, n.From, n.To})
+	if err := recordTransform(vm, "node", "ok", 0, inputs, [][]byte{output}); err != nil {
+		return err
 	}
 	vm.push(ListVal([]Value{StringVal(n.Kind), StringVal(n.Value), StringVal(n.From), StringVal(n.To)}))
 	return nil
@@ -258,10 +364,23 @@ func bTSNodeFacts(vm *VM) error {
 
 func bTSParentFacts(vm *VM) error {
 	f, id, ok := tsForestAndID(vm)
+	forest, _ := f.CanonicalJSON()
+	inputs := [][]byte{forest, transformAtom("id", id)}
 	n, found := tsFindNode(f, id)
 	if !ok || !found || n.Parent < 0 {
+		outcome := "absent"
+		if !ok || !found {
+			outcome = "invalid-input"
+		}
+		if err := recordTransform(vm, "parent", outcome, 1, inputs, nil); err != nil {
+			return err
+		}
 		vm.push(Nil())
 		return nil
+	}
+	output, _ := json.Marshal([]any{"transform-parent-facts/v1", n.Parent, n.Key})
+	if err := recordTransform(vm, "parent", "ok", 1, inputs, [][]byte{output}); err != nil {
+		return err
 	}
 	vm.push(ListVal([]Value{IntVal(n.Parent), StringVal(n.Key)}))
 	return nil
@@ -269,10 +388,23 @@ func bTSParentFacts(vm *VM) error {
 
 func bTSTarget(vm *VM) error {
 	f, id, ok := tsForestAndID(vm)
+	forest, _ := f.CanonicalJSON()
+	inputs := [][]byte{forest, transformAtom("id", id)}
 	n, found := tsFindNode(f, id)
 	if !ok || !found || n.Target < 0 {
+		outcome := "absent"
+		if !ok || !found {
+			outcome = "invalid-input"
+		}
+		if err := recordTransform(vm, "target", outcome, 2, inputs, nil); err != nil {
+			return err
+		}
 		vm.push(Nil())
 		return nil
+	}
+	output := transformAtom("id", n.Target)
+	if err := recordTransform(vm, "target", "ok", 2, inputs, [][]byte{output}); err != nil {
+		return err
 	}
 	vm.push(IntVal(n.Target))
 	return nil

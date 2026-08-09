@@ -27,8 +27,13 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 96 {
+	if len(run.MeterRecords) != 1425 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
+	}
+	for i, record := range run.MeterRecords {
+		if record.Phase == "" || len(record.Inputs) == 0 {
+			t.Fatalf("meter record %d lacks semantic preimage: %+v", i, record)
+		}
 	}
 	survivors := map[string][]string{}
 	for _, name := range run.Candidates {
