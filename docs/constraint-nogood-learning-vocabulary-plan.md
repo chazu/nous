@@ -586,7 +586,7 @@ cohort names, and seeds never appear in a public problem object or Nous unit.
 
 The random control makes exactly one draw `Uint64N(7)`, yielding a frozen mask
 in `0..6`; it is not redrawn per task or panel. A statistics stream draws all
-indices for one replicate in fixed cohort order and then increasing sampled
+indices for one replicate in the fixed 24-stratum order and then increasing sampled
 position. Power `panel` draws locked-size paired indices in that same order;
 its `bootstrap` and `randomization` streams then draw all inner replicates in
 increasing replicate order from their independent PCGs. Ties never consume
@@ -1521,4 +1521,3 @@ counts only after the learned abstraction has paid for an independently
 inspectable proof that its prune is sound. A valid null would therefore be
 useful evidence that this proof regime overwhelms the small search saving and
 should be redesigned before broader nogood grammars are attempted.
-Validation doubles each count. Locked uses 384 tasks with exactly 312, 48, 12,
