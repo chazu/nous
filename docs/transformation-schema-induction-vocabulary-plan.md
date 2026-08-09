@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Provisional Part 3 Vocabulary 2 implementation plan, revision 10. This document
+Provisional Part 3 Vocabulary 2 implementation plan, revision 11. This document
 is not implementation authority until independent architecture, transformation-
 semantics, and experimental-validity reviewers all accept the same committed
 revision.
@@ -81,6 +81,11 @@ case class, and three evidence derivations remained ambiguous. Revision 10
 restores heuristic-owned factor claims with causally inert post-hoc reduction,
 freezes normalization traces, keys action endpoints to sealed case class, and
 closes held-out-result and per-policy Store reconstruction.
+
+Revision 10 passed architecture and semantic review but leaked sealed expected
+case class into the live held-out work budget. Revision 11 makes every held-out
+action truth-independent through the policy terminal and moves all sealed-truth
+comparison into a separate post-terminal audit derivation outside policy work.
 
 Vocabulary 1 ended `valid-null`; Vocabulary 2 does not consume its domain,
 artifacts, evidence, or learned state. It uses only the existing Store, Agenda,
@@ -840,13 +845,13 @@ Worst-case successful Nous work is bounded before fixtures as follows:
 | 12 factor alternatives over their required evidence | 4,800 | 4,800 |
 | candidates, closures, evidence, hashes | 1,000 | 1,000 |
 | eight complete training applications | 608 | 640 |
-| eight held-out applications and comparisons | 608 | 640 |
+| eight truth-independent held-out applications | 512 | 544 |
 | terminal reserve | 1 | 1 |
-| total | 9,417 | 9,681 |
+| total | 9,321 | 9,585 |
 
 The bound charges every maximum-node scan even where semantics short-circuit.
-One maximum-node, four-edit, applied complete-schema call plus its required
-immediate evidence attachment and complete-output scoring has one of three
+One maximum-node, four-edit, applied positive-training complete-schema call plus
+its required immediate evidence attachment and complete-output scoring has one of three
 golden category vectors, in anchor enum order:
 
 ```text
@@ -862,16 +867,18 @@ parents; target events are six reference targets plus the request edge only for
 locality, three filters for each of six references, expansion bound, and four
 no-op checks. The remaining entries are four edit validations charged two,
 four edit executions, twelve output-node comparisons, one evidence link, and
-one final `schema-application` event. A strict precharge uses the applicable
-anchor vector and 80-work overall maximum; cap/golden tests pin all three.
+one final `schema-application` event. A strict positive-training precharge uses
+the applicable anchor vector and 80-work overall maximum. Held-out removes the
+12 category-9 comparisons and uses a 68-work maximum. Cap/golden tests pin all
+three training vectors and all three held-out prefixes.
 
 LGG's closed bound is acquisition 2,600 + factor work 4,800 + artifact work
 1,000 + four positive validation applications 320 + four externally scored
-negative-training applications 320 + eight held-out applications 640 + one
-terminal = 9,681. PBE's 48 applications cost at most 3,840 work, with at most
+negative-training applications 320 + eight held-out applications 544 + one
+terminal = 9,585. PBE's 48 applications cost at most 3,744 work, with at most
 1,000 for 72 candidate allocations, ordering, comparisons, evidence, and its
-terminal, totaling 4,840. Replay, random, and ablation paths are bounded by the
-larger 9,681 figure. Thus 12,000 work, 50,000 events, 2,000 cycles, and 20,000
+terminal, totaling 4,744. Replay, random, and ablation paths are bounded by the
+larger 9,585 figure. Thus 12,000 work, 50,000 events, 2,000 cycles, and 20,000
 units are attainable for every intended policy. The 576
 universe matrix is deliberately **not** attainable under the application cap;
 bounded search is the experiment.
@@ -987,7 +994,7 @@ The normative operation matrix is:
 | edit-validate | acquire,training-validate,heldout | 6/2 | forest,edit -> edit-status | valid,no-op,invalid-input |
 | edit-apply | acquire,training-validate,heldout | 7/1 | forest,edit -> forest | applied,invalid-input |
 | schema-predicate | training-validate,heldout | 8/1 | forest,schema,atom(selector),atom-or-edit(subject) -> atom(boolean) | true,false,invalid-input |
-| output-compare | acquire,training-validate,heldout | 9/1 | forest,forest,atom(id) -> atom(boolean) | equal,different,invalid-input |
+| output-compare | acquire,training-validate | 9/1 | forest,forest,atom(id) -> atom(boolean) | equal,different,invalid-input |
 | evidence-link | acquire,target,anchor,scope,old-guard,locality,training-validate,freeze,heldout | 10/1 | attempted-value,prior-output-or-empty,prior-operation -> evidence-attempt | attached,rejected |
 | canonicalize | all nonterminal phases | 11/1 | any one semantic kind -> same kind | canonical,invalid-input |
 | hash | all nonterminal phases | 11/1 | any one semantic kind -> atom(digest) | hashed,invalid-input |
@@ -1096,17 +1103,16 @@ output; the final highest-ID comparison is the endpoint. Every training
 abstention case, and every non-applied training result, ends at the evidence
 link because no expected output forest exists.
 
-For held-out execution the policy result becomes immutable at the evidence
-link. The external sealed scorer then reveals no value to policy code: if and
-only if the case is expected-positive and the immutable result is `applied`, it
-uses the same sink to append one output-compare per canonical ID against sealed
-truth, with the final comparison as endpoint. Expected-abstention and non-
-applied held-out cases end at the evidence link. These scorer events cannot
-alter the Store, agenda, artifact, terminal, or policy output. The
-80-work precharge covers the complete applicable action through its endpoint.
-Before the call, orchestration configures this endpoint class inside the
-unforgeable sink from the sealed scorer; the flag and truth bytes have no VM or
-policy reference and are released only after the immutable evidence link.
+Every held-out action ends at its required immediate evidence link regardless
+of sealed case class, policy terminal, or result. Its reservation uses the
+truth-independent 68-work maximum internal application/evidence trace and no
+scorer state is configured in the live sink. After all eight results and the
+policy terminal are immutable, external scoring reconstructs result bytes from
+the transcript and compares them with sealed truth in a separate audit
+derivation. Audit comparisons are not policy lifecycle events or policy work;
+they cannot alter Store, agenda, artifact, terminal, output, later admission,
+or the nonmatching-work denominator. Missing or inconsistent audit derivation
+still makes the execution mechanically `invalid`.
 No second reservation may begin while it is live. A missing, duplicated, or
 out-of-order application event, missing evidence link, missing/extra applied-
 training comparison, crash, or exhaustion before the endpoint is mechanical
