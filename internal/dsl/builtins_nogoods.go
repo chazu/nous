@@ -3,6 +3,7 @@ package dsl
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	nogoods "github.com/chazu/nous/internal/vocab/nogoods"
@@ -23,7 +24,24 @@ func init() {
 		"ng-completion-conflicts?": bNGCompletionConflicts,
 		"ng-certificate-valid?":    bNGCertificateValid,
 		"ng-artifact-name":         bNGArtifactName,
+		"ng-digest-list":           bNGDigestList,
 	})
+}
+
+func bNGDigestList(vm *VM) error {
+	values, ok := strictStringList(vm.pop())
+	if !ok || len(values) > 64 {
+		vm.push(Nil())
+		return nil
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	digest := sha256.Sum256(encoded)
+	vm.push(StringVal(hex.EncodeToString(digest[:])))
+	return nil
 }
 
 func ngString(value Value) (string, bool) {

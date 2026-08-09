@@ -43,6 +43,9 @@ func TestOrdinaryHeuristicAcquisitionPromotesUniqueFullMask(t *testing.T) {
 		if !candidate.GetBool("evidenceComplete") || candidate.GetInt("exampleCount") != 4 || len(candidate.GetStrings("evidenceUnits")) != 4 {
 			t.Fatalf("incomplete candidate evidence %s", name)
 		}
+		if candidate.GetInt("barrierCount") != 4 {
+			t.Fatalf("candidate %s sealed %d evidence barriers", name, candidate.GetInt("barrierCount"))
+		}
 	}
 	slices.Sort(masks)
 	if !slices.Equal(masks, []int{0, 1, 2, 3, 4, 5, 6, 7}) {

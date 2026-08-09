@@ -17,6 +17,7 @@ units: [
 	{name: "NogoodCompletion", worth: 500, isA: ["Anything"]},
 	{name: "NogoodResult", worth: 500, isA: ["Anything"]},
 	{name: "NogoodEvidence", worth: 550, isA: ["Anything"]},
+	{name: "NogoodEvidenceBarrier", worth: 650, isA: ["Anything"]},
 	{name: "NogoodSelection", worth: 650, isA: ["Anything"]},
 	{name: "NogoodPromotionProof", worth: 700, isA: ["Anything"]},
 	{name: "NogoodArtifact", worth: 800, isA: ["Anything"]},
@@ -24,5 +25,6 @@ units: [
 	{name: "NogoodRoleCandidate", worth: 450, isA: ["Anything"]},
 	{name: "NogoodPairProposal", worth: 450, isA: ["Anything"]},
 	{name: "NogoodCertificate", worth: 700, isA: ["Anything"]},
+	{name: "NogoodPruneProposal", worth: 700, isA: ["Anything"]},
 	{name: "NogoodDisposition", worth: 700, isA: ["Anything"]},
 ]

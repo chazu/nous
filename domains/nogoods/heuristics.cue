@@ -78,7 +78,7 @@ units: [
 				if
 					"candidate" @ "experiment" get-slot "experiment" !
 					"candidate" @ "mask" get-slot "mask" !
-					0 "exampleCount" ! 0 "matchCount" ! 0 "badClaims" ! 0 list-of "evidenceUnits" !
+					0 "exampleCount" ! 0 "matchCount" ! 0 "badClaims" ! 0 "barrierCount" ! 0 list-of "evidenceUnits" !
 					"experiment" @ "trainingExamples" get-slot each
 						it "example" !
 						"exampleCount" @ 1 + "exampleCount" !
@@ -109,7 +109,7 @@ units: [
 						"bindingFound" @ "binding" @ "guardMatched" set-slot
 						"anchor" @ "binding" @ "anchor" set-slot "bx" @ "binding" @ "x" set-slot "by" @ "binding" @ "y" set-slot
 						"blocked" @ "binding" @ "blocked" set-slot "escape" @ "binding" @ "escape" set-slot "only" @ "binding" @ "only" set-slot
-						false "matches" ! true "allConflict" ! 0 "completionCount" ! 0 list-of "results" !
+						false "matches" ! true "allConflict" ! 0 "completionCount" ! 0 list-of "results" ! 0 list-of "expectedKeys" ! 0 list-of "actualKeys" !
 						"bindingFound" @
 						if
 							"problem" @ "mask" @ "anchor" @ "bx" @ "by" @ "blocked" @ "escape" @ "only" @ ng-mask-matches? "matches" !
@@ -129,12 +129,15 @@ units: [
 									"yColor" @ "blocked" @ != "yKeepsBlocked" @ or and
 									if
 										"completionCount" @ 1 + "completionCount" !
+										"completion:" "xColor" @ concat ":" concat "yColor" @ concat "completionKey" !
+										"expectedKeys" @ "completionKey" @ list-append "expectedKeys" !
 										"problem" @ "mask" @ "anchor" @ "bx" @ "by" @ "blocked" @ "escape" @ "only" @ "xColor" @ "yColor" @ ng-completion-conflicts? "conflict" !
 										"result:" "candidate" @ concat ":" concat "example" @ concat ":" concat "xColor" @ concat ":" concat "yColor" @ concat "resultSemantic" !
 										"result" "resultSemantic" @ ng-artifact-name "result" !
 										"result" @ "NogoodResult" create-unit drop
 										"binding" @ "result" @ "binding" set-slot "xColor" @ "result" @ "xColor" set-slot "yColor" @ "result" @ "yColor" set-slot "conflict" @ "result" @ "conflict" set-slot
 										"results" @ "result" @ list-append "results" !
+										"actualKeys" @ "completionKey" @ list-append "actualKeys" !
 										"conflict" @ not if false "allConflict" ! then
 									then
 								end
@@ -146,11 +149,17 @@ units: [
 						"evidence" @ "NogoodEvidence" create-unit drop
 						"candidate" @ "evidence" @ "candidate" set-slot "example" @ "evidence" @ "example" set-slot "binding" @ "evidence" @ "binding" set-slot
 						"matches" @ "evidence" @ "matches" set-slot "completionCount" @ "evidence" @ "completionCount" set-slot "allConflict" @ "evidence" @ "allConflict" set-slot "results" @ "evidence" @ "results" set-slot
+						"barrier:" "candidate" @ concat ":" concat "example" @ concat "barrierSemantic" ! "evidence-barrier" "barrierSemantic" @ ng-artifact-name "barrier" !
+						"barrier" @ "NogoodEvidenceBarrier" create-unit drop
+						"candidate" @ "barrier" @ "candidate" set-slot "example" @ "barrier" @ "example" set-slot "expectedKeys" @ "barrier" @ "expectedKeys" set-slot "actualKeys" @ "barrier" @ "actualKeys" set-slot
+						"expectedKeys" @ "actualKeys" @ list-equal? "completionCount" @ "actualKeys" @ list-length = and "barrierSealed" !
+						"barrierSealed" @ "barrier" @ "sealed" set-slot "barrier" @ "evidence" @ "barrier" set-slot
+						"barrierSealed" @ if "barrierCount" @ 1 + "barrierCount" ! then
 						"evidenceUnits" @ "evidence" @ list-append "evidenceUnits" !
 					end
 					"exampleCount" @ 4 = "matchCount" @ 1 = and "badClaims" @ 0 = and "exact" !
 					"exampleCount" @ "candidate" @ "exampleCount" set-slot "matchCount" @ "candidate" @ "matchCount" set-slot "badClaims" @ "candidate" @ "badClaimCount" set-slot
-					"evidenceUnits" @ "candidate" @ "evidenceUnits" set-slot "exact" @ "candidate" @ "trainingExact" set-slot true "candidate" @ "evidenceComplete" set-slot true "candidate" @ "ngEvaluated" set-slot
+					"evidenceUnits" @ "candidate" @ "evidenceUnits" set-slot "barrierCount" @ "candidate" @ "barrierCount" set-slot "exact" @ "candidate" @ "trainingExact" set-slot "barrierCount" @ 4 = "candidate" @ "evidenceComplete" set-slot true "candidate" @ "ngEvaluated" set-slot
 					600 "experiment" @ "ngSelect" "Select only after the complete candidate evidence barrier" add-task
 				then
 			then
@@ -160,17 +169,22 @@ units: [
 				"CurUnit" @ "experiment" !
 				"experiment" @ "selectionUnit" get-slot nil =
 				if
-					0 "candidateCount" ! 0 "completeCount" ! 0 list-of "exactCandidates" !
+					0 "candidateCount" ! 0 "completeCount" ! 0 list-of "exactCandidates" ! 0 list-of "actualMasks" !
 					"NogoodCandidate" examples each
 						it "candidate" !
 						"candidate" @ "NogoodCandidate" !=
 						if
 							"candidateCount" @ 1 + "candidateCount" !
+							"actualMasks" @ "candidate" @ "mask" get-slot list-append "actualMasks" !
 							"candidate" @ "evidenceComplete" get-slot true = if "completeCount" @ 1 + "completeCount" ! then
 							"candidate" @ "trainingExact" get-slot true = if "exactCandidates" @ "candidate" @ list-append "exactCandidates" ! then
 						then
 					end
-					"candidateCount" @ 8 = "completeCount" @ 8 = and
+					"actualMasks" @ sort "actualMasks" ! 8 iota "expectedMasks" !
+					"selection-barrier" "mask-population-0-through-7" ng-artifact-name "selectionBarrier" !
+					"selectionBarrier" @ "NogoodEvidenceBarrier" create-unit drop "expectedMasks" @ "selectionBarrier" @ "expectedKeys" set-slot "actualMasks" @ "selectionBarrier" @ "actualKeys" set-slot
+					"expectedMasks" @ "actualMasks" @ list-equal? "populationSealed" ! "populationSealed" @ "selectionBarrier" @ "sealed" set-slot
+					"candidateCount" @ 8 = "completeCount" @ 8 = and "populationSealed" @ and
 					if
 						"exactCandidates" @ list-length 1 =
 						if
@@ -178,6 +192,7 @@ units: [
 							"selection" "unique-training-exact" ng-artifact-name "selection" !
 							"selection" @ "NogoodSelection" create-unit drop
 							"selected" @ "selection" @ "selectedCandidate" set-slot "exactCandidates" @ "selection" @ "ties" set-slot "candidateCount" @ "selection" @ "candidateCount" set-slot "completeCount" @ "selection" @ "completeCount" set-slot
+							"selectionBarrier" @ "selection" @ "barrier" set-slot
 							"selection" @ "experiment" @ "selectionUnit" set-slot
 							600 "experiment" @ "ngPromote" "Prove the selected schema over all injective substitutions" add-task
 						else
@@ -195,23 +210,29 @@ units: [
 					"experiment" @ "selectionUnit" get-slot "selection" !
 					"selection" @ "selectedCandidate" get-slot "selected" !
 					"selected" @ "mask" get-slot "mask" !
-					0 "proofCount" ! 0 "conflictCount" ! 0 list-of "proofs" !
+					0 "proofCount" ! 0 "conflictCount" ! 0 list-of "proofs" ! 0 list-of "expectedCases" ! 0 list-of "actualCases" !
 					"experiment" @ "promotionCases" get-slot each
 						it "case" !
+						"expectedCases" @ "case" @ list-append "expectedCases" !
 						"case" @ "problem" get-slot "problem" !
 						"case" @ "anchor" get-slot "anchor" ! "case" @ "x" get-slot "x" ! "case" @ "y" get-slot "y" !
 						"case" @ "blocked" get-slot "blocked" ! "case" @ "escape" get-slot "escape" ! "case" @ "only" get-slot "only" !
 						"problem" @ "mask" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "only" @ "only" @ "only" @ ng-completion-conflicts? "conflict" !
 						"proof:" "case" @ concat "proofSemantic" ! "promotion-proof" "proofSemantic" @ ng-artifact-name "proof" !
 						"proof" @ "NogoodPromotionProof" create-unit drop "case" @ "proof" @ "case" set-slot "mask" @ "proof" @ "mask" set-slot "conflict" @ "proof" @ "conflict" set-slot
+						"actualCases" @ "case" @ list-append "actualCases" !
 						"proofs" @ "proof" @ list-append "proofs" ! "proofCount" @ 1 + "proofCount" ! "conflict" @ if "conflictCount" @ 1 + "conflictCount" ! then
 					end
-					"mask" @ 7 = "proofCount" @ 24 = and "conflictCount" @ 24 = and
+					"promotion-barrier" "all-injective-color-substitutions" ng-artifact-name "promotionBarrier" !
+					"promotionBarrier" @ "NogoodEvidenceBarrier" create-unit drop "expectedCases" @ "promotionBarrier" @ "expectedKeys" set-slot "actualCases" @ "promotionBarrier" @ "actualKeys" set-slot
+					"expectedCases" @ "actualCases" @ list-equal? "proofCount" @ 24 = and "conflictCount" @ 24 = and "promotionSealed" ! "promotionSealed" @ "promotionBarrier" @ "sealed" set-slot
+					"mask" @ 7 = "promotionSealed" @ and
 					if
 						"artifact" "blocked-pair/v1:mask:7" ng-artifact-name "artifact" !
 						"artifact" @ "NogoodArtifact" create-unit drop
 						"blocked-pair/v1" "artifact" @ "schemaVersion" set-slot "blocked-pair-guard/v1" "artifact" @ "guardVersion" set-slot 7 "artifact" @ "mask" set-slot
 						"selection" @ "artifact" @ "selection" set-slot "proofs" @ "artifact" @ "promotionProofs" set-slot "proofCount" @ "artifact" @ "promotionProofCount" set-slot
+						"promotionBarrier" @ "artifact" @ "promotionBarrier" set-slot
 						"part3/nogoods/v1" "artifact" @ "provenance" set-slot true "artifact" @ "frozen" set-slot
 						"artifact" @ "experiment" @ "artifactUnit" set-slot "promoted" "experiment" @ "terminal" set-slot
 					else
@@ -264,7 +285,7 @@ units: [
 							then
 						end
 					then
-					0 "applicableCount" ! "" "applicableArtifact" ! "" "applicableBinding" ! "" "applicableCompletion" ! "" "applicableCertificate" !
+					0 "applicableCount" ! "" "applicableArtifact" ! "" "applicableBinding" ! "" "applicableCompletion" ! "" "applicableCertificate" ! "" "applicableBarrier" ! "" "applicableProposal" !
 					"roleCandidates" @ list-length iota each
 						it "leftIndex" !
 						"roleCandidates" @ list-length iota each
@@ -297,12 +318,33 @@ units: [
 												"problem" @ "mask" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "leftOnly" @ "leftOnly" @ "leftOnly" @ ng-completion-conflicts? "conflict" ! "conflict" @ "completion" @ "conflict" set-slot
 												"certificate:" "completion" @ concat "certificateSemantic" ! "certificate" "certificateSemantic" @ ng-artifact-name "certificate" !
 												"certificate" @ "NogoodCertificate" create-unit drop
-												"artifact" @ "certificate" @ "artifact" set-slot "binding" @ "certificate" @ "binding" set-slot "completion" @ "certificate" @ "completion" set-slot
+												"artifact" @ "certificate" @ "artifact" set-slot "binding" @ "certificate" @ "binding" set-slot "completion" @ "certificate" @ "completion" set-slot "request" @ "certificate" @ "request" set-slot
+												"request" @ "requestDigest" get-slot "certificate" @ "requestDigest" set-slot "request" @ "targetDigest" get-slot "certificate" @ "targetDigest" set-slot "request" @ "decisionDigest" get-slot "certificate" @ "decisionDigest" set-slot
 												"problem" @ "mask" @ "anchor" @ "blocked" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "leftOnly" @ "leftOnly" @ "leftOnly" @ "conflict" @ ng-certificate-valid? "valid" !
 												"valid" @ "certificate" @ "valid" set-slot
 												"valid" @
 												if
-													"applicableCount" @ 1 + "applicableCount" ! "artifact" @ "applicableArtifact" ! "binding" @ "applicableBinding" ! "completion" @ "applicableCompletion" ! "certificate" @ "applicableCertificate" !
+													"predicate-problem" "predicate-guard" "predicate-mask" "predicate-conflict" "predicate-certificate" "predicate-authority" "predicate-frozen" "predicate-schema" "predicate-guard-version" "predicate-artifact-digest" "predicate-evidence-digest" "predicate-promotion-digest" "predicate-provenance-digest" "predicate-request-digest" "predicate-target-digest" "predicate-decision-digest" "predicate-assignment-digest" "predicate-reduced-domain-digest" 18 list-of "predicateKeys" !
+													0 list-of "predicateResults" !
+													"predicateResults" @ "problem" @ ng-problem-valid? list-append "predicateResults" !
+													"predicateResults" @ "problem" @ "anchor" @ "blocked" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "leftOnly" @ ng-guard-matches? list-append "predicateResults" !
+													"predicateResults" @ "problem" @ "mask" @ "anchor" @ "x" @ "y" @ "blocked" @ "escape" @ "leftOnly" @ ng-mask-matches? list-append "predicateResults" !
+													"predicateResults" @ "conflict" @ list-append "predicateResults" ! "predicateResults" @ "valid" @ list-append "predicateResults" !
+													"predicateResults" @ "artifact" @ "authoritative" get-slot true = list-append "predicateResults" ! "predicateResults" @ "artifact" @ "frozen" get-slot true = list-append "predicateResults" !
+													"predicateResults" @ "artifact" @ "schemaVersion" get-slot "blocked-pair/v1" = list-append "predicateResults" ! "predicateResults" @ "artifact" @ "guardVersion" get-slot "blocked-pair-guard/v1" = list-append "predicateResults" !
+													"predicateResults" @ "artifact" @ "artifactDigest" get-slot "" != list-append "predicateResults" ! "predicateResults" @ "artifact" @ "evidenceBoundaryDigest" get-slot "" != list-append "predicateResults" ! "predicateResults" @ "artifact" @ "promotionDigest" get-slot "" != list-append "predicateResults" ! "predicateResults" @ "artifact" @ "provenanceDigest" get-slot "" != list-append "predicateResults" !
+													"predicateResults" @ "request" @ "requestDigest" get-slot "" != list-append "predicateResults" ! "predicateResults" @ "request" @ "targetDigest" get-slot "" != list-append "predicateResults" ! "predicateResults" @ "request" @ "decisionDigest" get-slot "" != list-append "predicateResults" ! "predicateResults" @ "request" @ "assignmentDigest" get-slot "" != list-append "predicateResults" ! "predicateResults" @ "request" @ "reducedDomainDigest" get-slot "" != list-append "predicateResults" !
+													"barrier:" "certificate" @ concat "barrierSemantic" ! "evidence-barrier" "barrierSemantic" @ ng-artifact-name "barrier" ! "barrier" @ "NogoodEvidenceBarrier" create-unit drop
+													"request" @ "barrier" @ "request" set-slot "artifact" @ "barrier" @ "artifact" set-slot "binding" @ "barrier" @ "binding" set-slot "completion" @ "barrier" @ "completion" set-slot "certificate" @ "barrier" @ "certificate" set-slot
+													"predicateKeys" @ "barrier" @ "predicateKeys" set-slot "predicateResults" @ "barrier" @ "predicateResults" set-slot
+													"request" @ "requestDigest" get-slot "barrier" @ "requestDigest" set-slot "request" @ "targetDigest" get-slot "barrier" @ "targetDigest" set-slot "request" @ "decisionDigest" get-slot "barrier" @ "decisionDigest" set-slot "request" @ "assignmentDigest" get-slot "barrier" @ "assignmentDigest" set-slot "request" @ "immutableDomainDigest" get-slot "barrier" @ "immutableDomainDigest" set-slot "request" @ "reducedDomainDigest" get-slot "barrier" @ "reducedDomainDigest" set-slot "request" @ "exactConflictStoreDigest" get-slot "barrier" @ "exactConflictStoreDigest" set-slot
+													"predicateResults" @ list-length 18 = "predicateResults" @ false list-contains not and "barrierSealed" ! "barrierSealed" @ "barrier" @ "sealed" set-slot
+													"barrierSealed" @
+													if
+														"proposal:" "barrier" @ concat "proposalSemantic" ! "prune-proposal" "proposalSemantic" @ ng-artifact-name "proposal" ! "proposal" @ "NogoodPruneProposal" create-unit drop
+														"request" @ "proposal" @ "request" set-slot "artifact" @ "proposal" @ "artifact" set-slot "binding" @ "proposal" @ "binding" set-slot "completion" @ "proposal" @ "completion" set-slot "certificate" @ "proposal" @ "certificate" set-slot "barrier" @ "proposal" @ "barrier" set-slot
+														"applicableCount" @ 1 + "applicableCount" ! "artifact" @ "applicableArtifact" ! "binding" @ "applicableBinding" ! "completion" @ "applicableCompletion" ! "certificate" @ "applicableCertificate" ! "barrier" @ "applicableBarrier" ! "proposal" @ "applicableProposal" !
+													then
 												then
 											then
 										then
@@ -316,7 +358,9 @@ units: [
 					"request" @ "disposition" @ "request" set-slot "request" @ "requestDigest" get-slot "disposition" @ "requestDigest" set-slot
 					"applicableCount" @ 0 = if "resume" else "applicableCount" @ 1 = if "propose-prune" else "bridge-invalid" then then "status" !
 					"status" @ "disposition" @ "status" set-slot "applicableCount" @ "disposition" @ "applicableCount" set-slot
-					"applicableArtifact" @ "disposition" @ "artifact" set-slot "applicableBinding" @ "disposition" @ "binding" set-slot "applicableCompletion" @ "disposition" @ "completion" set-slot "applicableCertificate" @ "disposition" @ "certificate" set-slot
+					"applicableArtifact" @ "disposition" @ "artifact" set-slot "applicableBinding" @ "disposition" @ "binding" set-slot "applicableCompletion" @ "disposition" @ "completion" set-slot "applicableCertificate" @ "disposition" @ "certificate" set-slot "applicableBarrier" @ "disposition" @ "barrier" set-slot "applicableProposal" @ "disposition" @ "proposal" set-slot
+					"request" @ "targetDigest" get-slot "disposition" @ "targetDigest" set-slot "request" @ "decisionDigest" get-slot "disposition" @ "decisionDigest" set-slot
+					"request" @ "applicableArtifact" @ "applicableBinding" @ "applicableCompletion" @ "applicableCertificate" @ "applicableBarrier" @ "applicableProposal" @ 7 list-of ng-digest-list "disposition" @ "referencedUnitSetDigest" set-slot
 					true "disposition" @ "sealed" set-slot
 					"disposition" @ "request" @ "dispositionUnit" set-slot
 				then
