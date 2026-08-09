@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: proposed Part 3 lane-specific implementation plan, revision 8.
+Status: proposed Part 3 lane-specific implementation plan, revision 9.
 
 Revision 1 was committed at
 `10eb2deafd4d8a203257026d0c7925a4f6eaba86` and blocked independently by all
@@ -44,6 +44,14 @@ matcher and completion rows without changing the 125-event prune maximum,
 sets the 81-event no-match maximum and 83-event hard cap, and corrects the
 evidence-free attainability proof. No protected panel was observed.
 
+Revision 8 was committed at `b13d9f23cf23ea389fb4745fd35159ac4f59e3be`
+and blocked independently on the umbrella-frozen seed identity, the exact
+scope of the no-match cap, the missing canonical development-report path,
+nonreplayable locked fixture evidence, and an ambiguous cross-panel terminal
+classification. Revision 9 resolves that complete review union while retaining
+the already accepted ledger arithmetic. No panel was observed between
+revisions.
+
 This document narrows Vocabulary 1 of the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). It is
 not yet implementation authority. The exact committed revision must receive
@@ -53,7 +61,7 @@ acceptance before production or experiment code is added.
 The lane identity is fixed by the umbrella:
 
 - domain pack: `domains/nogoods`;
-- seed authority: `part3/nogoods/v2`;
+- seed authority: `part3/nogoods/v1`;
 - production package: `internal/vocab/nogoods`;
 - fixture package: `internal/nogoodfixture`;
 - experiment package: `internal/nogoodexp`; and
@@ -107,7 +115,7 @@ it byte-for-byte in every report:
 ```json
 {
   "experiment_version": "nogoods/v2",
-  "seed_authority": "part3/nogoods/v2",
+  "seed_authority": "part3/nogoods/v1",
   "generator_version": "blocked-pair-csp/v1",
   "grammar_version": "three-role-three-edge-mask/v1",
   "semantics_version": "finite-neq-csp/v1",
@@ -139,6 +147,7 @@ it byte-for-byte in every report:
   "bridge_task_pop_cap": 2000,
   "attributed_unit_cap": 200000,
   "report_byte_cap": 16777216,
+  "fixture_bundle_byte_cap": 16777216,
   "transcript_event_cap_per_execution": 8000000,
   "transcript_event_cap_per_bundle": 16000000,
   "transcript_raw_byte_cap_per_execution": 1073741824,
@@ -171,8 +180,12 @@ locked guard is claimed; no locked root or fixture is present in source.
 
 Any post-review change to the grammar, generator, semantics, work events,
 policy, panel mapping, thresholds, or statistics creates the next experiment
-version and preserves all earlier evidence. Revision 8 is `nogoods/v2` because
-it changes a V1 threshold; V1 remains withdrawn and unexecuted.
+version and preserves all earlier evidence. Revision 8 created experiment V2
+because it changed a V1 threshold, but it did not have authority to rename the
+umbrella-frozen `part3/nogoods/v1` seed namespace. Revision 9 restores that
+namespace and all of its frozen streams while retaining V2 experiment, cost,
+report, evidence-path, and unlock identities. Experiment V1 remains withdrawn
+and unexecuted.
 
 ## Finite CSP semantics
 
@@ -550,7 +563,7 @@ Every deterministic stream begins with canonical compact JSON containing only
 UTF-8 strings and integers:
 
 ```text
-["part3/nogoods/v2", panel, root, ordinal, purpose]
+["part3/nogoods/v1", panel, root, ordinal, purpose]
 ```
 
 The exact panel tokens and stream scopes are:
@@ -603,11 +616,11 @@ increasing replicate order from their independent PCGs. Ties never consume
 randomness.
 
 The canonical random-control JSON is
-`["part3/nogoods/v2","training",831001,0,"random-control"]`; its SHA-256 is
-`18aed4934f41158c1178b8ccd238835e2dac2717d74f4dd030216477eb916a24`,
-its PCG seeds are `1778592632012871052,1258959285689811806`, its first raw
-`Uint64` is `6134634897815124633`, and a fresh PCG's first `Uint64N(7)` is
-mask 2. The separately fixed corrupted mask is 5, so the two controls are
+`["part3/nogoods/v1","training",831001,0,"random-control"]`; its SHA-256 is
+`287e2fe3f24afab3f17a07eef3a485774c68135bdcc19933e358437c00777e5f`,
+its PCG seeds are `2917822264651741875,17400228833170589047`, its first raw
+`Uint64` is `10321276913399045564`, and a fresh PCG's first `Uint64N(7)` is
+mask 3. The separately fixed corrupted mask is 5, so the two controls are
 distinct.
 
 Unit tests freeze the canonical JSON bytes, SHA-256 digest, two PCG seeds, first
@@ -619,10 +632,10 @@ The `variable-positions` golden vectors are:
 
 | Panel/root | SHA-256 | PCG seeds | First four `Uint64` | Permutation |
 | --- | --- | --- | --- | --- |
-| `training` / `831001` | `b2294430cbbdb01f7599360adc4cbf775d43051f7699bb98a06e90cc7d451f7c` | `12837867189163634719,8473863594147889015` | `5998256699142038517,3061088826469977856,7422770284953852099,3707927592788537146` | `1,2,0` |
-| `development` / `832001` | `d0dcab371ea372cc51a6e1e47b32be97fce34dbaac5768f3001ed09c52bb1ca8` | `15050092307990934220,5883638334641847959` | `15897127166009243275,6335397305508338890,16951981388495259188,6912465547973745294` | `0,6,7,4,1,5,2,3` |
-| `validation` / `833001` | `cfbfdf3ef01973db953fcc55f0d956dc78a42eb2fd8cefbc8d4dc24d2a176c04` | `14969929147811984347,10754539104669095644` | `13233943789338552230,1725611645404672679,7588291633582608566,7410435714107475228` | `4,1,7,3,5,2,0,6` |
-| `locked` / 64 zeroes | `2ddab511087840a63120a03abe8c5a779754fc230d1cfdabea23882aad146af3` | `3304152361390850214,3540005481278626423` | `3322225368596265150,3240277704846343908,7689747042175239493,8362869284156611139` | `0,3,7,4,5,2,1,6` |
+| `training` / `831001` | `ac5eb4be74b192caba90677858e7ca28c346c1329bfe16347b864600b1669f0d` | `12420563552428987082,13443358654286252584` | `16196928853732314818,13964589984287698613,14828555489593947842,3864106448264698449` | `0,1,2` |
+| `development` / `832001` | `7ee119fb7276549805e9faaa614a7049671b62ab1466d6a66417e274b279e2a6` | `9142617286286660760,426147249446875209` | `1213905441346112375,1699159744660973649,1395889987714557996,13902222507069901990` | `5,2,1,4,3,6,0,7` |
+| `validation` / `833001` | `c6ae755044795c25e589d32a073dc98744347a48470364294121d4445b8aca9e` | `14316509253064011885,16539983283958434183` | `4803874459439516066,14275222390261356384,10176726368503672072,10929098418971052156` | `6,0,1,4,7,3,5,2` |
+| `locked` / 64 zeroes | `d1eae2c49127eaedc67e0983f6395fd5ece5fd712a4b44a8598253a172644af1` | `15126151632354011885,14302879928951594965` | `14781793926225946851,10566838600647845555,7622181505994308792,3324590857268697477` | `5,1,6,7,0,2,4,3` |
 
 Training seeds `831001..831004` map directly, without rejection:
 
@@ -986,7 +999,8 @@ Complete transcripts are evidence-bundle artifacts, not embedded in the JSON
 report. For panel `<panel>` the canonical directory is
 `.nous/nogoods-v2-<panel>-transcripts/`; it contains `primary/` and `audit/`,
 each with one deterministic `<policy>.ngt.gz` for all 13 required policies and
-an `execution-manifest.json`, plus one root `manifest.json`. Development,
+an `execution-manifest.json`, plus one root `fixtures.json` and one root
+`manifest.json`. Development,
 validation, and locked all execute two fresh stores against the same immutable
 fixture bytes and retain all 26 chunks. Validation and locked guards
 exclusively create the root directory alongside their receipt/report and refuse
@@ -994,6 +1008,19 @@ any existing path or symlink. Development requires an absent output directory
 at command start. No panel may discard, replace, or alias a chunk from the other
 execution. Only the primary execution contributes empirical work; audit work and
 its independent 54-event profile preflight are reported as integrity evidence.
+
+`fixtures.json` is the canonical compact JSON array, in task-ordinal order, of
+records containing `ordinal`, the exact canonical problem byte slice encoded as
+unpadded base64url, and the supplied decision's numeric `variable` and `color`.
+It contains no seed, cohort, template, private root, oracle result, or outcome.
+Its decoded problem bytes must themselves pass canonical problem decoding.
+Both executions consume the same decoded records from this file; neither may
+regenerate a task. The root manifest records its byte length and SHA-256, and
+the receipt finalization hashes it transitively through the root manifest. Its
+uncompressed size is capped by `fixture_bundle_byte_cap=16777216`; crossing the
+cap before either execution makes the attempt invalid. This retained public
+input is sufficient for an independent reviewer to rerun the baseline, oracle,
+and complete omitted-solution audit without the private locked root.
 
 Acquisition has no separate chunk. In both execution roles, all profile,
 training, selection, promotion, and freeze events belong to
@@ -1116,20 +1143,21 @@ The golden single-policy conformance manifest is the following canonical JSON
 Each execution manifest records execution role, policy, raw/compressed sizes,
 event count, raw SHA-256, gzip SHA-256, and first/last sequence for its 13
 chunks. The root manifest records both execution-manifest digests and the
-report-payload digest. The report payload excludes evidence digests and is
+fixture-bundle size/digest and report-payload digest. The report payload excludes evidence digests and is
 hashed first. The report then retains that payload, its digest, and only the
 root-manifest digest—not manifest contents. The root manifest never contains a
 hash of the final report, so the graph is acyclic:
 
 ```text
-chunks -> execution manifests -> root manifest <- report payload
+chunks -> execution manifests --+
+fixtures.json ------------------> root manifest <- report payload
                                       |
                                       v
                               final report reference
 ```
 
-Receipt finalization hashes the final report, root manifest, both execution
-manifests, and all chunks. The primary and audit canonical semantic report
+Receipt finalization hashes the final report, root manifest, fixture bundle,
+both execution manifests, and all chunks. The primary and audit canonical semantic report
 payloads exclude execution role and evidence paths and must be byte-equal;
 their transcript hashes are compared positionally before the wrapper report is
 formed.
@@ -1140,13 +1168,23 @@ Scopes and abort boundaries are exact:
   including the execution's 54-event bridge-profile preflight;
 - `target_prune_work_cap=128` covers one learned request from supplied-decision
   validation through a prune terminal;
-- `no_match_bridge_overhead_cap=83` covers the learned/control target work in
-  excess of its byte-identical standalone continuation when no prune occurs;
+- `no_match_bridge_overhead_cap=83` covers exactly one bridge request that ends
+  in `resume` before constructing any completion: from that request's write
+  through its disposition/adapter records, after cancelling the byte-identical
+  standalone continuation. It applies to every bridge-backed policy when that
+  zero-completion condition holds. A reset profile preflight, recomputed
+  target-local acquisition, and `match-only`'s validated proposal/completion/
+  certificate segment are outside this scalar scope; they remain charged under
+  their component ledgers and `policy_work_cap_per_task`. Transcript operation
+  IDs mechanically delimit the excluded phases. A bridge-backed policy may not
+  evade the cap by changing its policy name;
 - `policy_work_cap_per_task=2000000` covers one policy on one utility task and
   aborts before the exceeding event;
 - `bridge_task_pop_cap=2000` covers one request and aborts before pop 2,001;
 - `attributed_unit_cap=200000` covers one fresh training or utility store;
 - `report_byte_cap=16777216` covers each uncompressed canonical JSON report;
+- `fixture_bundle_byte_cap=16777216` covers the one uncompressed canonical
+  `fixtures.json` shared by both executions of a panel;
 - transcript per-execution caps cover the sum across its 13 policies and bundle
   caps cover both protected executions, including dictionary/header bytes. They
   are checked before an event, before raw close, after deterministic compression,
@@ -1252,8 +1290,8 @@ conformance test fail before a panel. The three-event difference between 125 and
 the hard prune cap is abort headroom, not
 uncharged work and not part of this feasibility proof.
 
-For a no-prune target the shared root and resumed MAC-CBJ events are
-byte-identical and cancel. The maximum extra vector is the 26-event
+For a zero-completion `resume` target the shared root and resumed MAC-CBJ events
+are byte-identical and cancel. The maximum capped bridge-only extra vector is the 26-event
 request/engine row plus the 45-event matcher row plus ten disposition/adapter
 events, exactly 81. The matcher subtotal includes all three required target-edge
 reads; revision 7 incorrectly parked them in the completion row, which preserved
@@ -1350,19 +1388,38 @@ deterministic tasks; the bootstrap describes sensitivity to task composition,
 while randomization assumes within-task label exchangeability under the sharp
 null. All arithmetic is signed 64-bit after a checked overflow preflight. The
 development replicate-zero tuple has SHA-256
-`0f6ee7c2e3720c748492c6dd815aa0eee1a83bf704e6b439628ea70f057d4079`,
-PCG seeds `1112080982232665204,9552916414266515694`, and first eight
-`Uint64N(2)` draws `1,0,1,1,1,0,0,0`. Exact satisfiability and prune soundness
+`4c310ed3e073097cc03302dcdc59eeb3c8eca9b31b23ded25c70e58481abca34`,
+PCG seeds `5490185723907869052,13849416426707349171`, and first eight
+`Uint64N(2)` draws `0,1,1,0,1,0,0,0`. Exact satisfiability and prune soundness
 are gates, not terms that trade against work.
 
-V2 is `valid-positive` only if all mechanical gates pass, the primary point
-estimate is strictly below zero, the interval upper bound is below zero, the paired
+For one panel, its empirical gate passes only if all mechanical gates pass, the
+primary point estimate is strictly below zero, the interval upper bound is below zero, the paired
 randomization p-value is below 0.05, and target-only overhead on the pooled
 near-miss/irrelevant cohort satisfies the exact ratio-of-sums gate
-`H = sum(L_i-M_i)/sum(M_i) <= 0.10` against standalone `mac-cbj`. It is
-`valid-null` when mechanical gates pass but any empirical gate fails. It is
-`invalid` when a correctness, soundness, leakage, accounting, provenance,
-determinism, boundary, or frozen-protocol gate fails.
+`H = sum(L_i-M_i)/sum(M_i) <= 0.10` against standalone `mac-cbj`. When its
+mechanical gates pass but any empirical gate fails, that panel has an empirical
+miss. A correctness, soundness, leakage, accounting, provenance, determinism,
+boundary, or frozen-protocol failure is mechanical invalidity.
+
+The lane has exactly one terminal classification, fixed before any panel:
+
+| Furthest reached state | Required condition | Lane classification and next action |
+| --- | --- | --- |
+| development | any development mechanical failure | `invalid`; stop |
+| development power | power below 0.80 after mechanically valid development | `valid-null` at development stage; validation and locked remain unopened |
+| development power | power at least 0.80 | development's empirical pass/miss is diagnostic; run validation |
+| validation | any validation mechanical failure | `invalid`; stop |
+| validation | mechanically valid report | validation's empirical pass/miss is diagnostic and never gates continuation; commit it, then authorize locked execution |
+| locked | any locked mechanical failure | `invalid`; stop and consume the attempt |
+| locked | mechanically valid and its own empirical gate passes | `valid-positive` |
+| locked | mechanically valid and its own empirical gate misses | `valid-null` |
+
+No pooled, best-panel, majority, or post-hoc statistic exists. The locked panel
+alone supplies the confirmatory point, interval, randomization p-value, and `H`
+once the preregistered power path reaches it. Development supplies
+effect/variance data only for the frozen power gate; validation is a public
+integrity/generalization diagnostic.
 
 Post-freeze target work, certification work, pruned branches, concrete-conflict
 count, solution count, artifact precision, generalization distance, storage,
@@ -1371,9 +1428,12 @@ They cannot create a positive label.
 
 ## Development, validation, and locked sequence
 
-Development is run only after implementation-candidate review. Its command
-generates each public fixture byte slice once, retains it in memory, and runs
-two fresh complete stores/policy sets as `primary` and `audit`. It refuses an
+Development is run only after implementation-candidate review. Its exact report
+path is `.nous/nogoods-v2-development-report.json` and its exact transcript
+root is `.nous/nogoods-v2-development-transcripts/`. Its command
+generates each public fixture byte slice once, writes the bounded
+`fixtures.json`, and runs two fresh complete stores/policy sets as `primary`
+and `audit` by independently decoding that file. It refuses an
 existing report or transcript directory, retains both 13-policy chunks and both
 execution manifests, and requires byte-equal semantic payloads and positional
 transcript hashes. Only primary work enters empirical estimates; audit work is
@@ -1394,7 +1454,7 @@ nonreusable-harm gates. Inner bootstrap endpoints are sorted indices 49 and
 1949. Inner randomization uses `e_i = 384*d_i + A`, draws exactly one
 `Uint64N(2)` per synthetic task and has Monte Carlo denominator 2,001. Power
 streams use canonical JSON
-`["part3/nogoods/v2","power",832001,outerOrdinal,purpose]`, where purpose is
+`["part3/nogoods/v1","power",832001,outerOrdinal,purpose]`, where purpose is
 exactly `panel`, `bootstrap`, or `randomization`; bootstrap and randomization
 derive a fresh PCG from that tuple and never share state. Power is the passing
 fraction and must be at least 0.80 before validation or locked execution is
@@ -1403,8 +1463,9 @@ reachable.
 Validation may be invoked once after a committed power-positive development
 report. Its guard exclusively creates
 `.nous/nogoods-v2-validation-receipt.json`, generates and serializes all public
-fixture bytes once, and executes two fresh stores/policy sets internally from
-those same immutable bytes. The two canonical reports must be byte-equal; only
+fixture bytes once into the bounded `fixtures.json`, and executes two fresh
+stores/policy sets internally by independently decoding those same immutable
+bytes. The two canonical reports must be byte-equal; only
 the first execution supplies empirical work, while the second is separately
 reported integrity audit work. The guard then exclusively writes
 `.nous/nogoods-v2-validation-report.json` and finalizes the receipt. A crash or
@@ -1414,8 +1475,8 @@ tuning gate. After the committed result, all implementation and plan paths are
 frozen.
 
 Locked execution follows the repository's one-shot pattern. One guarded API
-used by the CLI and package callers requires an unlock token naming the exact
-clean `HEAD`, a committed prerequisite manifest, accepted implementation
+used by the CLI and package callers requires the exact unlock token
+`nogoods/v2:<40-lowercase-hex-clean-HEAD>`, a committed prerequisite manifest, accepted implementation
 reviews, accepted development/validation reports, power at least 0.80, no
 `go.work` or module replacement, and canonical repository/domain paths. The
 manifest hashes every protected input and its committed bytes. The guard
@@ -1424,8 +1485,9 @@ fsyncs a `claimed` receipt, reads a fresh 32-byte root from `crypto/rand`, and
 records `started` before deriving a fixture. A crash consumes the attempt.
 
 Inside that one locked invocation, every generated canonical fixture byte slice
-is retained in memory and supplied independently to two fresh complete policy
-runs. Their canonical reports, transcript hashes, terminals, witnesses, and
+is encoded once into the bounded `fixtures.json` after the receipt reaches
+`started`; the private root is then erased. Both fresh complete policy runs
+decode that retained file independently. Their canonical reports, transcript hashes, terminals, witnesses, and
 work vectors must be byte-equal before inference. As in validation, only the
 first run contributes empirical work and the second is labelled integrity
 audit. This is the deterministic rerun; the private root is never regenerated
@@ -1434,7 +1496,7 @@ and no second locked invocation exists.
 The only locked evidence paths are
 `.nous/nogoods-v2-locked-receipt.json`,
 `.nous/nogoods-v2-locked-report.json`, and the canonical locked transcript
-directory. No other API accepts `locked`, returns a
+directory, whose root contains the public `fixtures.json`. No other API accepts `locked`, returns a
 locked fixture, or exposes the root. An integrity-clean empirical miss is
 `valid-null`; mechanical failure is `invalid`; either finalizes the receipt.
 
@@ -1478,7 +1540,9 @@ Before any empirical run, tests must cover:
   resumed execution, and activation-local conflict reset when a variable is
   revisited;
 - literal full-task attainability multiplicities and acquisition/prune/no-match
-  cap enforcement without importing experiment code;
+  cap enforcement without importing experiment code, including mechanical
+  exclusion of reset preflight, recomputed acquisition, and match-only
+  completion segments from the zero-completion resume cap;
 - exact 24-cell development/validation/locked support, stratum draw order, and
   power resampling with no template or missing-bit substitution;
 - satisfiability parity and complete omitted-branch solution-set audit for every
