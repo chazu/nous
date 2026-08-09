@@ -1,15 +1,14 @@
 # Transformation-schema induction vocabulary: implementation and trial record
 
-Status: **v2 implementation-review revision 5; revisions 1 through 4 were
-rejected, v1 was closed unexecuted, and no v2 protected panel has run**
+Status: **v2 implementation revision 5 unanimously accepted; review authority
+is being committed, v1 was closed unexecuted, and no v2 protected panel has run**
 
 This document records Vocabulary 2 of the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) as it
-is implemented and tested before adversarial implementation acceptance. It is
-not an empirical result. Development, validation, and locked execution remain
-forbidden until architecture, semantics, and experimental-validity reviewers
-accept the same implementation commit and that authority is committed in the
-canonical review manifest.
+is implemented and tested after adversarial implementation acceptance. It is
+not yet an empirical result. Development remains forbidden until the accepted
+authority is committed in the canonical review manifest; validation and locked
+execution remain forbidden by their later progression gates.
 
 ## Frozen identity and goal
 
@@ -214,7 +213,7 @@ non-target comparisons could still precede their observations, structural
 prefix evidence escaped block checks, normalization could inspect parents or
 targets, and factor operations could be relabeled across legal phases.
 
-Revision 5 removes the unauthorized leaves while recomputing the same
+Revision 5 at `bd374884662db7c0db562b0428ca032e79eded8b` removes the unauthorized leaves while recomputing the same
 diagnostics directly from authorized fixtures for the oracle-parity gate. It
 also phase-binds every proof operation, rejects all structural normalization
 observations and pre-block prefixes, requires each row's typed comparisons to
@@ -222,9 +221,11 @@ follow its final prescribed observation, and permits no other factor comparison
 besides the one final aggregate claim. Existing regression tests cover
 batch-proof omission, unsupported verify wires, malformed-operation semantics,
 held-out input rebinding, out-of-grammar atom kinds, detached target
-comparisons, and acquire-phase closure forgery. It remains a candidate until
-all three reviewers accept the same exact commit. No protected command was run
-while repairing any revision.
+comparisons, and acquire-phase closure forgery. Architecture, semantics, and
+experimental-validity reviewers each accepted that exact commit without
+qualification. Their canonical authority is recorded in
+`docs/transformation-schema-implementation-reviews.json`. No protected command
+was run while repairing or reviewing any revision.
 
 The repository-wide suite was also run on this implementation-review
 candidate. It completed every other listed package, including
@@ -252,8 +253,9 @@ panels remain unrun.
 
 ## Next protocol step
 
-Commit and push this exact candidate, obtain unqualified architecture,
-semantics, and experimental-validity acceptance for that commit, and record the
-three decisions in `docs/transformation-schema-implementation-reviews.json`.
-Only then may the development entry point run once under a clean, reviewed
-repository authority.
+Commit and push the canonical review manifest and this acceptance record. Once
+the resulting `HEAD` is clean and its protected files still match reviewed
+commit `bd374884662db7c0db562b0428ca032e79eded8b`, run the development entry
+point once under that reviewed repository authority. Continue to validation
+only if the development report classifies the frozen power analysis as
+`interim-power-authorized`.
