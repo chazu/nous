@@ -1,6 +1,7 @@
 package transformexp
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 
 	"github.com/chazu/nous/internal/transformfixturecore"
 	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
@@ -36,6 +38,14 @@ type curriculum struct {
 	Latent           []byte
 	PolicyTokens     map[Policy]string
 	PolicyRandomness map[Policy][2]uint64
+	GeneratorLedger  acceptanceLedger
+}
+
+type acceptanceLedger struct {
+	Applications int
+	Work         int64
+	MatrixSHA256 string
+	Accepted     bool
 }
 
 var familySchemas = []transformschema.Schema{
@@ -235,8 +245,8 @@ func generateCurriculumAttempt(ordinal, family int, seed uint64, panelCommitment
 	if !fixtureInputsDisjoint(training, heldout) {
 		return curriculum{}, errRejectedCurriculumAttempt
 	}
-	unique, err := uniqueMinimum(training, latentBytes)
-	if err != nil || !unique {
+	ledger, err := generatorAcceptanceMatrix(training, heldout, expected, latentBytes)
+	if err != nil || !ledger.Accepted {
 		if err != nil {
 			return curriculum{}, err
 		}
@@ -264,7 +274,7 @@ func generateCurriculumAttempt(ordinal, family int, seed uint64, panelCommitment
 		}
 		policyRandomness[policy] = [2]uint64{stream.Uint64(), stream.Uint64()}
 	}
-	return curriculum{Ordinal: ordinal, Family: family, Seed: seed, SeedCommitment: seedCommitment, PanelCommitment: panelCommitment, AcceptedAttempt: attempt, Training: trainingBytes, Heldout: heldoutBytes, Expected: expected, Latent: latentBytes, PolicyTokens: policyTokens, PolicyRandomness: policyRandomness}, nil
+	return curriculum{Ordinal: ordinal, Family: family, Seed: seed, SeedCommitment: seedCommitment, PanelCommitment: panelCommitment, AcceptedAttempt: attempt, Training: trainingBytes, Heldout: heldoutBytes, Expected: expected, Latent: latentBytes, PolicyTokens: policyTokens, PolicyRandomness: policyRandomness, GeneratorLedger: ledger}, nil
 }
 
 func fixtureInputsDisjoint(training transformfixturecore.Training, heldout transformfixturecore.Heldout) bool {
@@ -286,48 +296,96 @@ func fixtureInputsDisjoint(training transformfixturecore.Training, heldout trans
 	return true
 }
 
-func uniqueMinimum(training transformfixturecore.Training, latent []byte) (bool, error) {
+func generatorAcceptanceMatrix(training transformfixturecore.Training, heldout transformfixturecore.Heldout, expected []expectedCase, latent []byte) (acceptanceLedger, error) {
+	const generatorAcceptanceWork int64 = 109161
+	truth := make(map[string]expectedCase, len(expected))
+	for _, item := range expected {
+		truth[item.Token] = item
+	}
 	best := int(^uint(0) >> 1)
 	var winners [][]byte
-	for _, candidate := range transformschema.Schemas() {
-		exact := true
-		for _, example := range training.Cases {
+	var matrixRows []any
+	applications := 0
+	latentHeldoutExact := false
+	schemas := transformschema.Schemas()
+	if len(schemas) != 72 || len(training.Cases) != 8 || len(heldout.Cases) != 8 || len(expected) != 8 {
+		return acceptanceLedger{}, errors.New("generator acceptance matrix dimensions")
+	}
+	trainingCases := slices.Clone(training.Cases)
+	heldoutCases := slices.Clone(heldout.Cases)
+	slices.SortFunc(trainingCases, func(a, b transformfixturecore.TrainingCase) int { return strings.Compare(a.Token, b.Token) })
+	slices.SortFunc(heldoutCases, func(a, b transformfixturecore.HeldoutCase) int { return strings.Compare(a.Token, b.Token) })
+	for _, candidate := range schemas {
+		trainingExact := true
+		heldoutExact := true
+		var outcomes []any
+		for _, example := range trainingCases {
 			f, err := transformschema.ParseForest(example.Before)
 			if err != nil {
-				return false, err
+				return acceptanceLedger{}, err
 			}
 			r, err := candidate.Apply(f)
 			if err != nil {
-				return false, err
+				return acceptanceLedger{}, err
 			}
+			applications++
+			outputDigest := ""
+			var output []byte
+			if r.Output != nil {
+				output, _ = r.Output.CanonicalJSON()
+				outputDigest = digestBytes(output)
+			}
+			matches := false
 			if example.Kind == "positive" {
-				if r.Output == nil {
-					exact = false
-					break
-				}
-				out, _ := r.Output.CanonicalJSON()
-				if r.Terminal != "applied" || !slices.Equal(out, example.After) {
-					exact = false
-					break
-				}
-			} else if len(r.Terminal) < 8 || r.Terminal[:8] != "abstain/" {
-				exact = false
-				break
+				matches = r.Terminal == "applied" && bytes.Equal(output, example.After)
+			} else {
+				matches = len(r.Terminal) >= 8 && r.Terminal[:8] == "abstain/"
 			}
+			trainingExact = trainingExact && matches
+			outcomes = append(outcomes, []any{example.Token, r.Terminal, outputDigest, matches})
 		}
-		if !exact {
-			continue
+		for _, example := range heldoutCases {
+			f, err := transformschema.ParseForest(example.Before)
+			if err != nil {
+				return acceptanceLedger{}, err
+			}
+			r, err := candidate.Apply(f)
+			if err != nil {
+				return acceptanceLedger{}, err
+			}
+			applications++
+			outputDigest := ""
+			var output []byte
+			if r.Output != nil {
+				output, _ = r.Output.CanonicalJSON()
+				outputDigest = digestBytes(output)
+			}
+			want, ok := truth[example.Token]
+			matches := ok && (want.Terminal == "applied" && r.Terminal == "applied" && bytes.Equal(output, want.Output) || want.Terminal == "abstain" && len(r.Terminal) >= 8 && r.Terminal[:8] == "abstain/")
+			heldoutExact = heldoutExact && matches
+			outcomes = append(outcomes, []any{example.Token, r.Terminal, outputDigest, matches})
 		}
-		cost := schemaDescription(candidate)
 		encoded, _ := candidate.CanonicalJSON()
-		if cost < best {
-			best = cost
-			winners = [][]byte{encoded}
-		} else if cost == best {
-			winners = append(winners, encoded)
+		matrixRows = append(matrixRows, []any{digestBytes(encoded), trainingExact, heldoutExact, outcomes})
+		if bytes.Equal(encoded, latent) {
+			latentHeldoutExact = heldoutExact
+		}
+		if trainingExact {
+			cost := schemaDescription(candidate)
+			if cost < best {
+				best = cost
+				winners = [][]byte{encoded}
+			} else if cost == best {
+				winners = append(winners, encoded)
+			}
 		}
 	}
-	return len(winners) == 1 && slices.Equal(winners[0], latent), nil
+	if applications != 72*16 {
+		return acceptanceLedger{}, errors.New("generator acceptance matrix application count")
+	}
+	matrix := mustJSON([]any{"transform-generator-acceptance-matrix/v1", matrixRows})
+	accepted := len(winners) == 1 && slices.Equal(winners[0], latent) && latentHeldoutExact
+	return acceptanceLedger{applications, generatorAcceptanceWork, digestBytes(matrix), accepted}, nil
 }
 
 func schemaDescription(s transformschema.Schema) int {

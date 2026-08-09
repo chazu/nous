@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+
+	"github.com/chazu/nous/internal/transformoracle"
 )
 
 type PolicyReportRow struct {
@@ -24,27 +26,37 @@ type PolicyReportRow struct {
 }
 
 type SafePanelReport struct {
-	Version               string             `json:"version"`
-	Panel                 string             `json:"panel"`
-	PlanCommit            string             `json:"plan_commit"`
-	Manifest              json.RawMessage    `json:"manifest"`
-	FixtureRootDigest     string             `json:"fixture_root_digest,omitempty"`
-	PrimaryManifestDigest string             `json:"primary_manifest_digest,omitempty"`
-	AuditManifestDigest   string             `json:"audit_manifest_digest,omitempty"`
-	EvidenceGraphDigest   string             `json:"evidence_graph_digest,omitempty"`
-	Rows                  []PolicyReportRow  `json:"rows"`
-	Inference             transformInference `json:"inference"`
-	Competence            CompetenceReport   `json:"competence"`
-	DualExecutionEqual    bool               `json:"dual_execution_equal"`
-	TranscriptHashesEqual bool               `json:"transcript_hashes_equal"`
-	MechanicallyValid     bool               `json:"mechanically_valid"`
-	Conservation          bool               `json:"conservation"`
-	OracleParity          bool               `json:"oracle_parity"`
-	ProgramsExact         bool               `json:"programs_exact"`
-	ApplicationsExact     bool               `json:"applications_exact"`
-	ArtifactFrozen        bool               `json:"artifact_frozen"`
-	HeldoutSealed         bool               `json:"heldout_sealed"`
-	Limitations           []string           `json:"limitations"`
+	Version               string                `json:"version"`
+	Panel                 string                `json:"panel"`
+	PlanCommit            string                `json:"plan_commit"`
+	Manifest              json.RawMessage       `json:"manifest"`
+	FixtureRootDigest     string                `json:"fixture_root_digest,omitempty"`
+	PrimaryManifestDigest string                `json:"primary_manifest_digest,omitempty"`
+	AuditManifestDigest   string                `json:"audit_manifest_digest,omitempty"`
+	EvidenceGraphDigest   string                `json:"evidence_graph_digest,omitempty"`
+	Rows                  []PolicyReportRow     `json:"rows"`
+	Inference             transformInference    `json:"inference"`
+	Competence            CompetenceReport      `json:"competence"`
+	DualExecutionEqual    bool                  `json:"dual_execution_equal"`
+	TranscriptHashesEqual bool                  `json:"transcript_hashes_equal"`
+	MechanicallyValid     bool                  `json:"mechanically_valid"`
+	Conservation          bool                  `json:"conservation"`
+	OracleParity          bool                  `json:"oracle_parity"`
+	ProgramsExact         bool                  `json:"programs_exact"`
+	ApplicationsExact     bool                  `json:"applications_exact"`
+	ArtifactFrozen        bool                  `json:"artifact_frozen"`
+	HeldoutSealed         bool                  `json:"heldout_sealed"`
+	GeneratorAcceptance   AcceptanceDiagnostics `json:"generator_acceptance"`
+	OracleAcceptance      AcceptanceDiagnostics `json:"oracle_acceptance"`
+	Limitations           []string              `json:"limitations"`
+}
+
+type AcceptanceDiagnostics struct {
+	Curricula    int    `json:"curricula"`
+	Applications int    `json:"applications"`
+	Work         int64  `json:"work"`
+	RootSHA256   string `json:"root_sha256"`
+	Exact        bool   `json:"exact"`
 }
 
 type panelArtifacts struct {
@@ -79,12 +91,19 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	if len(curricula) == 0 {
 		return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("empty panel")
 	}
-	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true, Conservation: true, OracleParity: true, ProgramsExact: true, ApplicationsExact: true, ArtifactFrozen: true, HeldoutSealed: true}
+	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true, Conservation: true, OracleParity: true, ProgramsExact: true, ApplicationsExact: true, ArtifactFrozen: true, HeldoutSealed: true, GeneratorAcceptance: AcceptanceDiagnostics{Exact: true}, OracleAcceptance: AcceptanceDiagnostics{Exact: true}}
 	artifacts := panelArtifacts{Primary: map[string]TransformTranscriptBundle{}, Audit: map[string]TransformTranscriptBundle{}}
+	var generatorRows, oracleRows []any
 	for index, c := range curricula {
 		if c.Ordinal != index {
 			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("noncanonical curriculum ordinal")
 		}
+		generatorExact := c.GeneratorLedger.Applications == 72*16 && c.GeneratorLedger.Work == 109161 && digestString(c.GeneratorLedger.MatrixSHA256) && c.GeneratorLedger.Accepted
+		report.GeneratorAcceptance.Curricula++
+		report.GeneratorAcceptance.Applications += c.GeneratorLedger.Applications
+		report.GeneratorAcceptance.Work += c.GeneratorLedger.Work
+		report.GeneratorAcceptance.Exact = report.GeneratorAcceptance.Exact && generatorExact
+		generatorRows = append(generatorRows, []any{c.Ordinal, c.GeneratorLedger.Applications, c.GeneratorLedger.Work, c.GeneratorLedger.MatrixSHA256, c.GeneratorLedger.Accepted})
 		for _, policy := range empiricalPolicies {
 			primaryView, err := decodePolicyView(c)
 			if err != nil {
@@ -194,7 +213,23 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			bits := outcome.HeldoutCorrectBits
 			report.Rows = append(report.Rows, PolicyReportRow{c.Ordinal, c.Family, policy, outcome.Terminal, work, outcome.Applications, schemaDigest, outcome.HeldoutCorrect, hex.EncodeToString([]byte{bits}), outcome.FalseApplications, nonmatchingWork, transcriptDigest})
 		}
+		scorerBytes, err := scorerFixtureBytes(c)
+		if err != nil {
+			return SafePanelReport{}, panelArtifacts{}, err
+		}
+		oracleLedger, err := transformoracle.AuditAcceptance(c.Training, c.Heldout, scorerBytes)
+		if err != nil {
+			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d acceptance audit: %w", c.Ordinal, err)
+		}
+		oracleExact := oracleLedger.Applications == c.GeneratorLedger.Applications && oracleLedger.Work == c.GeneratorLedger.Work && oracleLedger.MatrixSHA256 == c.GeneratorLedger.MatrixSHA256 && oracleLedger.Accepted == c.GeneratorLedger.Accepted
+		report.OracleAcceptance.Curricula++
+		report.OracleAcceptance.Applications += oracleLedger.Applications
+		report.OracleAcceptance.Work += oracleLedger.Work
+		report.OracleAcceptance.Exact = report.OracleAcceptance.Exact && oracleExact
+		oracleRows = append(oracleRows, []any{c.Ordinal, oracleLedger.Applications, oracleLedger.Work, oracleLedger.MatrixSHA256, oracleLedger.Accepted})
 	}
+	report.GeneratorAcceptance.RootSHA256 = digestBytes(mustJSON([]any{"transform-generator-acceptance-ledgers/v1", generatorRows}))
+	report.OracleAcceptance.RootSHA256 = digestBytes(mustJSON([]any{"transform-oracle-acceptance-ledgers/v1", oracleRows}))
 	paired, err := pairedRows(report.Rows, len(curricula))
 	if err != nil {
 		return SafePanelReport{}, panelArtifacts{}, err
@@ -209,7 +244,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	}
 	report.Limitations = []string{"safe runner is not protected-panel evidence"}
 	slices.Sort(report.Limitations)
-	report.MechanicallyValid = report.DualExecutionEqual && report.TranscriptHashesEqual && report.Conservation && report.OracleParity && report.ProgramsExact && report.ApplicationsExact && report.ArtifactFrozen && report.HeldoutSealed
+	report.MechanicallyValid = report.DualExecutionEqual && report.TranscriptHashesEqual && report.Conservation && report.OracleParity && report.ProgramsExact && report.ApplicationsExact && report.ArtifactFrozen && report.HeldoutSealed && report.GeneratorAcceptance.Exact && report.OracleAcceptance.Exact
 	return report, artifacts, nil
 }
 

@@ -76,9 +76,9 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 			out.Terminal = "no-discovery"
 		}
 		out.acquisition = &run
+		out.frozenPrograms, _ = programBatch(run)
 		if run.Artifact != "" {
 			out.Schema = []byte(run.Store.Get(run.Artifact).GetString("schema"))
-			out.frozenPrograms, _ = programBatch(run)
 		}
 	case PositiveLGG, ConcreteReplay:
 		run, err := runAcquisitionConfigured(domainsDir, c.Training, policyToken(c, policy), func(store *unit.Store) {
@@ -417,7 +417,20 @@ func scorePolicyOutcome(scorer scorerCurriculum, out PolicyOutcome) (PolicyOutco
 
 func auditPolicyOutcome(c policyCurriculum, heldoutBytes, scorerBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {
 	if out.Terminal != "completed" {
-		out.OracleParity, out.ProgramsExact, out.TrainingExact = true, true, true
+		terminalAudit, err := transformoracle.AuditTerminal(c.Training, heldoutBytes, out.Terminal)
+		if err != nil {
+			return out, err
+		}
+		out.OracleParity = terminalAudit.Valid
+		out.TrainingExact = false
+		out.ProgramsExact = len(out.frozenPrograms) == 0
+		if len(out.frozenPrograms) != 0 {
+			programAudit, auditErr := transformoracle.AuditPolicy(c.Training, heldoutBytes, nil, out.frozenPrograms)
+			if auditErr != nil {
+				return out, auditErr
+			}
+			out.ProgramsExact = programAudit.ProgramsExact
+		}
 		return out, nil
 	}
 	schema, batch := out.Schema, out.frozenPrograms

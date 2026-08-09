@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/transformfixturecore"
+	"github.com/chazu/nous/internal/transformoracle"
 	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
 )
 
@@ -99,6 +100,28 @@ func TestCurriculumHeldoutInputsAreDistinctFromAllTrainingInputs(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestGeneratorAcceptanceMatrixIsExactAndIndependentlyAudited(t *testing.T) {
+	value, err := makeCurriculum(0, 8, 910008)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := value.GeneratorLedger
+	if ledger.Applications != 72*16 || ledger.Work != 109161 || !digestString(ledger.MatrixSHA256) || !ledger.Accepted {
+		t.Fatalf("generator ledger=%+v", ledger)
+	}
+	scorer, err := scorerFixtureBytes(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit, err := transformoracle.AuditAcceptance(value.Training, value.Heldout, scorer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit.Applications != ledger.Applications || audit.Work != ledger.Work || audit.MatrixSHA256 != ledger.MatrixSHA256 || audit.Accepted != ledger.Accepted {
+		t.Fatalf("generator=%+v oracle=%+v", ledger, audit)
 	}
 }
 

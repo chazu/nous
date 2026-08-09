@@ -26,6 +26,34 @@ type ScoreAudit struct {
 	FalseApplications int
 }
 
+type AcceptanceAudit struct {
+	Applications int
+	Work         int64
+	MatrixSHA256 string
+	Accepted     bool
+}
+
+type TerminalAudit struct {
+	TrainingCases int
+	HeldoutCases  int
+	Valid         bool
+}
+
+func AuditTerminal(trainingBytes, heldoutBytes []byte, terminal string) (TerminalAudit, error) {
+	if terminal != "no-discovery" && terminal != "budget-exhausted" {
+		return TerminalAudit{}, ErrInvalid
+	}
+	training, err := auditTraining(trainingBytes)
+	if err != nil {
+		return TerminalAudit{}, err
+	}
+	heldout, err := auditHeldout(heldoutBytes)
+	if err != nil {
+		return TerminalAudit{}, err
+	}
+	return TerminalAudit{len(training), len(heldout), len(training) == 8 && len(heldout) == 8}, nil
+}
+
 type fixtureCase struct {
 	token, kind   string
 	before, after []byte
@@ -34,6 +62,137 @@ type fixtureCase struct {
 type batchRow struct {
 	token, beforeDigest string
 	program             []byte
+}
+
+func AuditAcceptance(trainingBytes, heldoutBytes, scorerBytes []byte) (AcceptanceAudit, error) {
+	training, err := auditTraining(trainingBytes)
+	if err != nil {
+		return AcceptanceAudit{}, err
+	}
+	heldout, err := auditHeldout(heldoutBytes)
+	if err != nil {
+		return AcceptanceAudit{}, err
+	}
+	value, err := decode(scorerBytes)
+	if err != nil {
+		return AcceptanceAudit{}, err
+	}
+	row, ok := value.([]any)
+	if !ok || len(row) != 6 || row[0] != "transform-scorer-curriculum/v1" {
+		return AcceptanceAudit{}, ErrInvalid
+	}
+	latent, err := json.Marshal(row[4])
+	if err != nil {
+		return AcceptanceAudit{}, err
+	}
+	if _, err := parseSchema(latent); err != nil {
+		return AcceptanceAudit{}, err
+	}
+	expectedRows, ok := row[5].([]any)
+	if !ok || len(expectedRows) != 8 || len(training) != 8 || len(heldout) != 8 {
+		return AcceptanceAudit{}, ErrInvalid
+	}
+	expected := map[string]Observation{}
+	previous := ""
+	for _, raw := range expectedRows {
+		fields, ok := raw.([]any)
+		if !ok || len(fields) != 3 {
+			return AcceptanceAudit{}, ErrInvalid
+		}
+		token, tokenOK := fields[0].(string)
+		terminal, terminalOK := fields[1].(string)
+		if !tokenOK || !terminalOK || token <= previous || !oneOf(terminal, "applied", "abstain") {
+			return AcceptanceAudit{}, ErrInvalid
+		}
+		var output []byte
+		if fields[2] != nil {
+			output, err = json.Marshal(fields[2])
+			if err != nil {
+				return AcceptanceAudit{}, err
+			}
+		}
+		expected[token] = Observation{token, terminal, output}
+		previous = token
+	}
+	anchors := []string{"request-target", "from-value", "first-local"}
+	targets := []string{"definition", "references", "definition+references"}
+	scopes := []string{"local", "global"}
+	guards := []string{"equals-from", "any"}
+	localities := []string{"required", "none"}
+	best := int(^uint(0) >> 1)
+	var winners [][]byte
+	var matrixRows []any
+	applications := 0
+	latentHeldoutExact := false
+	for _, anchor := range anchors {
+		for _, target := range targets {
+			for _, scope := range scopes {
+				for _, guard := range guards {
+					for _, locality := range localities {
+						schemaBytes, _ := json.Marshal([]any{"transform-schema/v1", anchor, target, scope, guard, locality})
+						trainingExact, heldoutExact := true, true
+						var outcomes []any
+						for _, test := range training {
+							result, applyErr := Apply(test.before, schemaBytes)
+							if applyErr != nil {
+								return AcceptanceAudit{}, applyErr
+							}
+							applications++
+							matches := test.kind == "positive" && result.Terminal == "applied" && bytes.Equal(result.Output, test.after) || test.kind == "abstain" && len(result.Terminal) >= 8 && result.Terminal[:8] == "abstain/"
+							trainingExact = trainingExact && matches
+							outcomes = append(outcomes, []any{test.token, result.Terminal, auditDigest(result.Output), matches})
+						}
+						for _, test := range heldout {
+							result, applyErr := Apply(test.before, schemaBytes)
+							if applyErr != nil {
+								return AcceptanceAudit{}, applyErr
+							}
+							applications++
+							truth, exists := expected[test.token]
+							matches := exists && (truth.Terminal == "applied" && result.Terminal == "applied" && bytes.Equal(result.Output, truth.Output) || truth.Terminal == "abstain" && len(result.Terminal) >= 8 && result.Terminal[:8] == "abstain/")
+							heldoutExact = heldoutExact && matches
+							outcomes = append(outcomes, []any{test.token, result.Terminal, auditDigest(result.Output), matches})
+						}
+						matrixRows = append(matrixRows, []any{auditDigest(schemaBytes), trainingExact, heldoutExact, outcomes})
+						if bytes.Equal(schemaBytes, latent) {
+							latentHeldoutExact = heldoutExact
+						}
+						if trainingExact {
+							cost := auditSchemaDescription(anchor, target, scope, guard, locality)
+							if cost < best {
+								best = cost
+								winners = [][]byte{schemaBytes}
+							} else if cost == best {
+								winners = append(winners, schemaBytes)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if applications != 72*16 {
+		return AcceptanceAudit{}, ErrInvalid
+	}
+	matrix, _ := json.Marshal([]any{"transform-generator-acceptance-matrix/v1", matrixRows})
+	canonical, _ := json.Marshal(value)
+	if !bytes.Equal(canonical, scorerBytes) {
+		return AcceptanceAudit{}, ErrInvalid
+	}
+	return AcceptanceAudit{applications, 109161, auditDigest(matrix), len(winners) == 1 && bytes.Equal(winners[0], latent) && latentHeldoutExact}, nil
+}
+
+func auditDigest(value []byte) string {
+	if len(value) == 0 {
+		return ""
+	}
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:])
+}
+
+func auditSchemaDescription(anchor, target, scope, guard, locality string) int {
+	cost := map[string]int{"request-target": 1, "from-value": 2, "first-local": 3, "definition": 1, "references": 1, "definition+references": 2, "local": 1, "global": 2, "equals-from": 2, "any": 1, "required": 2, "none": 1}
+	return cost[anchor] + cost[target] + cost[scope] + cost[guard] + cost[locality]
 }
 
 func AuditPolicy(trainingBytes, heldoutBytes, schemaBytes, batchBytes []byte) (PolicyAudit, error) {

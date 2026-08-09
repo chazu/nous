@@ -116,6 +116,7 @@ func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]by
 		}
 		fixtureFiles[base+"/scorer.json"] = scorer
 		fixtureFiles[base+"/family.json"] = mustJSON([]any{"transform-family-assignment/v1", c.Ordinal, c.Family})
+		fixtureFiles[base+"/acceptance.json"] = mustJSON([]any{"transform-generator-acceptance-ledger/v1", c.GeneratorLedger.Applications, c.GeneratorLedger.Work, c.GeneratorLedger.MatrixSHA256, c.GeneratorLedger.Accepted})
 		fixtureFiles[base+"/queue.json"] = policyQueueBytes(c)
 	}
 	fixtureRoot, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
