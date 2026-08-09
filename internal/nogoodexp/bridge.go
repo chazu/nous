@@ -14,10 +14,25 @@ import (
 )
 
 type Disposition struct {
-	Status, Request, Artifact, Binding, Completion, Certificate, Barrier, Proposal string
-	TasksPopped                                                                    int
-	Store                                                                          *unit.Store
-	MeterRecords                                                                   []dsl.NogoodMeterRecord
+	Status, Request, Artifact, Binding, Completion, Certificate, Barrier, Proposal, Memo string
+	TasksPopped                                                                          int
+	Store                                                                                *unit.Store
+	MeterRecords                                                                         []dsl.NogoodMeterRecord
+}
+
+func NewConcreteMemoBridge(domainsDir, exactKey string) (*BridgeExecution, error) {
+	if !validDigest(exactKey) {
+		return nil, fmt.Errorf("invalid concrete memo key")
+	}
+	execution, err := NewBridgeExecution(domainsDir, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	memo := unit.New("NG.ConcreteMemo." + exactKey[:16])
+	memo.Set("isA", []string{"NogoodConcreteMemo", "Anything"})
+	memo.Set("exactKey", exactKey)
+	execution.base.Put(memo)
+	return execution, nil
 }
 
 type BridgeExecution struct {
@@ -29,7 +44,7 @@ type BridgeExecution struct {
 	preflight   []TranscriptEvent
 }
 
-const committedBridgeProfileHash = "ba7cd20055d0f2775e8ef0f30f396ca36d7a2512150ec1bb96623c69772311d3"
+const committedBridgeProfileHash = "6b6275f20242bca8580b6bc9dcd459e19f37359424d1b6d8e53452b7e01a4dfc"
 
 func NewBridgeExecution(domainsDir string, artifact *FrozenArtifact, authority *ArtifactAuthority) (*BridgeExecution, error) {
 	store := unit.NewStore()
@@ -105,10 +120,20 @@ func auditBridgeProfile(store *unit.Store) (string, []string, error) {
 			}
 		}
 	}
-	checks = append(checks, "compare:store-digest", "compare:profile-shape", "compare:source-digests")
+	if !validDigest(profile.StoreDigest) {
+		return "", nil, fmt.Errorf("bridge store digest is invalid")
+	}
+	checks = append(checks, "compare:store-digest")
 	if len(profile.Programs) != 2 || profile.Programs["NG-H-ConsiderPrune.ifWorkingOnTask"] == "" || profile.Programs["NG-H-ConsiderPrune.thenCompute"] == "" {
 		return "", nil, fmt.Errorf("bridge program shape drifted")
 	}
+	checks = append(checks, "compare:profile-shape")
+	for _, digest := range profile.Programs {
+		if !validDigest(digest) {
+			return "", nil, fmt.Errorf("bridge source digest is invalid")
+		}
+	}
+	checks = append(checks, "compare:source-digests")
 	if len(checks) != 54 {
 		return "", nil, fmt.Errorf("bridge preflight performed %d checks, want 54", len(checks))
 	}
@@ -164,13 +189,14 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		return Disposition{}, err
 	}
 	defer dsl.UnregisterNogoodMeter(meterToken)
-	for _, charge := range []struct {
-		category, count int
-		operation       string
-	}{{2, 1, "root-domain-read"}, {3, 2, "root-propose-bind"}, {5, 2, "root-delete-check"}} {
-		if err := dsl.ChargeNogoodMeter(meterToken, charge.operation, charge.category, charge.count); err != nil {
-			return Disposition{}, err
-		}
+	if err := chargeMeterOperations(meterToken, 2, requestName, []string{"root-domain-read"}); err != nil {
+		return Disposition{}, err
+	}
+	if err := chargeMeterOperations(meterToken, 3, requestName, []string{"root-propose", "root-bind"}); err != nil {
+		return Disposition{}, err
+	}
+	if err := chargeMeterOperations(meterToken, 5, requestName, []string{"root-delete", "root-empty-check"}); err != nil {
+		return Disposition{}, err
 	}
 	request := unit.New(requestName)
 	request.Set("isA", []string{"NogoodRequest", "Anything"})
@@ -198,12 +224,17 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 	request.Set("acceptedPromotionDigest", acceptedPromotionDigest)
 	request.Set("acceptedProvenanceDigest", acceptedProvenanceDigest)
 	request.Set("requestDigest", requestDigest)
+	concreteKey, err := concreteMemoKey(problemJSON, decision)
+	if err != nil {
+		return Disposition{}, err
+	}
+	request.Set("concreteMemoKey", concreteKey)
 	request.Set("meterToken", meterToken)
 	for index, variable := range problem.Variables {
 		request.Set(fmt.Sprintf("domain%d", index), slices.Clone(variable.Domain))
 	}
 	store.Put(request)
-	if err := dsl.ChargeNogoodMeter(meterToken, "request-write", 12, 1); err != nil {
+	if err := dsl.ChargeNogoodMeter(meterToken, "request-write", requestName, requestDigest, "ok", 12); err != nil {
 		return Disposition{}, err
 	}
 
@@ -215,7 +246,7 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		return Disposition{}, err
 	}
 	ag.Push(&agenda.Task{Priority: 800, UnitName: requestName, SlotName: "ngConsiderPrune", Reasons: []string{"Consider frozen blocked-pair artifact"}})
-	if err := dsl.ChargeNogoodMeter(meterToken, "agenda-enqueue", 12, 1); err != nil {
+	if err := dsl.ChargeNogoodMeter(meterToken, "agenda-enqueue", requestName, "ngConsiderPrune", "ok", 12); err != nil {
 		return Disposition{}, err
 	}
 	popped := 0
@@ -231,17 +262,20 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		if task.UnitName != requestName || target == nil || target.GetString("requestDigest") != requestDigest {
 			return Disposition{}, fmt.Errorf("cross-request or stale bridge task")
 		}
-		if err := dsl.ChargeNogoodMeter(meterToken, "agenda-dequeue", 12, 1); err != nil {
+		if err := dsl.ChargeNogoodMeter(meterToken, "agenda-dequeue", requestName, "ngConsiderPrune", "ok", 12); err != nil {
 			return Disposition{}, err
 		}
-		if err := dsl.ChargeNogoodMeter(meterToken, "request-digest-check", 12, 1); err != nil {
+		if err := dsl.ChargeNogoodMeter(meterToken, "request-digest-check", requestName, requestDigest, "ok", 12); err != nil {
 			return Disposition{}, err
 		}
 		eng.WorkOnTask(task)
+		if eng.LastError != nil {
+			return Disposition{}, fmt.Errorf("nogood bridge heuristic execution: %w", eng.LastError)
+		}
 		if len(eng.VM.DeletedUnits) != 0 {
 			return Disposition{}, fmt.Errorf("bridge deleted units")
 		}
-		if err := dsl.ChargeNogoodMeter(meterToken, "engine-dispatch", 12, 22); err != nil {
+		if err := chargeMeterOperations(meterToken, 12, requestName+".ngConsiderPrune", engineDispatchOperations); err != nil {
 			return Disposition{}, err
 		}
 		popped++
@@ -251,8 +285,8 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 		return Disposition{}, fmt.Errorf("missing sealed disposition")
 	}
 	status := disposition.GetString("status")
-	result := Disposition{Status: status, Request: requestName, Artifact: disposition.GetString("artifact"), Binding: disposition.GetString("binding"), Completion: disposition.GetString("completion"), Certificate: disposition.GetString("certificate"), Barrier: disposition.GetString("barrier"), Proposal: disposition.GetString("proposal"), TasksPopped: popped, Store: store}
-	if status != "resume" && status != "propose-prune" && status != "bridge-invalid" {
+	result := Disposition{Status: status, Request: requestName, Artifact: disposition.GetString("artifact"), Binding: disposition.GetString("binding"), Completion: disposition.GetString("completion"), Certificate: disposition.GetString("certificate"), Barrier: disposition.GetString("barrier"), Proposal: disposition.GetString("proposal"), Memo: disposition.GetString("memo"), TasksPopped: popped, Store: store}
+	if status != "resume" && status != "propose-prune" && status != "concrete-prune" && status != "bridge-invalid" {
 		return Disposition{}, fmt.Errorf("invalid disposition status %q", status)
 	}
 	if status == "bridge-invalid" {
@@ -280,10 +314,45 @@ func (execution *BridgeExecution) Consider(problemJSON []byte, decision nogoods.
 				}
 				return Disposition{}, fmt.Errorf("adapter proposal check %d failed", index+1)
 			}
+			if err := dsl.ChargeNogoodMeter(meterToken, fmt.Sprintf("adapter-proposal-check-%d", index+1), result.Request, result.Proposal, "ok", 10); err != nil {
+				return Disposition{}, err
+			}
 		}
-	}
-	if err := dsl.ChargeNogoodMeter(meterToken, "adapter-disposition-check", 10, 6); err != nil {
-		return Disposition{}, err
+	} else if status == "concrete-prune" {
+		memo := store.Get(result.Memo)
+		checks := [6]bool{
+			disposition.GetBool("sealed") && disposition.GetString("request") == requestName,
+			memo != nil && store.IsA(result.Memo, "NogoodConcreteMemo"),
+			memo != nil && memo.GetString("exactKey") == concreteKey,
+			len(store.Examples("NogoodConcreteMemo")) == 2,
+			disposition.GetInt("applicableCount") == 0,
+			result.Artifact == "" && result.Binding == "" && result.Completion == "" && result.Certificate == "" && result.Barrier == "" && result.Proposal == "",
+		}
+		for index, passed := range checks {
+			if !passed {
+				return Disposition{}, fmt.Errorf("adapter concrete memo check %d failed", index+1)
+			}
+			if err := dsl.ChargeNogoodMeter(meterToken, fmt.Sprintf("adapter-concrete-check-%d", index+1), result.Request, result.Memo, "ok", 10); err != nil {
+				return Disposition{}, err
+			}
+		}
+	} else {
+		resumeChecks := [6]bool{
+			disposition.GetBool("sealed") && disposition.GetString("request") == requestName,
+			disposition.GetString("requestDigest") == requestDigest,
+			disposition.GetString("targetDigest") == targetDigest,
+			disposition.GetString("decisionDigest") == decisionDigest,
+			disposition.GetInt("applicableCount") == 0,
+			result.Artifact == "" && result.Binding == "" && result.Completion == "" && result.Certificate == "" && result.Barrier == "" && result.Proposal == "",
+		}
+		for index, passed := range resumeChecks {
+			if !passed {
+				return Disposition{}, fmt.Errorf("adapter resume check %d failed", index+1)
+			}
+			if err := dsl.ChargeNogoodMeter(meterToken, fmt.Sprintf("adapter-resume-check-%d", index+1), result.Request, result.Status, "ok", 10); err != nil {
+				return Disposition{}, err
+			}
+		}
 	}
 	records, err := dsl.NogoodMeterSnapshot(meterToken)
 	if err != nil {

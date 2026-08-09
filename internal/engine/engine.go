@@ -49,6 +49,11 @@ type Engine struct {
 	// OnFocusUnit, if set, is called each time unit-focus selects a unit.
 	// Test hook; nil in production.
 	OnFocusUnit func(unit string)
+
+	// LastError retains the most recent non-abort heuristic execution error so
+	// bounded experiment drivers can treat a swallowed rule failure as
+	// mechanical invalidity.
+	LastError error
 }
 
 // New creates an engine wired to the given store and agenda.

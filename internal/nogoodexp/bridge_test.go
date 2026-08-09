@@ -43,13 +43,13 @@ func TestBridgeInvalidAmbiguityIsAnError(t *testing.T) {
 	}
 }
 
-func TestCUEBridgeMatcherAgreesAcrossAllThreeColorTwoValueDomains(t *testing.T) {
+func TestCUEBridgeMatcherAgreesAcrossAllFourColorTwoValueDomains(t *testing.T) {
 	artifact, authority := learnedArtifact(t)
 	execution, err := NewBridgeExecution("../../domains", &artifact, &authority)
 	if err != nil {
 		t.Fatal(err)
 	}
-	domains := [][]int{{0, 1}, {0, 2}, {1, 2}}
+	domains := [][]int{{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}}
 	ordinal := 0
 	for anchor := 0; anchor < 3; anchor++ {
 		for left := range domains {
@@ -61,7 +61,7 @@ func TestCUEBridgeMatcherAgreesAcrossAllThreeColorTwoValueDomains(t *testing.T) 
 						for index := range variables {
 							variables[index] = nogoods.Variable{Alias: fmt.Sprintf("v%d", index), Domain: slices.Clone(variableDomains[index])}
 						}
-						problem := nogoods.Problem{Version: nogoods.ProblemVersion, ColorAliases: []string{"c0", "c1", "c2"}, Variables: variables, Edges: []nogoods.Edge{{Left: 0, Right: 1}, {Left: 0, Right: 2}, {Left: 1, Right: 2}}}
+						problem := nogoods.Problem{Version: nogoods.ProblemVersion, ColorAliases: []string{"c0", "c1", "c2", "c3"}, Variables: variables, Edges: []nogoods.Edge{{Left: 0, Right: 1}, {Left: 0, Right: 2}, {Left: 1, Right: 2}}}
 						encoded, encodeErr := problem.CanonicalJSON()
 						if encodeErr != nil {
 							t.Fatal(encodeErr)
@@ -89,9 +89,65 @@ func TestCUEBridgeMatcherAgreesAcrossAllThreeColorTwoValueDomains(t *testing.T) 
 			}
 		}
 	}
-	if ordinal != 162 {
+	if ordinal != 1296 {
 		t.Fatalf("exhaustive cases = %d", ordinal)
 	}
+}
+
+func TestCUEBridgeExhaustsFourColorSubstitutionsEdgeMasksAndAuthority(t *testing.T) {
+	artifact, authority := learnedArtifact(t)
+	authorized, err := NewBridgeExecution("../../domains", &artifact, &authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedOnly, err := NewBridgeExecution("../../domains", &artifact, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinal := 0
+	for blocked := 0; blocked < 4; blocked++ {
+		for escape := 0; escape < 4; escape++ {
+			for only := 0; only < 4; only++ {
+				if blocked == escape || blocked == only || escape == only {
+					continue
+				}
+				for edgeMask := 0; edgeMask < 8; edgeMask++ {
+					problem := nogoods.Problem{Version: nogoods.ProblemVersion, ColorAliases: []string{"c0", "c1", "c2", "c3"}, Variables: []nogoods.Variable{{Alias: "a", Domain: sortedTestPair(blocked, escape)}, {Alias: "x", Domain: sortedTestPair(blocked, only)}, {Alias: "y", Domain: sortedTestPair(blocked, only)}}}
+					for bit, edge := range []nogoods.Edge{{Left: 0, Right: 1}, {Left: 0, Right: 2}, {Left: 1, Right: 2}} {
+						if edgeMask&(1<<bit) != 0 {
+							problem.Edges = append(problem.Edges, edge)
+						}
+					}
+					encoded, encodeErr := problem.CanonicalJSON()
+					if encodeErr != nil {
+						t.Fatal(encodeErr)
+					}
+					decision := nogoods.Literal{Variable: 0, Color: blocked}
+					for name, execution := range map[string]*BridgeExecution{"authorized": authorized, "parsed-only": parsedOnly} {
+						disposition, considerErr := execution.Consider(encoded, decision)
+						if considerErr != nil {
+							t.Fatalf("case %d %s: %v", ordinal, name, considerErr)
+						}
+						want := name == "authorized" && edgeMask == 7
+						if got := disposition.Status == "propose-prune"; got != want {
+							t.Fatalf("case %d %s mask=%d proposal=%v want %v", ordinal, name, edgeMask, got, want)
+						}
+						ordinal++
+					}
+				}
+			}
+		}
+	}
+	if ordinal != 384 {
+		t.Fatalf("authority/mask cases = %d", ordinal)
+	}
+}
+
+func sortedTestPair(left, right int) []int {
+	if left > right {
+		left, right = right, left
+	}
+	return []int{left, right}
 }
 
 func otherColor(domain []int, blocked int) int {
@@ -176,6 +232,29 @@ func TestEmptyArtifactUsesSameBridgeAndNeverPrunes(t *testing.T) {
 		if disposition.Status != "resume" || disposition.TasksPopped != 1 {
 			t.Fatalf("empty artifact disposition = %#v", disposition)
 		}
+	}
+}
+
+func TestConcreteMemoPrunesOnlyItsExactTrainingTupleThroughBridge(t *testing.T) {
+	training, err := nogoodfixture.Training()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := concreteMemoKey(training[0].ProblemJSON, training[0].Decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := NewConcreteMemoBridge("../../domains", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hit, err := bridge.Consider(training[0].ProblemJSON, training[0].Decision)
+	if err != nil || hit.Status != "concrete-prune" {
+		t.Fatalf("exact memo hit = %#v, %v", hit, err)
+	}
+	miss, err := bridge.Consider(training[1].ProblemJSON, training[1].Decision)
+	if err != nil || miss.Status != "resume" {
+		t.Fatalf("exact memo miss = %#v, %v", miss, err)
 	}
 }
 

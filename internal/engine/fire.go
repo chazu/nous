@@ -182,6 +182,7 @@ func (e *Engine) executeThenParts(h *unit.Unit, heuristicName string) (bool, boo
 				return true, false
 			}
 			e.log(3, "    %s.%s error: %v", heuristicName, slot, err)
+			e.LastError = err
 			e.trackThenPartRecord(heuristicName, slot, false)
 			continue
 		}

@@ -32,7 +32,6 @@ func init() {
 		"ng-digest-record":         bNGDigestRecord,
 		"ng-unit-set-digest":       bNGUnitSetDigest,
 		"ng-meter":                 bNGMeter,
-		"ng-meter-n":               bNGMeterN,
 	})
 }
 
@@ -42,6 +41,9 @@ func init() {
 type NogoodMeterRecord struct {
 	Category  uint8
 	Operation string
+	Subject   string
+	Object    string
+	Outcome   string
 }
 
 type nogoodMeter struct {
@@ -85,8 +87,8 @@ func NogoodMeterSnapshot(token string) ([]NogoodMeterRecord, error) {
 	return append([]NogoodMeterRecord(nil), meter.records...), nil
 }
 
-func ngCharge(token, operation string, category, count int) error {
-	if category < 1 || category > 12 || count < 1 || count > 64 || operation == "" {
+func ngCharge(token, operation, subject, object, outcome string, category int) error {
+	if category < 1 || category > 12 || operation == "" || subject == "" || object == "" || outcome == "" {
 		return errors.New("invalid nogood meter event")
 	}
 	nogoodMeters.Lock()
@@ -97,45 +99,28 @@ func ngCharge(token, operation string, category, count int) error {
 	}
 	meter.mu.Lock()
 	defer meter.mu.Unlock()
-	for index := 0; index < count; index++ {
-		name := operation
-		if count > 1 {
-			name = fmt.Sprintf("%s:%02d", operation, index)
-		}
-		meter.records = append(meter.records, NogoodMeterRecord{Category: uint8(category), Operation: name})
-	}
+	meter.records = append(meter.records, NogoodMeterRecord{Category: uint8(category), Operation: operation, Subject: subject, Object: object, Outcome: outcome})
 	return nil
 }
 
 // ChargeNogoodMeter records adapter-side semantic operations against the same
 // verifier-owned capability used by the CUE heuristic.
-func ChargeNogoodMeter(token, operation string, category, count int) error {
-	return ngCharge(token, operation, category, count)
+func ChargeNogoodMeter(token, operation, subject, object, outcome string, category int) error {
+	return ngCharge(token, operation, subject, object, outcome, category)
 }
 
 func bNGMeter(vm *VM) error {
+	outcome, outcomeOK := ngString(vm.pop())
+	objectValue := vm.pop()
+	object, objectOK := ngString(objectValue)
+	subject, subjectOK := ngString(vm.pop())
 	operation, operationOK := ngString(vm.pop())
 	category, categoryOK := ngInt(vm.pop())
 	token, tokenOK := ngString(vm.pop())
-	if !operationOK || !categoryOK || !tokenOK {
-		return errors.New("invalid nogood meter operands")
+	if !outcomeOK || !objectOK || !subjectOK || !operationOK || !categoryOK || !tokenOK {
+		return fmt.Errorf("invalid nogood meter operands token=%v category=%v operation=%q/%v subject=%q/%v object-kind=%v outcome=%v", tokenOK, categoryOK, operation, operationOK, subject, subjectOK, objectValue.Kind(), outcomeOK)
 	}
-	if err := ngCharge(token, operation, category, 1); err != nil {
-		return err
-	}
-	vm.push(BoolVal(true))
-	return nil
-}
-
-func bNGMeterN(vm *VM) error {
-	count, countOK := ngInt(vm.pop())
-	operation, operationOK := ngString(vm.pop())
-	category, categoryOK := ngInt(vm.pop())
-	token, tokenOK := ngString(vm.pop())
-	if !countOK || !operationOK || !categoryOK || !tokenOK {
-		return errors.New("invalid nogood meter operands")
-	}
-	if err := ngCharge(token, operation, category, count); err != nil {
+	if err := ngCharge(token, operation, subject, object, outcome, category); err != nil {
 		return err
 	}
 	vm.push(BoolVal(true))

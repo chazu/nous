@@ -94,7 +94,7 @@ func RunTraining(domainsDir string) (TrainingRun, error) {
 		return TrainingRun{}, fmt.Errorf("initialize nogood VM: %w", err)
 	}
 	ag.Push(&agenda.Task{Priority: 900, UnitName: experiment.Name, SlotName: "ngStart", Reasons: []string{"Begin bounded nogood acquisition"}})
-	if err := dsl.ChargeNogoodMeter(meterToken, "training-initial-enqueue", 12, 1); err != nil {
+	if err := dsl.ChargeNogoodMeter(meterToken, "agenda-enqueue", experiment.Name, "ngStart", "ok", 12); err != nil {
 		return TrainingRun{}, err
 	}
 	popped := 0
@@ -107,14 +107,17 @@ func RunTraining(domainsDir string) (TrainingRun, error) {
 		if task == nil {
 			return TrainingRun{}, fmt.Errorf("agenda length was nonzero but Pop returned nil")
 		}
-		if err := dsl.ChargeNogoodMeter(meterToken, "training-task-dequeue", 12, 1); err != nil {
+		if err := dsl.ChargeNogoodMeter(meterToken, "agenda-dequeue", task.UnitName, task.SlotName, "ok", 12); err != nil {
 			return TrainingRun{}, err
 		}
 		eng.WorkOnTask(task)
+		if eng.LastError != nil {
+			return TrainingRun{}, fmt.Errorf("nogood heuristic execution on %s.%s: %w", task.UnitName, task.SlotName, eng.LastError)
+		}
 		if len(eng.VM.DeletedUnits) != 0 {
 			return TrainingRun{}, fmt.Errorf("nogood heuristic deleted units")
 		}
-		if err := dsl.ChargeNogoodMeter(meterToken, "training-engine-dispatch", 12, 22); err != nil {
+		if err := chargeMeterOperations(meterToken, 12, task.UnitName+"."+task.SlotName, engineDispatchOperations); err != nil {
 			return TrainingRun{}, err
 		}
 		popped++

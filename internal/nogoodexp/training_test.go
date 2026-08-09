@@ -82,6 +82,12 @@ func TestTrainingIsDeterministicAtStoreBoundary(t *testing.T) {
 func TestFreezeRefusesCorruptedPromotedStoreAuthority(t *testing.T) {
 	for name, corrupt := range map[string]func(TrainingRun){
 		"artifact-mask": func(run TrainingRun) { run.Store.Get(run.Artifact).Set("mask", 5) },
+		"provenance":    func(run TrainingRun) { run.Store.Get(run.Artifact).Set("provenance", "attacker") },
+		"evidence": func(run TrainingRun) {
+			candidate := run.Store.Get(run.Store.Examples("NogoodCandidate")[1])
+			evidence := run.Store.Get(candidate.GetStrings("evidenceUnits")[0])
+			evidence.Set("matches", !evidence.GetBool("matches"))
+		},
 		"promotion-color": func(run TrainingRun) {
 			proofs := run.Store.Get(run.Artifact).GetStrings("promotionProofs")
 			promotionCase := run.Store.Get(run.Store.Get(proofs[0]).GetString("case"))

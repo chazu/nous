@@ -21,6 +21,7 @@ units: [
 	{name: "NogoodSelection", worth: 650, isA: ["Anything"]},
 	{name: "NogoodPromotionProof", worth: 700, isA: ["Anything"]},
 	{name: "NogoodArtifact", worth: 800, isA: ["Anything"]},
+	{name: "NogoodConcreteMemo", worth: 700, isA: ["Anything"]},
 	{name: "NogoodRequest", worth: 700, isA: ["Anything"]},
 	{name: "NogoodRoleCandidate", worth: 450, isA: ["Anything"]},
 	{name: "NogoodPairProposal", worth: 450, isA: ["Anything"]},

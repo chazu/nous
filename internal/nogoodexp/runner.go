@@ -108,6 +108,10 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 		}
 		bridges[policy] = bridge
 	}
+	bridges["concrete-memo"], err = NewConcreteMemoBridge(domainsDir, trainingMemoKey)
+	if err != nil {
+		return PanelExecution{}, err
+	}
 	acquisition, err := acquisitionTranscript(training, bridges["nous-generalized"].preflight)
 	if err != nil {
 		return PanelExecution{}, err
@@ -124,7 +128,7 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 			policyEvents = appendEvents(policyEvents, acquisition)
 		}
 		for _, task := range tasks {
-			outcome, events, err := runPolicyTask(domainsDir, policy, task, artifact, authority, bridges[policy], trainingMemoKey)
+			outcome, events, err := runPolicyTask(domainsDir, policy, task, artifact, authority, bridges[policy])
 			if err != nil {
 				return PanelExecution{}, fmt.Errorf("%s task %d: %w", policy, task.Ordinal, err)
 			}
@@ -145,15 +149,12 @@ func runPanelExecution(domainsDir, role, panel string, tasks []nogoodfixture.Tas
 	return execution, nil
 }
 
-func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact FrozenArtifact, authority ArtifactAuthority, bridge *BridgeExecution, trainingMemoKey string) (TaskOutcome, []TranscriptEvent, error) {
+func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact FrozenArtifact, authority ArtifactAuthority, bridge *BridgeExecution) (TaskOutcome, []TranscriptEvent, error) {
 	decision := nogoodbaseline.Literal{Variable: task.Decision.Variable, Color: task.Decision.Color}
-	oracle, err := nogoodoracle.Enumerate(task.ProblemJSON, nogoodoracle.Literal(decision))
-	if err != nil {
-		return TaskOutcome{}, nil, err
-	}
 	var result nogoodbaseline.Result
 	var disposition string
 	var events []TranscriptEvent
+	var err error
 	switch policy {
 	case "chronological":
 		result, err = nogoodbaseline.Chronological(task.ProblemJSON, decision)
@@ -203,10 +204,6 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
 		}
 	case "reset":
-		training, trainErr := RunTraining(domainsDir)
-		if trainErr != nil {
-			return TaskOutcome{}, nil, trainErr
-		}
 		emptyBridge, bridgeErr := NewBridgeExecution(domainsDir, nil, nil)
 		if bridgeErr != nil {
 			return TaskOutcome{}, nil, bridgeErr
@@ -216,14 +213,6 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			return TaskOutcome{}, nil, bridgeErr
 		}
 		disposition = d.Status
-		localAcquisition, acquisitionErr := acquisitionTranscript(training, emptyBridge.preflight)
-		if acquisitionErr != nil {
-			return TaskOutcome{}, nil, acquisitionErr
-		}
-		for index := range localAcquisition {
-			localAcquisition[index].TaskOrdinal = uint32(task.Ordinal)
-		}
-		events = appendEvents(events, localAcquisition)
 		bridgeEvents, meterErr := bridgeTranscript(uint32(task.Ordinal), d)
 		if meterErr != nil {
 			return TaskOutcome{}, nil, meterErr
@@ -244,18 +233,7 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			return TaskOutcome{}, nil, meterErr
 		}
 		events = appendEvents(events, bridgeEvents)
-		if policy == "concrete-memo" {
-			key, keyErr := concreteMemoKey(task.ProblemJSON, task.Decision)
-			if keyErr != nil {
-				return TaskOutcome{}, nil, keyErr
-			}
-			outcome := "miss"
-			if key == trainingMemoKey {
-				outcome = "hit"
-			}
-			events = append(events, TranscriptEvent{Category: 12, Code: 17, TaskOrdinal: uint32(task.Ordinal), Operands: [8]TranscriptOperand{ID("memo:" + key[:16]), OptionalID("training:" + trainingMemoKey[:16]), ID("lookup"), ID(outcome), Omitted(), Omitted(), Omitted(), Omitted()}})
-		}
-		prune := d.Status == "propose-prune" && policy == "nous-generalized"
+		prune := d.Status == "propose-prune" && policy == "nous-generalized" || d.Status == "concrete-prune" && policy == "concrete-memo"
 		if prune {
 			finalEvents, finalErr := learnedPruneTerminalEvents(uint32(task.Ordinal))
 			if finalErr != nil {
@@ -267,6 +245,12 @@ func runPolicyTask(domainsDir, policy string, task nogoodfixture.Task, artifact 
 			result, err = nogoodbaseline.MACCBJ(task.ProblemJSON, decision)
 		}
 	}
+	if err != nil {
+		return TaskOutcome{}, nil, err
+	}
+	// Held-out truth is deliberately unavailable until the policy has
+	// terminated and its complete transcript has been materialized.
+	oracle, err := nogoodoracle.Enumerate(task.ProblemJSON, nogoodoracle.Literal(decision))
 	if err != nil {
 		return TaskOutcome{}, nil, err
 	}
