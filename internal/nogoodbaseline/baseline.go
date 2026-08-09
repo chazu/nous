@@ -195,7 +195,7 @@ func (s *solver) search() ([]int, map[int]bool) {
 			failure := s.assignedNeighborSet(variable)
 			failure[variable] = true
 			s.restore(domains, explanations, assignment)
-			for member := range failure {
+			for _, member := range sortedSetMembers(failure) {
 				if member != variable {
 					conflicts[member] = true
 					s.meter.charge(7, "conflict-insert", member)
@@ -216,7 +216,7 @@ func (s *solver) search() ([]int, map[int]bool) {
 			s.meter.charge(7, "backjump", variable)
 			return nil, failure
 		}
-		for member := range failure {
+		for _, member := range sortedSetMembers(failure) {
 			if member != variable {
 				conflicts[member] = true
 				s.meter.charge(7, "conflict-union", member)
@@ -300,7 +300,7 @@ func (s *solver) ac3(queue []arc) map[int]bool {
 				explanation := map[int]bool{}
 				for _, original := range s.p.Variables[item.y].Domain {
 					if original != xColor {
-						for member := range s.explanations[item.y][original] {
+						for _, member := range sortedSetMembers(s.explanations[item.y][original]) {
 							explanation[member] = true
 							s.meter.charge(7, "explanation-union", member)
 						}
@@ -347,7 +347,7 @@ func (s *solver) remove(variable, color int, explanation map[int]bool) {
 func (s *solver) wipeout(variable int) map[int]bool {
 	out := map[int]bool{}
 	for _, color := range s.p.Variables[variable].Domain {
-		for member := range s.explanations[variable][color] {
+		for _, member := range sortedSetMembers(s.explanations[variable][color]) {
 			out[member] = true
 			s.meter.charge(7, "wipeout-union", member)
 		}
@@ -412,6 +412,15 @@ func cloneSet(source map[int]bool) map[int]bool {
 		out[k] = v
 	}
 	return out
+}
+
+func sortedSetMembers(source map[int]bool) []int {
+	members := make([]int, 0, len(source))
+	for member := range source {
+		members = append(members, member)
+	}
+	sort.Ints(members)
+	return members
 }
 func cloneExplanations(source []map[int]map[int]bool) []map[int]map[int]bool {
 	out := make([]map[int]map[int]bool, len(source))

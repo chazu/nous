@@ -1,6 +1,8 @@
 package nogoodexp
 
 import (
+	"bytes"
+	"encoding/binary"
 	"slices"
 	"testing"
 
@@ -50,5 +52,41 @@ func TestCompletePolicyMatrixOnUtilitySmokePanel(t *testing.T) {
 		if got, want := reset.Tasks[index].Work, noArtifact.Tasks[index].Work+54; got != want {
 			t.Fatalf("reset task %d work = %d, want fresh-profile work %d", smoke[index].Ordinal, got, want)
 		}
+	}
+}
+
+func TestMACCBJDevelopmentTranscriptIsDeterministic(t *testing.T) {
+	tasks, err := nogoodfixture.Panel("development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func() []TranscriptEvent {
+		var events []TranscriptEvent
+		for _, task := range tasks {
+			_, taskEvents, runErr := runPolicyTask("../../domains", "mac-cbj", task, FrozenArtifact{}, ArtifactAuthority{}, nil)
+			if runErr != nil {
+				t.Fatal(runErr)
+			}
+			events = appendEvents(events, taskEvents)
+		}
+		return events
+	}
+	left, err := EncodeTranscript(run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := EncodeTranscript(run())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(left.Raw, right.Raw) {
+		offset := firstDifferentByte(left.Raw, right.Raw)
+		leftStart := transcriptHeaderSize + int(binary.BigEndian.Uint64(left.Raw[8:16]))
+		rightStart := transcriptHeaderSize + int(binary.BigEndian.Uint64(right.Raw[8:16]))
+		leftRecord := leftStart + ((offset-leftStart)/transcriptRecordSize)*transcriptRecordSize
+		rightRecord := rightStart + ((offset-rightStart)/transcriptRecordSize)*transcriptRecordSize
+		leftID := binary.BigEndian.Uint32(left.Raw[leftRecord+20 : leftRecord+24])
+		rightID := binary.BigEndian.Uint32(right.Raw[rightRecord+20 : rightRecord+24])
+		t.Fatalf("%s variable=%s/%s", describeTranscriptDifference(left.Raw, right.Raw, offset), left.Dictionary[leftID-1], right.Dictionary[rightID-1])
 	}
 }
