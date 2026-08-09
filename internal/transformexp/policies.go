@@ -33,6 +33,7 @@ type PolicyOutcome struct {
 	Schema                []byte
 	Applications          int
 	HeldoutCorrect        int
+	HeldoutCorrectBits    byte
 	HeldoutTotal          int
 	FalseApplications     int
 	NonmatchingWork       int64
@@ -143,7 +144,7 @@ func scoreSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
 		return out, err
 	}
 	expected := expectedByToken(c)
-	for _, test := range heldout.Cases {
+	for caseIndex, test := range heldout.Cases {
 		beforeEventCount := len(out.baselineEvents)
 		application, events, applyErr := transformbaseline.ApplySchemaMetered(test.Before, out.Schema, "heldout")
 		err = applyErr
@@ -162,6 +163,7 @@ func scoreSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
 		}
 		if correctApplication(application, truth) {
 			out.HeldoutCorrect++
+			out.HeldoutCorrectBits |= 1 << caseIndex
 		}
 		if truth.Terminal == "abstain" && application.Terminal == "applied" {
 			out.FalseApplications++
@@ -211,7 +213,7 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 	vm := dsl.NewVM(run.Store, agenda.New(), nil)
 	vm.CurrentTask = &agenda.Task{UnitName: experiment, SlotName: "tsHeldout"}
 	expected := expectedByToken(c)
-	for _, test := range heldout.Cases {
+	for caseIndex, test := range heldout.Cases {
 		beforeRecords, snapshotErr := dsl.TransformMeterSnapshot(meterToken)
 		if snapshotErr != nil {
 			return out, snapshotErr
@@ -231,6 +233,7 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 		}
 		if correctApplication(application, truth) {
 			out.HeldoutCorrect++
+			out.HeldoutCorrectBits |= 1 << caseIndex
 		}
 		if truth.Terminal == "abstain" && application.Terminal == "applied" {
 			out.FalseApplications++
@@ -292,7 +295,7 @@ func scoreReplay(c curriculum, batch []byte, out PolicyOutcome) (PolicyOutcome, 
 		return out, err
 	}
 	expected := expectedByToken(c)
-	for _, test := range heldout.Cases {
+	for caseIndex, test := range heldout.Cases {
 		beforeEventCount := len(out.baselineEvents)
 		application, events, err := transformbaseline.ReplayMetered(batch, test.Token, test.Before, "heldout")
 		if err != nil {
@@ -302,6 +305,7 @@ func scoreReplay(c curriculum, batch []byte, out PolicyOutcome) (PolicyOutcome, 
 		out.baselineEvents = append(out.baselineEvents, events...)
 		if correctApplication(application, expected[test.Token]) {
 			out.HeldoutCorrect++
+			out.HeldoutCorrectBits |= 1 << caseIndex
 		}
 		if expected[test.Token].Terminal == "abstain" {
 			out.NonmatchingWork += baselineEventWork(out.baselineEvents[beforeEventCount:])
@@ -370,7 +374,7 @@ func programBatch(run acquisitionRun) ([]byte, error) {
 }
 
 func policyToken(c curriculum, policy Policy) string {
-	return fmt.Sprintf("%s-%03d", policy, c.Ordinal)
+	return c.PolicyTokens[policy]
 }
 
 func policySeed(c curriculum, policy Policy) (uint64, uint64) {
@@ -385,9 +389,6 @@ func policyManifestDigest(c curriculum, policy Policy) string {
 func policyManifestBytes(c curriculum, policy Policy) []byte {
 	training := sha256.Sum256(c.Training)
 	heldout := sha256.Sum256(c.Heldout)
-	panel := c.Panel
-	if panel == "" {
-		panel = "safe"
-	}
-	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", panel, policy, c.PolicyTokens[policy], hex.EncodeToString(training[:]), hex.EncodeToString(heldout[:]), "", []int{12000, 50000, 48, 2000, 20000}})
+	queueDigest := digestBytes(mustJSON([]any{"transform-policy-queue/v1", c.Ordinal, empiricalPolicies}))
+	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", c.PanelCommitment, policy, c.PolicyTokens[policy], hex.EncodeToString(training[:]), hex.EncodeToString(heldout[:]), queueDigest, []int{12000, 50000, 48, 2000, 20000}})
 }

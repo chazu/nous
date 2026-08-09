@@ -53,8 +53,8 @@ func runAcquisitionConfigured(domainsDir string, trainingBytes []byte, token str
 	defer dsl.UnregisterTransformMeter(meterToken)
 	experiment.Set("meterToken", meterToken)
 	store.Put(experiment)
-	for i, c := range training.Cases {
-		name := fmt.Sprintf("TS.Example.%s.%02d", token, i)
+	for _, c := range training.Cases {
+		name := fmt.Sprintf("TS.Example.%s.%s", token, c.Token)
 		u := unit.New(name)
 		u.Set("isA", []string{"TransformTrainingCase", "Anything"})
 		u.Set("experiment", experiment.Name)

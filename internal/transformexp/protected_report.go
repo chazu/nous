@@ -2,8 +2,10 @@ package transformexp
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/bits"
 )
 
 type protectedReport struct {
@@ -166,9 +168,11 @@ func decodeProtectedReport(data []byte) (protectedReport, error) {
 		if len(wire) != 10 || json.Unmarshal(wire[0], &rows[index].Ordinal) != nil || json.Unmarshal(wire[1], &rows[index].Family) != nil || json.Unmarshal(wire[2], &rows[index].Policy) != nil || json.Unmarshal(wire[3], &rows[index].Terminal) != nil || json.Unmarshal(wire[4], &rows[index].Work) != nil || json.Unmarshal(wire[5], &rows[index].Applications) != nil || json.Unmarshal(wire[6], &rows[index].SchemaSHA256) != nil || json.Unmarshal(wire[7], &rows[index].HeldoutCorrectBits) != nil || json.Unmarshal(wire[8], &rows[index].FalseApplications) != nil || json.Unmarshal(wire[9], &rows[index].NonmatchingWork) != nil {
 			return protectedReport{}, fmt.Errorf("invalid policy row %d", index)
 		}
-		if rows[index].HeldoutCorrectBits == "ff" {
-			rows[index].HeldoutCorrect = 8
+		decodedBits, decodeErr := hex.DecodeString(rows[index].HeldoutCorrectBits)
+		if decodeErr != nil || len(decodedBits) != 1 {
+			return protectedReport{}, fmt.Errorf("invalid heldout bit vector")
 		}
+		rows[index].HeldoutCorrect = bits.OnesCount8(decodedBits[0])
 	}
 	var inferenceWire []json.RawMessage
 	if json.Unmarshal(values[10], &inferenceWire) != nil || len(inferenceWire) != 15 {

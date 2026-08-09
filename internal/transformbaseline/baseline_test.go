@@ -1,11 +1,38 @@
 package transformbaseline
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 
 	"github.com/chazu/nous/internal/transformfixturecore"
 )
+
+func TestConcreteReplayUsesOnlyCanonicalInputDigest(t *testing.T) {
+	batch := transformfixturecore.ProgramBatch{}
+	var target []byte
+	for index, value := range []string{"old", "cold", "warm", "mild"} {
+		forest, _ := json.Marshal([]any{"typed-reference-forest/v1", []any{
+			[]any{0, "group", -1, "", "", "", "", -1},
+			[]any{1, "definition", 0, "d", value, "", "", -1},
+		}})
+		program, _ := json.Marshal([]any{"concrete-program/v1", []any{[]any{"set-value/v1", 1, "new"}}})
+		digest := sha256.Sum256(forest)
+		batch.Rows = append(batch.Rows, transformfixturecore.ProgramRow{Token: string([]byte("000000000000000")) + string(byte('0'+index)), BeforeDigest: hex.EncodeToString(digest[:]), Program: program})
+		if index == 0 {
+			target = forest
+		}
+	}
+	encoded, err := batch.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	application, err := Replay(encoded, "ffffffffffffffff", target)
+	if err != nil || application.Terminal != "applied" {
+		t.Fatalf("digest hit with unrelated token = %+v, %v", application, err)
+	}
+}
 
 func TestSchemaUniverseAndOrdering(t *testing.T) {
 	all := schemas()

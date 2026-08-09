@@ -98,7 +98,7 @@ func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]by
 		if json.Unmarshal(c.Latent, &latent) != nil {
 			return nil, nil, fmt.Errorf("latent JSON")
 		}
-		fixtureFiles[base+"/scorer.json"] = mustJSON([]any{"transform-scorer-curriculum/v1", c.Family, c.SeedCommitment, 0, latent, expected})
+		fixtureFiles[base+"/scorer.json"] = mustJSON([]any{"transform-scorer-curriculum/v1", c.Family, c.SeedCommitment, c.AcceptedAttempt, latent, expected})
 		fixtureFiles[base+"/family.json"] = mustJSON([]any{"transform-family-assignment/v1", c.Ordinal, c.Family})
 		fixtureFiles[base+"/queue.json"] = mustJSON([]any{"transform-policy-queue/v1", c.Ordinal, empiricalPolicies})
 	}

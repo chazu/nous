@@ -244,9 +244,6 @@ func pairedRows(rows []PolicyReportRow, curricula int) ([]pairedTransformRow, er
 		if !lanes[0] || !lanes[1] {
 			return nil, fmt.Errorf("incomplete paired row %d", ordinal)
 		}
-		if result[ordinal].NonmatchingPBEWork == 0 {
-			result[ordinal].NonmatchingPBEWork = 320
-		}
 	}
 	return result, nil
 }
@@ -687,7 +684,8 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	}
 	for index, row := range report.Payload.Rows {
 		ordinal, policyIndex := index/len(empiricalPolicies), index%len(empiricalPolicies)
-		if row.Ordinal != ordinal || row.Policy != empiricalPolicies[policyIndex] || row.Family < 0 || row.Family >= len(familySchemas) || row.HeldoutCorrectBits != "00" && row.HeldoutCorrectBits != "ff" {
+		decodedBits, bitsErr := hex.DecodeString(row.HeldoutCorrectBits)
+		if row.Ordinal != ordinal || row.Policy != empiricalPolicies[policyIndex] || row.Family < 0 || row.Family >= len(familySchemas) || bitsErr != nil || len(decodedBits) != 1 {
 			return fmt.Errorf("%s report row ordering/shape mismatch", panel)
 		}
 	}

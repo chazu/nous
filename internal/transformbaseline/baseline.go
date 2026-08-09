@@ -96,7 +96,7 @@ func ApplySchema(forestBytes, schemaBytes []byte) (Application, error) {
 	return Application{Terminal: terminal, Output: output}, err
 }
 
-func Replay(programBatchBytes []byte, token string, forestBytes []byte) (Application, error) {
+func Replay(programBatchBytes []byte, _ string, forestBytes []byte) (Application, error) {
 	batch, err := transformfixturecore.ParseProgramBatch(programBatchBytes)
 	if err != nil {
 		return Application{}, err
@@ -104,7 +104,7 @@ func Replay(programBatchBytes []byte, token string, forestBytes []byte) (Applica
 	digest := sha256.Sum256(forestBytes)
 	beforeDigest := hex.EncodeToString(digest[:])
 	for _, row := range batch.Rows {
-		if row.Token == token && row.BeforeDigest == beforeDigest {
+		if row.BeforeDigest == beforeDigest {
 			program, err := parseProgram(row.Program)
 			if err != nil {
 				return Application{}, err

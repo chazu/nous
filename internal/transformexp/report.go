@@ -90,7 +90,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d policy %s audit: %w", c.Ordinal, policy, err)
 			}
-			if outcome.Terminal != audit.Terminal || outcome.Applications != audit.Applications || outcome.HeldoutCorrect != audit.HeldoutCorrect || outcome.FalseApplications != audit.FalseApplications || outcome.NonmatchingWork != audit.NonmatchingWork || !bytes.Equal(outcome.Schema, audit.Schema) {
+			if outcome.Terminal != audit.Terminal || outcome.Applications != audit.Applications || outcome.HeldoutCorrect != audit.HeldoutCorrect || outcome.HeldoutCorrectBits != audit.HeldoutCorrectBits || outcome.FalseApplications != audit.FalseApplications || outcome.NonmatchingWork != audit.NonmatchingWork || !bytes.Equal(outcome.Schema, audit.Schema) {
 				report.DualExecutionEqual = false
 			}
 			if !bytes.Equal(outcome.Transcript.Raw, audit.Transcript.Raw) || !bytes.Equal(outcome.Transcript.Gzip, audit.Transcript.Gzip) || !equalTransformObjects(outcome.Transcript.Objects, audit.Transcript.Objects) {
@@ -113,17 +113,15 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if len(outcome.Schema) != 0 {
 				schemaDigest = digestBytes(outcome.Schema)
 			}
-			bits := byte(0)
-			if outcome.HeldoutCorrect == 8 {
-				bits = 0xff
+			nonmatchingWork := outcome.NonmatchingWork
+			if outcome.Terminal != "completed" && outcome.HeldoutCorrectBits == 0 {
+				nonmatchingWork = 12000
 			}
-			report.Rows = append(report.Rows, PolicyReportRow{c.Ordinal, c.Family, policy, outcome.Terminal, work, outcome.Applications, schemaDigest, outcome.HeldoutCorrect, hex.EncodeToString([]byte{bits}), outcome.FalseApplications, outcome.NonmatchingWork, transcriptDigest})
+			bits := outcome.HeldoutCorrectBits
+			report.Rows = append(report.Rows, PolicyReportRow{c.Ordinal, c.Family, policy, outcome.Terminal, work, outcome.Applications, schemaDigest, outcome.HeldoutCorrect, hex.EncodeToString([]byte{bits}), outcome.FalseApplications, nonmatchingWork, transcriptDigest})
 		}
 		nous, pbe := outcomes[NousRefine], outcomes[BoundedPBE]
 		paired[index] = pairedTransformRow{index, c.Family, nous.HeldoutCorrect == 8, pbe.HeldoutCorrect == 8, nous.FalseApplications, nous.NonmatchingWork, pbe.NonmatchingWork}
-		if paired[index].NonmatchingPBEWork == 0 {
-			paired[index].NonmatchingPBEWork = int64(4 * 80)
-		}
 	}
 	var err error
 	report.Inference, err = computeTransformInferenceWithPairs(paired, panel, authority, lockedPairs, 10000, 10000)
