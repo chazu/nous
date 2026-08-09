@@ -30,7 +30,9 @@ func TestPreregisteredManifestIsCanonicalAndExact(t *testing.T) {
 }
 
 func TestDevelopmentEvidenceIsDualDeterministicAndPersistsAllChunks(t *testing.T) {
-	evidence, err := BuildDevelopmentEvidence("../../domains", "development-test")
+	evidence, err := buildDevelopmentEvidence("../../domains", "development-test", func(PanelExecution) (PowerEstimate, error) {
+		return PowerEstimate{Passing: 4, Replicates: 4, Fraction: Fraction{4, 4}, Authorized: true}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

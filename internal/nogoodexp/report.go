@@ -42,6 +42,7 @@ type ReportPayload struct {
 	Competence           CompetenceExecution `json:"competence"`
 	Execution            SemanticPanel       `json:"execution"`
 	Inference            Inference           `json:"inference"`
+	DevelopmentPower     PowerEstimate       `json:"development_power"`
 	Gates                MechanicalGates     `json:"gates"`
 	Limitations          []string            `json:"limitations"`
 }
@@ -62,6 +63,10 @@ type DevelopmentEvidence struct {
 }
 
 func BuildDevelopmentEvidence(domainsDir, implementationCommit string) (DevelopmentEvidence, error) {
+	return buildDevelopmentEvidence(domainsDir, implementationCommit, EstimateDevelopmentPower)
+}
+
+func buildDevelopmentEvidence(domainsDir, implementationCommit string, power func(PanelExecution) (PowerEstimate, error)) (DevelopmentEvidence, error) {
 	if err := validatePreregisteredManifest(); err != nil {
 		return DevelopmentEvidence{}, err
 	}
@@ -113,6 +118,10 @@ func BuildDevelopmentEvidence(domainsDir, implementationCommit string) (Developm
 	if err != nil {
 		return DevelopmentEvidence{}, err
 	}
+	powerEstimate, err := power(primary)
+	if err != nil {
+		return DevelopmentEvidence{}, err
+	}
 	gates := MechanicalGates{
 		ManifestValid: true, CompetencePassed: true, DualExecutionEqual: true,
 		TranscriptHashesEqual: true, TranscriptConservation: true,
@@ -121,7 +130,7 @@ func BuildDevelopmentEvidence(domainsDir, implementationCommit string) (Developm
 	payload := ReportPayload{
 		ReportVersion: ReportVersion, Manifest: preregisteredManifest(), PlanCommit: PlanCommit,
 		ImplementationCommit: implementationCommit, Panel: "development", Competence: primaryCompetence,
-		Execution: primarySemantic, Inference: inference, Gates: gates,
+		Execution: primarySemantic, Inference: inference, DevelopmentPower: powerEstimate, Gates: gates,
 		Limitations: []string{"bounded blocked-pair/v1 grammar", "development evidence is not validation or locked evidence"},
 	}
 	payloadBytes, err := canonicalJSON(payload)
