@@ -76,25 +76,14 @@ func bTSIDSetEqual(vm *VM) error {
 }
 
 func typedTransformEqual(vm *VM, kind string) error {
-	right, left, forestValue := vm.pop(), vm.pop(), vm.pop()
-	if forestValue.Kind() != VString {
-		vm.push(BoolVal(false))
-		return nil
-	}
-	forest, err := transformschema.ParseForest([]byte(forestValue.AsString()))
-	if err != nil {
-		vm.push(BoolVal(false))
-		return nil
-	}
-	canonicalForest, _ := forest.CanonicalJSON()
-	forestDigest := transformDigest(canonicalForest)
+	right, left := vm.pop(), vm.pop()
 	encode := func(value Value) ([]byte, bool) {
 		switch kind {
 		case "id":
 			if value.Kind() != VInt || value.AsInt() < -1 || value.AsInt() >= transformschema.MaxNodes {
 				return nil, false
 			}
-			return boundedTransformComparisonAtom("scoped-id", []any{forestDigest, value.AsInt()})
+			return boundedTransformComparisonAtom(kind, value.AsInt())
 		case "id-set":
 			if value.Kind() != VList {
 				return nil, false
@@ -111,7 +100,7 @@ func typedTransformEqual(vm *VM, kind string) error {
 				}
 				ids[index] = id
 			}
-			return boundedTransformComparisonAtom("scoped-id-set", []any{forestDigest, ids})
+			return boundedTransformComparisonAtom(kind, ids)
 		}
 		return nil, false
 	}

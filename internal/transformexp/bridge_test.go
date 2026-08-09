@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 3655 {
+	if len(run.MeterRecords) != 3539 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
 	closures, frozen, batches := 0, 0, 0
@@ -174,6 +175,86 @@ func TestReducerRequiresProgramBatchBeforeTerminal(t *testing.T) {
 		}
 	}
 	t.Fatal("transcript contained no terminal")
+}
+
+func TestReducerRejectsClosureVerificationOutsideFreeze(t *testing.T) {
+	c, err := makeCurriculum(0, 8, 841001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runAcquisition("../../domains", c.Training, "closure-phase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := transcriptFromAcquisition(run, 0, NousRefine, "0123456789abcdef", digestBytes([]byte("closure phase manifest")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := newTransformLifecycleState(string(NousRefine), c.Training)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(bundle.Raw))
+	for scanner.Scan() {
+		event, _ := parseTransformEvent(scanner.Bytes())
+		operation, _ := parseTransformOperation(bundle.Objects[event.Object])
+		if operation.Operation == "verify" && objectVersion(bundle.Objects[operation.Inputs[0]], "transform-closure/v1") {
+			operation.Phase = "acquire"
+			if err := state.observe(operation, bundle.Objects); err == nil {
+				t.Fatal("accepted closure verification in acquire phase")
+			}
+			return
+		}
+		if err := state.observe(operation, bundle.Objects); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("transcript contained no closure verification")
+}
+
+func TestTargetFactorProofBindsComparisonsToProgramObservations(t *testing.T) {
+	c, err := makeCurriculum(0, 8, 841001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runAcquisition("../../domains", c.Training, "target-provenance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := transcriptFromAcquisition(run, 0, NousRefine, "0123456789abcdef", digestBytes([]byte("target provenance manifest")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := newTransformLifecycleState(string(NousRefine), c.Training)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(bundle.Raw))
+	for scanner.Scan() {
+		event, _ := parseTransformEvent(scanner.Bytes())
+		operation, _ := parseTransformOperation(bundle.Objects[event.Object])
+		if operation.Operation == "evidence-link" && operation.Phase == "target" && state.activeCandidate != "" {
+			partial := state.partials[state.activeCandidate]
+			trace := slices.Clone(state.history[state.factorStart:])
+			var nodes, remainder []TransformOperation
+			for _, item := range trace {
+				if item.Operation == "node" {
+					nodes = append(nodes, item)
+				} else {
+					remainder = append(remainder, item)
+				}
+			}
+			forged := append(nodes, remainder...)
+			if err := requireTargetFactorProvenance(partial, forged, state.programs, bundle.Objects); err == nil {
+				t.Fatal("accepted target comparisons detached from their program observations")
+			}
+			return
+		}
+		if err := state.observe(operation, bundle.Objects); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("transcript contained no target factor evidence")
 }
 
 func assertRefinementProvenance(t *testing.T, run acquisitionRun) {

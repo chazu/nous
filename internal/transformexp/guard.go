@@ -969,7 +969,7 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	oracleDiagnostics.RootSHA256 = digestBytes(mustJSON([]any{"transform-oracle-acceptance-ledgers/v1", oracleRows}))
 	generatorEvidence, generatorEvidenceErr := read("acceptance/generator.json")
 	oracleEvidence, oracleEvidenceErr := read("acceptance/oracle.json")
-	if generatorEvidenceErr != nil || oracleEvidenceErr != nil || generatorDiagnostics != report.Payload.GeneratorAcceptance || oracleDiagnostics != report.Payload.OracleAcceptance || !bytes.Equal(generatorEvidence, acceptanceDiagnosticsBytes("generator", generatorDiagnostics)) || !bytes.Equal(oracleEvidence, acceptanceDiagnosticsBytes("oracle", oracleDiagnostics)) {
+	if generatorEvidenceErr != nil || oracleEvidenceErr != nil || !bytes.Equal(generatorEvidence, acceptanceDiagnosticsBytes("generator", generatorDiagnostics)) || !bytes.Equal(oracleEvidence, acceptanceDiagnosticsBytes("oracle", oracleDiagnostics)) {
 		oracleParityGate = false
 		return fmt.Errorf("%s acceptance diagnostics do not reconstruct", panel)
 	}

@@ -422,34 +422,6 @@ func validateTransformAtom(kind string, value any) error {
 			}
 			last = id
 		}
-	case "scoped-id", "scoped-id-set":
-		row, ok := value.([]any)
-		if !ok || len(row) != 2 {
-			return errors.New("scoped id atom")
-		}
-		digest, ok := row[0].(string)
-		if !ok || !digestString(digest) {
-			return errors.New("scoped id forest digest")
-		}
-		if kind == "scoped-id" {
-			n, ok := jsonInteger(row[1])
-			if !ok || n < -1 || n >= transformschema.MaxNodes {
-				return errors.New("scoped id value")
-			}
-			break
-		}
-		ids, ok := row[1].([]any)
-		last := -1
-		if !ok || len(ids) > 6 {
-			return errors.New("scoped id-set value")
-		}
-		for _, item := range ids {
-			id, ok := jsonInteger(item)
-			if !ok || id < 0 || id >= transformschema.MaxNodes || id <= last {
-				return errors.New("noncanonical scoped id-set")
-			}
-			last = id
-		}
 	case "boolean":
 		if _, ok := value.(bool); !ok {
 			return errors.New("boolean atom")

@@ -226,7 +226,7 @@ units: [
 						end
 						false "caseExact" !
 						"value" @ "request-target" ts-eq
-						if "before" @ "before" @ "requestID" @ ts-target "definitionID" @ ts-id-eq "caseExact" ! then
+						if "before" @ "requestID" @ ts-target "definitionID" @ ts-id-eq "caseExact" ! then
 						"value" @ "from-value" ts-eq
 						if
 							"before" @ "requestID" @ ts-node-facts 2 list-get "fromValue" !
@@ -235,7 +235,7 @@ units: [
 								it "definitionIndex" !
 								"definitionValues" @ "definitionIndex" @ list-get "fromValue" @ ts-eq if "matchingDefinitions" @ 1 + "matchingDefinitions" ! "definitionIDs" @ "definitionIndex" @ list-get "matchingID" ! then
 							end
-							"before" @ "matchingID" @ "definitionID" @ ts-id-eq "matchingIDExact" !
+							"matchingID" @ "definitionID" @ ts-id-eq "matchingIDExact" !
 							"matchingDefinitions" @ 1 ts-eq "matchingIDExact" @ and "caseExact" !
 						then
 						"value" @ "first-local" ts-eq
@@ -244,9 +244,9 @@ units: [
 							nil "firstID" !
 							"definitionIDs" @ list-length iota each
 								it "definitionIndex" !
-								"firstID" @ nil ts-eq if "before" @ "definitionParents" @ "definitionIndex" @ list-get "requestParent" @ ts-id-eq if "definitionIDs" @ "definitionIndex" @ list-get "firstID" ! then then
+								"firstID" @ nil ts-eq if "definitionParents" @ "definitionIndex" @ list-get "requestParent" @ = if "definitionIDs" @ "definitionIndex" @ list-get "firstID" ! then then
 							end
-							"before" @ "firstID" @ "definitionID" @ ts-id-eq "caseExact" !
+							"firstID" @ "definitionID" @ ts-id-eq "caseExact" !
 						then
 						"caseExact" @ not if false "exact" ! then
 					end
@@ -288,16 +288,16 @@ units: [
 								0 list-of "equalsPredicted" ! 0 list-of "anyPredicted" !
 								12 iota each
 									it "nodeID" ! "nodeKinds" @ "nodeID" @ list-get "reference" ts-eq if
-									"before" @ "nodeTargets" @ "nodeID" @ list-get "definitionID" @ ts-id-eq
-									"value" @ "global" ts-eq "before" @ "nodeParents" @ "nodeID" @ list-get "requestParent" @ ts-id-eq or and
+									"nodeTargets" @ "nodeID" @ list-get "definitionID" @ =
+									"value" @ "global" ts-eq "nodeParents" @ "nodeID" @ list-get "requestParent" @ = or and
 										if
 											"anyPredicted" @ "nodeID" @ list-append "anyPredicted" !
 											"nodeValues" @ "nodeID" @ list-get "fromValue" @ ts-eq if "equalsPredicted" @ "nodeID" @ list-append "equalsPredicted" ! then
 										then
 									then
 								end
-								"before" @ "equalsPredicted" @ "editedReferences" @ ts-id-set-eq if "equalsMatches" @ 1 + "equalsMatches" ! then
-								"before" @ "anyPredicted" @ "editedReferences" @ ts-id-set-eq if "anyMatches" @ 1 + "anyMatches" ! then
+								"equalsPredicted" @ "editedReferences" @ ts-id-set-eq if "equalsMatches" @ 1 + "equalsMatches" ! then
+								"anyPredicted" @ "editedReferences" @ ts-id-set-eq if "anyMatches" @ 1 + "anyMatches" ! then
 							end
 							"equalsMatches" @ 4 ts-eq "anyMatches" @ 4 ts-eq or "exact" !
 						then
@@ -342,13 +342,13 @@ units: [
 									0 list-of "predicted" !
 									12 iota each
 										it "nodeID" ! "nodeKinds" @ "nodeID" @ list-get "reference" ts-eq if
-										"before" @ "nodeTargets" @ "nodeID" @ list-get "definitionID" @ ts-id-eq
-										"selectedScope" @ "global" ts-eq "before" @ "nodeParents" @ "nodeID" @ list-get "requestParent" @ ts-id-eq or and
+										"nodeTargets" @ "nodeID" @ list-get "definitionID" @ =
+										"selectedScope" @ "global" ts-eq "nodeParents" @ "nodeID" @ list-get "requestParent" @ = or and
 											"value" @ "any" ts-eq "nodeValues" @ "nodeID" @ list-get "fromValue" @ ts-eq or and
 											if "predicted" @ "nodeID" @ list-append "predicted" ! then
 										then
 									end
-								"before" @ "predicted" @ "editedReferences" @ ts-id-set-eq if "matches" @ 1 + "matches" ! then
+								"predicted" @ "editedReferences" @ ts-id-set-eq if "matches" @ 1 + "matches" ! then
 								end
 								"matches" @ 4 ts-eq "exact" !
 							then
@@ -365,7 +365,7 @@ units: [
 										"requestCount" @ 1 ts-eq
 										if
 											"before" @ "requestID" @ ts-target "definitionID" !
-										"before" @ "before" @ "requestID" @ ts-parent-facts 0 list-get
+										"before" @ "requestID" @ ts-parent-facts 0 list-get
 										"before" @ "definitionID" @ ts-parent-facts 0 list-get ts-id-eq not
 											if true "sawWrongContext" ! then
 										then

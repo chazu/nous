@@ -20,7 +20,6 @@ type protectedPayload struct {
 	FixtureRoot, PrimaryManifest, AuditManifest, EvidenceGraph string
 	Competence                                                 CompetenceReport
 	CompetenceRoot                                             string
-	GeneratorAcceptance, OracleAcceptance                      AcceptanceDiagnostics
 	Rows                                                       []PolicyReportRow
 	Inference                                                  transformInference
 	Power                                                      transformPower
@@ -53,13 +52,13 @@ func (p protectedPayload) wire() ([]byte, error) {
 	i := p.Inference
 	inference := []any{"transform-inference/v1", i.Point.Numerator, i.Point.Denominator, i.Lower.Numerator, i.Lower.Denominator, i.Upper.Numerator, i.Upper.Denominator, i.RandomizationExtreme, i.PValue.Numerator, i.PValue.Denominator, i.NousSuccesses, i.PBESuccesses, i.FalseApplications, i.NonmatchingNous, i.NonmatchingPBE}
 	power := []any{"transform-power/v1", p.Power.Passing, p.Power.Replicates, p.Power.Authorized}
-	return json.Marshal([]any{p.Panel, PlanCommit, p.ImplementationCommit, manifest, p.FixtureRoot, p.PrimaryManifest, p.AuditManifest, p.EvidenceGraph, competence, json.RawMessage(acceptanceDiagnosticsBytes("generator", p.GeneratorAcceptance)), json.RawMessage(acceptanceDiagnosticsBytes("oracle", p.OracleAcceptance)), rows, inference, power, p.Gates, p.Limitations})
+	return json.Marshal([]any{p.Panel, PlanCommit, p.ImplementationCommit, manifest, p.FixtureRoot, p.PrimaryManifest, p.AuditManifest, p.EvidenceGraph, competence, rows, inference, power, p.Gates, p.Limitations})
 }
 
 func newProtectedReport(panel, implementationCommit string, evidence panelEvidence, power transformPower) (protectedReport, error) {
 	competenceRoot := digestBytes(evidence.Files["competence/root.json"])
 	gates := protectedGates(implementationCommit, evidence)
-	payload := protectedPayload{Panel: panel, ImplementationCommit: implementationCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), FixtureRoot: evidence.Report.FixtureRootDigest, PrimaryManifest: evidence.Report.PrimaryManifestDigest, AuditManifest: evidence.Report.AuditManifestDigest, EvidenceGraph: evidence.Report.EvidenceGraphDigest, Competence: evidence.Report.Competence, CompetenceRoot: competenceRoot, GeneratorAcceptance: evidence.Report.GeneratorAcceptance, OracleAcceptance: evidence.Report.OracleAcceptance, Rows: evidence.Report.Rows, Inference: evidence.Report.Inference, Power: power, Gates: gates, Limitations: []string{}}
+	payload := protectedPayload{Panel: panel, ImplementationCommit: implementationCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), FixtureRoot: evidence.Report.FixtureRootDigest, PrimaryManifest: evidence.Report.PrimaryManifestDigest, AuditManifest: evidence.Report.AuditManifestDigest, EvidenceGraph: evidence.Report.EvidenceGraphDigest, Competence: evidence.Report.Competence, CompetenceRoot: competenceRoot, Rows: evidence.Report.Rows, Inference: evidence.Report.Inference, Power: power, Gates: gates, Limitations: []string{}}
 	payloadBytes, err := payload.wire()
 	if err != nil {
 		return protectedReport{}, err
@@ -152,7 +151,7 @@ func decodeProtectedReport(data []byte) (protectedReport, error) {
 		return protectedReport{}, fmt.Errorf("invalid protected report identity")
 	}
 	var values []json.RawMessage
-	if json.Unmarshal(outer[3], &values) != nil || len(values) != 16 {
+	if json.Unmarshal(outer[3], &values) != nil || len(values) != 14 {
 		return protectedReport{}, fmt.Errorf("invalid protected report payload")
 	}
 	var panel, plan, implementation, fixture, primary, audit, graph string
@@ -171,22 +170,8 @@ func decodeProtectedReport(data []byte) (protectedReport, error) {
 	if competence != (CompetenceReport{351, 25272, 7020, 14, true}) || !isLowerHex(competenceRoot, 64) {
 		return protectedReport{}, fmt.Errorf("competence claim does not match frozen suite")
 	}
-	decodeAcceptance := func(raw json.RawMessage, role string) (AcceptanceDiagnostics, error) {
-		var wire []json.RawMessage
-		var version, gotRole string
-		var value AcceptanceDiagnostics
-		if json.Unmarshal(raw, &wire) != nil || len(wire) != 7 || json.Unmarshal(wire[0], &version) != nil || version != "transform-acceptance-diagnostics/v1" || json.Unmarshal(wire[1], &gotRole) != nil || gotRole != role || json.Unmarshal(wire[2], &value.Curricula) != nil || json.Unmarshal(wire[3], &value.Applications) != nil || json.Unmarshal(wire[4], &value.Work) != nil || json.Unmarshal(wire[5], &value.RootSHA256) != nil || json.Unmarshal(wire[6], &value.Exact) != nil || !digestString(value.RootSHA256) {
-			return AcceptanceDiagnostics{}, fmt.Errorf("invalid %s acceptance diagnostics", role)
-		}
-		return value, nil
-	}
-	generatorAcceptance, generatorErr := decodeAcceptance(values[9], "generator")
-	oracleAcceptance, oracleErr := decodeAcceptance(values[10], "oracle")
-	if generatorErr != nil || oracleErr != nil {
-		return protectedReport{}, fmt.Errorf("invalid acceptance diagnostics")
-	}
 	var rowWires [][]json.RawMessage
-	if json.Unmarshal(values[11], &rowWires) != nil {
+	if json.Unmarshal(values[9], &rowWires) != nil {
 		return protectedReport{}, fmt.Errorf("invalid policy rows")
 	}
 	rows := make([]PolicyReportRow, len(rowWires))
@@ -201,7 +186,7 @@ func decodeProtectedReport(data []byte) (protectedReport, error) {
 		rows[index].HeldoutCorrect = bits.OnesCount8(decodedBits[0])
 	}
 	var inferenceWire []json.RawMessage
-	if json.Unmarshal(values[12], &inferenceWire) != nil || len(inferenceWire) != 15 {
+	if json.Unmarshal(values[10], &inferenceWire) != nil || len(inferenceWire) != 15 {
 		return protectedReport{}, fmt.Errorf("invalid inference wire")
 	}
 	var inferenceVersion string
@@ -218,15 +203,15 @@ func decodeProtectedReport(data []byte) (protectedReport, error) {
 	var powerWire []json.RawMessage
 	var powerVersion string
 	power := transformPower{}
-	if json.Unmarshal(values[13], &powerWire) != nil || len(powerWire) != 4 || json.Unmarshal(powerWire[0], &powerVersion) != nil || powerVersion != "transform-power/v1" || json.Unmarshal(powerWire[1], &power.Passing) != nil || json.Unmarshal(powerWire[2], &power.Replicates) != nil || json.Unmarshal(powerWire[3], &power.Authorized) != nil {
+	if json.Unmarshal(values[11], &powerWire) != nil || len(powerWire) != 4 || json.Unmarshal(powerWire[0], &powerVersion) != nil || powerVersion != "transform-power/v1" || json.Unmarshal(powerWire[1], &power.Passing) != nil || json.Unmarshal(powerWire[2], &power.Replicates) != nil || json.Unmarshal(powerWire[3], &power.Authorized) != nil {
 		return protectedReport{}, fmt.Errorf("invalid power wire")
 	}
 	var gates [12]bool
 	var limitations []string
-	if json.Unmarshal(values[14], &gates) != nil || json.Unmarshal(values[15], &limitations) != nil {
+	if json.Unmarshal(values[12], &gates) != nil || json.Unmarshal(values[13], &limitations) != nil {
 		return protectedReport{}, fmt.Errorf("invalid report gates")
 	}
-	payload := protectedPayload{Panel: panel, ImplementationCommit: implementation, Manifest: append(json.RawMessage(nil), values[3]...), FixtureRoot: fixture, PrimaryManifest: primary, AuditManifest: audit, EvidenceGraph: graph, Competence: competence, CompetenceRoot: competenceRoot, GeneratorAcceptance: generatorAcceptance, OracleAcceptance: oracleAcceptance, Rows: rows, Inference: i, Power: power, Gates: gates, Limitations: limitations}
+	payload := protectedPayload{Panel: panel, ImplementationCommit: implementation, Manifest: append(json.RawMessage(nil), values[3]...), FixtureRoot: fixture, PrimaryManifest: primary, AuditManifest: audit, EvidenceGraph: graph, Competence: competence, CompetenceRoot: competenceRoot, Rows: rows, Inference: i, Power: power, Gates: gates, Limitations: limitations}
 	report := protectedReport{classification, payloadDigest, payload}
 	canonical, err := canonicalProtectedReport(report)
 	if err != nil || !bytes.Equal(canonical, data) {

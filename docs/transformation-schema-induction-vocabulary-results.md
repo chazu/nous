@@ -1,8 +1,7 @@
 # Transformation-schema induction vocabulary: implementation and trial record
 
-Status: **v2 implementation-review revision 3; revisions 1 and 2 were
-unanimously rejected, v1 was closed unexecuted, and no v2 protected panel has
-run**
+Status: **v2 implementation-review revision 4; revisions 1 through 3 were
+rejected, v1 was closed unexecuted, and no v2 protected panel has run**
 
 This document records Vocabulary 2 of the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) as it
@@ -89,11 +88,13 @@ boolean claim. The reducer reconstructs that claim afterward from the four
 acquired programs and explicit local observations. It does not return an
 answer to the VM or alter candidate selection. Definition-only scope and guard
 normalization uses one enum comparison, explicit `redundant-noncanonical`
-closure status, and no example scan. ID and ID-set comparisons are typed and
-scoped by the canonical forest digest, so equal integer node IDs from different
-examples cannot satisfy one another's proof. The reducer requires the exact
-case-bound operands, counts, and order for target, anchor, scope, old-guard,
-locality, and normalization evidence.
+closure status, and no example scan. The reducer retains the frozen atom
+grammar and binds ordinary ID and ID-set comparisons to exact ordered source
+blocks: canonical forest, edited-node observations, prescribed node/parent/
+target calls, and final per-row comparison operands. Target observations and
+comparisons must interleave per acquired program, so repeated enum atoms from
+one case cannot stand in for another. Missing, extra, cross-row, or reordered
+factor evidence is rejected.
 
 Committed protected evidence is checked more strongly than the in-memory safe
 trial. The verifier rebuilds the exact evidence graph and competence root from
@@ -105,12 +106,13 @@ not merely its position in an eight-row result stream. Report and
 execution-manifest agreement alone is not accepted as evidence.
 
 Generator and oracle acceptance diagnostics are distinct committed evidence
-leaves and protected-payload fields. Committed verification independently
-recomputes both ledgers from persisted fixtures, checks exact application/work
-counts and matrix roots, and compares each canonical diagnostic leaf. Persisted
-development, validation, and locked curricula are scrubbed of seed commitment,
-accepted attempt, latent schema, expected outputs, generation ledger, and
-scorer bytes before policy execution begins.
+leaves and inputs to the frozen oracle-parity gate; the exact preregistered
+14-field protected payload remains unchanged. Committed verification
+independently recomputes both ledgers from persisted fixtures, checks exact
+application/work counts and matrix roots, and compares each canonical
+diagnostic leaf. Persisted development, validation, and locked curricula are
+scrubbed of seed commitment, accepted attempt, latent schema, expected outputs,
+generation ledger, and scorer bytes before policy execution begins.
 
 Store-backed policies persist their actual canonical CUE Store, not a summary.
 Independent verification reruns the exact acquisition configuration and
@@ -192,10 +194,24 @@ rejected revision 2 at
 - held-out reconstruction trusted positional result assignment without
   authenticating each application input.
 
-Revision 3 addresses those findings and remains a candidate until all three
-reviewers accept the same exact commit. Regression tests cover batch-proof
-omission, unsupported verify wires, malformed-operation semantics, and held-out
-input rebinding. No protected command was run while repairing any revision.
+Revision 3 at `9d48ec16863266375c0b337b85ba1bde484c2fc4`
+fixed the experimental-validity blockers, and architecture accepted it. The
+experimental reviewer withdrew two initially reported findings after tracing
+the committed full-competence and actual bounded-PBE enumeration calls, but
+correctly rejected the revision because it expanded the frozen protected
+payload from 14 to 16 fields. Semantics also rejected it because two new scoped
+atom kinds were outside the frozen grammar, comparisons were not yet bound to
+their source observation blocks, and closure verification was not freeze-phase
+bound.
+
+Revision 4 restores the exact protected and atom wires, retains acceptance
+diagnostics as evidence leaves and oracle-parity gate inputs, binds factor
+proofs to exact ordered row observations, and makes closure verification
+freeze-only. Regression tests cover batch-proof omission, unsupported verify
+wires, malformed-operation semantics, held-out input rebinding, out-of-grammar
+atom kinds, detached target comparisons, and acquire-phase closure forgery. It
+remains a candidate until all three reviewers accept the same exact commit. No
+protected command was run while repairing any revision.
 
 The repository-wide suite was also run on this implementation-review
 candidate. It completed every other listed package, including

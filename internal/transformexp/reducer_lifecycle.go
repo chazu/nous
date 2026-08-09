@@ -96,8 +96,28 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 		if len(scans) != 4 {
 			return false, fmt.Errorf("locality factor observed %d complete training forests, want 4", len(scans))
 		}
+		var expectedNegatives []transformschema.Forest
+		for _, item := range s.trainingOrder {
+			if item.Kind == "abstain" {
+				forest, parseErr := transformschema.ParseForest(item.Before)
+				if parseErr != nil {
+					return false, parseErr
+				}
+				expectedNegatives = append(expectedNegatives, forest)
+			}
+		}
 		sawWrongContext := false
-		for _, forest := range scans {
+		for index, forest := range scans {
+			if len(expectedNegatives) != 0 {
+				if len(expectedNegatives) != len(scans) {
+					return false, errors.New("locality factor row count differs from training source")
+				}
+				got, _ := forest.CanonicalJSON()
+				want, _ := expectedNegatives[index].CanonicalJSON()
+				if !bytes.Equal(got, want) {
+					return false, fmt.Errorf("locality factor training rows are reordered at %d", index)
+				}
+			}
 			requests := lifecycleNodesOfKind(forest, "request")
 			if len(requests) == 1 {
 				request := requests[0]
@@ -114,15 +134,11 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 		if len(scans) != 4 {
 			return false, fmt.Errorf("factor observed %d complete program scans in %s, want 4", len(scans), phase)
 		}
-		covered := map[string]bool{}
-		for _, forest := range scans {
-			encoded, _ := forest.CanonicalJSON()
-			covered[digestBytes(encoded)] = true
-		}
-		for _, program := range s.programs {
-			encoded, _ := program.before.CanonicalJSON()
-			if !covered[digestBytes(encoded)] {
-				return false, fmt.Errorf("factor omitted concrete program forest %s in %s; observed %d complete scans", digestBytes(encoded), phase, len(scans))
+		for index, program := range s.programs {
+			got, _ := scans[index].CanonicalJSON()
+			want, _ := program.before.CanonicalJSON()
+			if !bytes.Equal(got, want) {
+				return false, fmt.Errorf("factor program rows are missing or reordered at %d in %s", index, phase)
 			}
 		}
 	}
@@ -142,12 +158,7 @@ func (s *transformLifecycleState) reconstructFactor(partial transformschema.Part
 
 func (s *transformLifecycleState) requireFactorComparisons(partial transformschema.Partial, phase string, trace []TransformOperation, objects map[string][]byte) error {
 	atom := func(kind string, value any) []byte { return mustJSON([]any{"transform-atom/v1", kind, value}) }
-	scopedAtom := func(kind string, forest transformschema.Forest, value any) []byte {
-		encoded, _ := forest.CanonicalJSON()
-		return atom("scoped-"+kind, []any{digestBytes(encoded), value})
-	}
 	type pair struct{ left, right []byte }
-	var expected []pair
 	definitionNormalization := (phase == "scope" || phase == "old-guard") && partial.Targets == "definition"
 	if definitionNormalization {
 		canonical := "local"
@@ -155,80 +166,246 @@ func (s *transformLifecycleState) requireFactorComparisons(partial transformsche
 		if phase == "old-guard" {
 			canonical, candidate = "any", partial.OldGuard
 		}
-		expected = append(expected, pair{atom("enum", candidate), atom("enum", canonical)})
-	} else if phase == "locality" {
-		for _, item := range s.trainingOrder {
-			if item.Kind != "abstain" {
-				continue
+		expected := pair{atom("enum", candidate), atom("enum", canonical)}
+		matched, nodes := 0, 0
+		for _, operation := range trace {
+			if operation.Operation == "node" {
+				nodes++
 			}
-			forest, err := transformschema.ParseForest(item.Before)
-			if err != nil {
-				return err
+			if operation.Operation == "compare" && len(operation.Inputs) == 2 && bytes.Equal(objects[operation.Inputs[0]], expected.left) && bytes.Equal(objects[operation.Inputs[1]], expected.right) {
+				matched++
 			}
+		}
+		if nodes != 0 || matched != 1 {
+			return fmt.Errorf("%s definition-only normalization has nodes=%d comparisons=%d", phase, nodes, matched)
+		}
+		return nil
+	}
+	if phase == "target" {
+		return requireTargetFactorProvenance(partial, trace, s.programs, objects)
+	}
+	blocks, err := completeFactorScanBlocks(trace, objects)
+	if err != nil || len(blocks) != 4 {
+		return fmt.Errorf("%s factor scan blocks: %w", phase, err)
+	}
+	expectedByBlock := make([][]pair, 4)
+	wantKind := "id"
+	if phase == "locality" {
+		for index, block := range blocks {
+			forest := block.forest
 			requests := lifecycleNodesOfKind(forest, "request")
-			if len(requests) != 1 {
-				continue
-			}
-			definition, ok := lifecycleNodeByID(forest, requests[0].Target)
-			if ok {
-				expected = append(expected, pair{scopedAtom("id", forest, requests[0].Parent), scopedAtom("id", forest, definition.Parent)})
+			if len(requests) == 1 {
+				definition, ok := lifecycleNodeByID(forest, requests[0].Target)
+				if ok {
+					expectedByBlock[index] = []pair{{atom("id", requests[0].Parent), atom("id", definition.Parent)}}
+				}
 			}
 		}
 	} else {
-		for _, program := range s.programs {
+		for index, program := range s.programs {
 			request, definitionID, editedReferences, signature, err := lifecycleProgramFacts(program)
 			if err != nil {
 				return err
 			}
 			switch phase {
-			case "target":
-				expected = append(expected, pair{atom("enum", partial.Targets), atom("enum", signature)})
 			case "anchor":
-				expected = append(expected, pair{scopedAtom("id", program.before, resolveLifecycleAnchor(program.before, request, partial.Anchor)), scopedAtom("id", program.before, definitionID)})
+				expectedByBlock[index] = []pair{{atom("id", resolveLifecycleAnchor(program.before, request, partial.Anchor)), atom("id", definitionID)}}
 			case "scope":
-				expected = append(expected,
-					pair{scopedAtom("id-set", program.before, projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, "equals-from")), scopedAtom("id-set", program.before, editedReferences)},
-					pair{scopedAtom("id-set", program.before, projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, "any")), scopedAtom("id-set", program.before, editedReferences)})
+				wantKind = "id-set"
+				expectedByBlock[index] = []pair{
+					{atom("id-set", projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, "equals-from")), atom("id-set", editedReferences)},
+					{atom("id-set", projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, "any")), atom("id-set", editedReferences)}}
 			case "old-guard":
-				expected = append(expected, pair{scopedAtom("id-set", program.before, projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, partial.OldGuard)), scopedAtom("id-set", program.before, editedReferences)})
+				wantKind = "id-set"
+				expectedByBlock[index] = []pair{{atom("id-set", projectLifecycleReferences(program.before, request, definitionID, partial.ReferenceScope, partial.OldGuard)), atom("id-set", editedReferences)}}
 			default:
 				return errors.New("unsupported factor comparison phase")
 			}
+			_ = signature
 		}
 	}
-	matched := 0
-	nodes := 0
-	for _, operation := range trace {
-		if operation.Operation == "node" {
-			nodes++
+	for index, block := range blocks {
+		end := len(trace)
+		if index+1 < len(blocks) {
+			end = blocks[index+1].start
 		}
-		if operation.Operation != "compare" || len(operation.Inputs) != 2 || len(operation.Outputs) != 1 {
-			continue
-		}
-		isExpectedPair := false
-		for _, want := range expected {
-			if bytes.Equal(objects[operation.Inputs[0]], want.left) && bytes.Equal(objects[operation.Inputs[1]], want.right) {
-				isExpectedPair = true
-				break
+		var actual []pair
+		for _, operation := range trace[block.start:end] {
+			if operation.Operation != "compare" || len(operation.Inputs) != 2 || len(operation.Outputs) != 1 {
+				continue
+			}
+			leftKind, _, leftErr := decodeTransformAtom(objects[operation.Inputs[0]])
+			rightKind, _, rightErr := decodeTransformAtom(objects[operation.Inputs[1]])
+			if leftErr == nil && rightErr == nil && leftKind == wantKind && rightKind == wantKind {
+				actual = append(actual, pair{objects[operation.Inputs[0]], objects[operation.Inputs[1]]})
 			}
 		}
-		if isExpectedPair {
-			if matched >= len(expected) {
-				return fmt.Errorf("%s factor contains extra authenticated comparison", phase)
-			}
-			if !bytes.Equal(objects[operation.Inputs[0]], expected[matched].left) || !bytes.Equal(objects[operation.Inputs[1]], expected[matched].right) {
-				return fmt.Errorf("%s factor comparisons are reordered at %d", phase, matched)
-			}
-			matched++
+		if len(actual) != len(expectedByBlock[index]) {
+			forestBytes, _ := block.forest.CanonicalJSON()
+			return fmt.Errorf("%s row %d forest=%s authenticated %d comparisons %v, want %d", phase, index, forestBytes, len(actual), actual, len(expectedByBlock[index]))
 		}
-	}
-	if matched != len(expected) {
-		return fmt.Errorf("%s factor authenticated %d/%d ordered comparisons", phase, matched, len(expected))
-	}
-	if definitionNormalization && nodes != 0 {
-		return fmt.Errorf("%s definition-only normalization inspected examples", phase)
+		for comparison := range actual {
+			if !bytes.Equal(actual[comparison].left, expectedByBlock[index][comparison].left) || !bytes.Equal(actual[comparison].right, expectedByBlock[index][comparison].right) {
+				return fmt.Errorf("%s row %d comparison %d has wrong operands", phase, index, comparison)
+			}
+		}
+		var program *reconstructedProgram
+		if phase != "locality" {
+			program = &s.programs[index]
+		}
+		if err := requireFactorObservationBlock(phase, partial, block.forest, program, trace[block.start:end], objects); err != nil {
+			return fmt.Errorf("%s row %d observations: %w", phase, index, err)
+		}
 	}
 	return nil
+}
+
+type factorEvidenceStep struct {
+	operation, forest string
+	id                int
+	left, right       []byte
+}
+
+func requireTargetFactorProvenance(partial transformschema.Partial, trace []TransformOperation, programs []reconstructedProgram, objects map[string][]byte) error {
+	atom := func(kind string, value any) []byte { return mustJSON([]any{"transform-atom/v1", kind, value}) }
+	var expected []factorEvidenceStep
+	var comparisonPairs [][2][]byte
+	for _, program := range programs {
+		forest, _ := program.before.CanonicalJSON()
+		forestDigest := digestBytes(forest)
+		_, _, _, signature, err := lifecycleProgramFacts(program)
+		if err != nil {
+			return err
+		}
+		for _, edit := range program.edits {
+			expected = append(expected, factorEvidenceStep{operation: "node", forest: forestDigest, id: edit.Target})
+		}
+		left, right := atom("enum", partial.Targets), atom("enum", signature)
+		expected = append(expected, factorEvidenceStep{operation: "compare", left: left, right: right})
+		comparisonPairs = append(comparisonPairs, [2][]byte{left, right})
+	}
+	var actual []factorEvidenceStep
+	for _, operation := range trace {
+		switch operation.Operation {
+		case "node":
+			forest, id, ok := operationForestID(operation, objects)
+			if !ok {
+				return errors.New("target observation has invalid forest/id source")
+			}
+			actual = append(actual, factorEvidenceStep{operation: "node", forest: forest, id: id})
+		case "compare":
+			if len(operation.Inputs) != 2 {
+				continue
+			}
+			left, right := objects[operation.Inputs[0]], objects[operation.Inputs[1]]
+			for _, pair := range comparisonPairs {
+				if bytes.Equal(left, pair[0]) && bytes.Equal(right, pair[1]) {
+					actual = append(actual, factorEvidenceStep{operation: "compare", left: left, right: right})
+					break
+				}
+			}
+		}
+	}
+	if len(actual) != len(expected) {
+		return fmt.Errorf("target provenance steps=%d want=%d", len(actual), len(expected))
+	}
+	for index := range expected {
+		if actual[index].operation != expected[index].operation || actual[index].forest != expected[index].forest || actual[index].id != expected[index].id || !bytes.Equal(actual[index].left, expected[index].left) || !bytes.Equal(actual[index].right, expected[index].right) {
+			return fmt.Errorf("target provenance differs at step %d", index)
+		}
+	}
+	return nil
+}
+
+func requireFactorObservationBlock(phase string, partial transformschema.Partial, forest transformschema.Forest, program *reconstructedProgram, trace []TransformOperation, objects map[string][]byte) error {
+	encoded, _ := forest.CanonicalJSON()
+	forestDigest := digestBytes(encoded)
+	type observation struct {
+		operation string
+		id        int
+	}
+	var expected []observation
+	appendObservation := func(operation string, id int) { expected = append(expected, observation{operation, id}) }
+	for id := 0; id < transformschema.MaxNodes; id++ {
+		appendObservation("node", id)
+		node, ok := lifecycleNodeByID(forest, id)
+		if !ok {
+			continue
+		}
+		switch phase {
+		case "scope", "old-guard":
+			if node.Kind == "request" || node.Kind == "reference" || node.Kind == "definition" {
+				appendObservation("parent", id)
+			}
+			if node.Kind == "reference" {
+				appendObservation("target", id)
+			}
+		case "anchor":
+			if node.Kind == "definition" {
+				appendObservation("parent", id)
+			}
+		}
+	}
+	requestNodes := lifecycleNodesOfKind(forest, "request")
+	if len(requestNodes) != 1 {
+		if phase != "locality" {
+			return errors.New("factor source lacks one request")
+		}
+	} else {
+		request := requestNodes[0]
+		switch phase {
+		case "anchor":
+			if program == nil {
+				return errors.New("anchor source lacks program")
+			}
+			for _, edit := range program.edits {
+				appendObservation("node", edit.Target)
+				node, _ := lifecycleNodeByID(forest, edit.Target)
+				if node.Kind == "reference" {
+					appendObservation("target", edit.Target)
+				}
+			}
+			switch partial.Anchor {
+			case "request-target":
+				appendObservation("target", request.ID)
+			case "from-value":
+				appendObservation("node", request.ID)
+			case "first-local":
+				appendObservation("parent", request.ID)
+			}
+		case "locality":
+			appendObservation("target", request.ID)
+			appendObservation("parent", request.ID)
+			appendObservation("parent", request.Target)
+		}
+	}
+	var actual []observation
+	for _, operation := range trace {
+		if !oneOfString(operation.Operation, "node", "parent", "target") {
+			continue
+		}
+		gotForest, id, ok := operationForestID(operation, objects)
+		if !ok || gotForest != forestDigest {
+			return errors.New("structural observation is not bound to row forest")
+		}
+		actual = append(actual, observation{operation.Operation, id})
+	}
+	if !slices.Equal(actual, expected) {
+		return fmt.Errorf("structural observation order/count differs: got=%v want=%v", actual, expected)
+	}
+	return nil
+}
+
+func operationForestID(operation TransformOperation, objects map[string][]byte) (string, int, bool) {
+	if len(operation.Inputs) != 2 {
+		return "", 0, false
+	}
+	if _, err := transformschema.ParseForest(objects[operation.Inputs[0]]); err != nil {
+		return "", 0, false
+	}
+	kind, value, err := decodeTransformAtom(objects[operation.Inputs[1]])
+	id, ok := jsonInteger(value)
+	return operation.Inputs[0], id, err == nil && kind == "id" && ok
 }
 
 func lifecycleProgramFacts(program reconstructedProgram) (transformschema.Node, int, []int, string, error) {
@@ -422,11 +599,28 @@ func lifecycleNodeByID(forest transformschema.Forest, id int) (transformschema.N
 	return transformschema.Node{}, false
 }
 
+type factorScanBlock struct {
+	forest     transformschema.Forest
+	start, end int
+}
+
 func completeFactorScans(trace []TransformOperation, objects map[string][]byte) ([]transformschema.Forest, error) {
-	var result []transformschema.Forest
+	blocks, err := completeFactorScanBlocks(trace, objects)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]transformschema.Forest, len(blocks))
+	for index := range blocks {
+		result[index] = blocks[index].forest
+	}
+	return result, nil
+}
+
+func completeFactorScanBlocks(trace []TransformOperation, objects map[string][]byte) ([]factorScanBlock, error) {
+	var result []factorScanBlock
 	forestDigest := ""
-	nextID := 0
-	for _, operation := range trace {
+	nextID, start := 0, -1
+	for index, operation := range trace {
 		if operation.Operation != "node" || len(operation.Inputs) != 2 {
 			continue
 		}
@@ -441,13 +635,16 @@ func completeFactorScans(trace []TransformOperation, objects map[string][]byte) 
 			}
 			forestDigest = operation.Inputs[0]
 			nextID = 0
+			start = index
 		}
 		if forestDigest != operation.Inputs[0] || id != nextID {
 			forestDigest = ""
 			nextID = 0
+			start = -1
 			if id == 0 {
 				forestDigest = operation.Inputs[0]
 				nextID = 1
+				start = index
 			}
 			continue
 		}
@@ -457,9 +654,10 @@ func completeFactorScans(trace []TransformOperation, objects map[string][]byte) 
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, forest)
+			result = append(result, factorScanBlock{forest: forest, start: start, end: index + 1})
 			forestDigest = ""
 			nextID = 0
+			start = -1
 		}
 	}
 	return result, nil
@@ -620,6 +818,9 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 			return nil
 		}
 		if objectVersion(objects[operation.Inputs[0]], "transform-closure/v1") {
+			if operation.Phase != "freeze" {
+				return errors.New("closure verification outside freeze phase")
+			}
 			return s.observeClosure(operation, objects)
 		}
 		if objectVersion(objects[operation.Inputs[0]], "transform-program-batch/v1") && operation.Phase == "acquire" {

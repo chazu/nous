@@ -254,3 +254,9 @@ func TestLifecycleRejectsUnsupportedVerifyWire(t *testing.T) {
 		t.Fatal("accepted verify over an unsupported boolean wire")
 	}
 }
+
+func TestTransformAtomGrammarRejectsUnregisteredScopedKinds(t *testing.T) {
+	if err := validateTransformAtom("scoped-id", []any{digestBytes([]byte("forest")), 1}); err == nil {
+		t.Fatal("accepted atom kind outside the frozen v2 grammar")
+	}
+}
