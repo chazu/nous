@@ -42,6 +42,7 @@ type PolicyOutcome struct {
 	Transcript            TransformTranscriptBundle
 	HeldoutStoreUnchanged bool
 	acquisition           *acquisitionRun
+	baselineEvents        []transformbaseline.Event
 }
 
 func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcome, error) {
@@ -90,17 +91,19 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 		}
 	case BoundedPBE, RandomPBE:
 		var learned transformbaseline.Result
+		var events []transformbaseline.Event
 		var err error
 		if policy == BoundedPBE {
-			learned, err = transformbaseline.BoundedPBE(c.Training)
+			learned, events, err = transformbaseline.BoundedPBEMetered(c.Training)
 		} else {
 			a, b := policySeed(c, policy)
-			learned, err = transformbaseline.RandomPBE(c.Training, a, b)
+			learned, events, err = transformbaseline.RandomPBEMetered(c.Training, a, b)
 		}
 		if err != nil {
 			return out, err
 		}
 		out.Terminal, out.Schema, out.Applications = learned.Terminal, learned.Schema, learned.Applications
+		out.baselineEvents = events
 	default:
 		return out, fmt.Errorf("unknown policy %q", policy)
 	}
@@ -114,6 +117,14 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 			}
 			out.Transcript = transcript
 			out.TrainingWork = int(out.Transcript.Work)
+		} else if len(out.baselineEvents) != 0 {
+			transcript, transcriptErr := transcriptFromBaselineEvents(out.baselineEvents, c, policy, out.Terminal, nil)
+			if transcriptErr != nil {
+				return out, transcriptErr
+			}
+			out.Transcript = transcript
+			out.TrainingWork = int(transcript.Work)
+			out.baselineEvents = nil
 		}
 		return out, nil
 	}
@@ -130,19 +141,39 @@ func scoreSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, error) {
 	}
 	expected := expectedByToken(c)
 	for _, test := range heldout.Cases {
-		var application transformbaseline.Application
-		application, err = transformbaseline.ApplySchema(test.Before, out.Schema)
+		beforeEventCount := len(out.baselineEvents)
+		application, events, applyErr := transformbaseline.ApplySchemaMetered(test.Before, out.Schema, "heldout")
+		err = applyErr
 		if err != nil {
 			return out, err
 		}
+		out.baselineEvents = append(out.baselineEvents, events...)
 		out.Applications++
 		truth := expected[test.Token]
+		if truth.Terminal == "applied" && application.Terminal == "applied" {
+			_, comparisons, compareErr := transformbaseline.CompareOutputsMetered(application.Output, truth.Output, "heldout")
+			if compareErr != nil {
+				return out, compareErr
+			}
+			out.baselineEvents = append(out.baselineEvents, comparisons...)
+		}
 		if correctApplication(application, truth) {
 			out.HeldoutCorrect++
 		}
 		if truth.Terminal == "abstain" && application.Terminal == "applied" {
 			out.FalseApplications++
 		}
+		if truth.Terminal == "abstain" {
+			out.NonmatchingWork += baselineEventWork(out.baselineEvents[beforeEventCount:])
+		}
+	}
+	if out.Policy == BoundedPBE || out.Policy == RandomPBE {
+		out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.Policy, out.Terminal, out.Schema)
+		if err != nil {
+			return out, err
+		}
+		out.TrainingWork = int(out.Transcript.Work)
+		out.baselineEvents = nil
 	}
 	return out, nil
 }

@@ -37,6 +37,12 @@ func TestSixPoliciesExposeExpectedSemanticControls(t *testing.T) {
 			if got.Applications > 48 || got.Terminal == "completed" && got.HeldoutCorrect != 8 || got.Terminal == "budget-exhausted" && (got.Applications != 40 || got.HeldoutCorrect != 0) {
 				t.Fatalf("family %d %s=%+v", family, policy, got)
 			}
+			if len(got.Transcript.Raw) == 0 || got.Transcript.Work != int64(got.TrainingWork) {
+				t.Fatalf("family %d %s lacks authoritative transcript: %+v", family, policy, got)
+			}
+			if _, err := reduceTransformTranscript(got.Transcript.Raw, policyManifestDigest(c, policy)); err != nil {
+				t.Fatalf("family %d %s transcript: %v", family, policy, err)
+			}
 		}
 		if family == 0 || family == 2 || family == 4 || family == 6 || family == 8 {
 			if got := results[NoEqualityGuard]; got.Terminal != "completed" || got.HeldoutCorrect != 8 {

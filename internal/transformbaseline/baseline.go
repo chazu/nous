@@ -45,25 +45,35 @@ var errInvalid = errors.New("invalid baseline input")
 // BoundedPBE performs canonical minimum-description enumeration. At most 40
 // training applications are available because eight credits are reserved.
 func BoundedPBE(trainingBytes []byte) (Result, error) {
+	result, _, err := BoundedPBEMetered(trainingBytes)
+	return result, err
+}
+
+func BoundedPBEMetered(trainingBytes []byte) (Result, []Event, error) {
 	training, err := transformfixturecore.ParseTraining(trainingBytes)
 	if err != nil {
-		return Result{}, err
+		return Result{}, nil, err
 	}
 	candidates := schemas()
 	slices.SortFunc(candidates, compareSchema)
-	return enumerate(training, candidates, true)
+	return enumerate(training, candidates, true, true)
 }
 
 func RandomPBE(trainingBytes []byte, seed1, seed2 uint64) (Result, error) {
+	result, _, err := RandomPBEMetered(trainingBytes, seed1, seed2)
+	return result, err
+}
+
+func RandomPBEMetered(trainingBytes []byte, seed1, seed2 uint64) (Result, []Event, error) {
 	training, err := transformfixturecore.ParseTraining(trainingBytes)
 	if err != nil {
-		return Result{}, err
+		return Result{}, nil, err
 	}
 	candidates := schemas()
 	rand.New(rand.NewPCG(seed1, seed2)).Shuffle(len(candidates), func(i, j int) {
 		candidates[i], candidates[j] = candidates[j], candidates[i]
 	})
-	return enumerate(training, candidates, false)
+	return enumerate(training, candidates, false, true)
 }
 
 // PositiveLGG generalizes only over positive examples and deliberately fixes
@@ -148,28 +158,39 @@ func Replay(programBatchBytes []byte, token string, forestBytes []byte) (Applica
 	return Application{Terminal: "abstain/replay-miss"}, nil
 }
 
-func enumerate(training transformfixturecore.Training, candidates []schema, retainTier bool) (Result, error) {
+func enumerate(training transformfixturecore.Training, candidates []schema, retainTier, metered bool) (Result, []Event, error) {
 	result := Result{}
+	var events []Event
 	foundCost := -1
 	for _, candidate := range candidates {
 		if foundCost >= 0 && (!retainTier || description(candidate) != foundCost) {
 			break
 		}
+		candidateBytes := encodeSchema(candidate)
+		if metered {
+			events = append(events, Event{4, "candidate-allocate", "training-validate", "allocated", [][]byte{candidateBytes}, [][]byte{candidateBytes}})
+		}
 		exact := true
 		for _, c := range training.Cases {
 			if result.Applications >= 40 {
-				return Result{Terminal: "budget-exhausted", Applications: result.Applications}, nil
+				return Result{Terminal: "budget-exhausted", Applications: result.Applications}, events, nil
 			}
 			result.Applications++
 			terminal, output, err := apply(c.Before, candidate)
 			if err != nil {
-				return Result{}, err
+				return Result{}, nil, err
+			}
+			if metered {
+				events = append(events, applicationEvents(c.Before, candidateBytes, candidate, terminal, output, "training-validate")...)
 			}
 			match := c.Kind == "positive" && terminal == "applied" && bytes.Equal(output, c.After) ||
 				c.Kind == "abstain" && len(output) == 0 && len(terminal) > 8 && terminal[:8] == "abstain/"
 			if !match {
 				exact = false
 				break
+			}
+			if metered && c.Kind == "positive" && terminal == "applied" {
+				events = append(events, outputComparisonEvents(output, c.After, "training-validate")...)
 			}
 		}
 		if exact {
@@ -189,7 +210,7 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 	} else {
 		result.Terminal = "completed"
 	}
-	return result, nil
+	return result, events, nil
 }
 
 func schemas() []schema {

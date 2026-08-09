@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/chazu/nous/internal/dsl"
+	"github.com/chazu/nous/internal/transformbaseline"
 )
 
 func transformMeterWork(records []dsl.TransformMeterRecord) (int64, [12]int64, error) {
@@ -17,6 +18,82 @@ func transformMeterWork(records []dsl.TransformMeterRecord) (int64, [12]int64, e
 	}
 	work, err := workForVector(vector)
 	return work, vector, err
+}
+
+func baselineEventWork(events []transformbaseline.Event) int64 {
+	var vector [12]int64
+	for _, event := range events {
+		if event.Category >= 0 && event.Category < len(vector) {
+			vector[event.Category]++
+		}
+	}
+	work, _ := workForVector(vector)
+	return work
+}
+
+func transcriptFromBaselineEvents(events []transformbaseline.Event, c curriculum, policy Policy, terminal string, schema []byte) (TransformTranscriptBundle, error) {
+	sink, err := newTransformTranscriptSink(c.Ordinal, string(policy), caseToken(c.Seed, "policy-"+string(policy), 0), policyManifestDigest(c, policy))
+	if err != nil {
+		return TransformTranscriptBundle{}, err
+	}
+	for index, event := range events {
+		if event.Operation == "evidence-link" {
+			if len(event.Inputs) != 1 || !sink.lastAttach || sink.lastOutput == "" || sink.lastObject == "" {
+				return TransformTranscriptBundle{}, fmt.Errorf("baseline event %d invalid evidence boundary", index)
+			}
+			attemptedDigest, admitErr := sink.Admit(event.Inputs[0])
+			if admitErr != nil {
+				return TransformTranscriptBundle{}, admitErr
+			}
+			var attempted any
+			if json.Unmarshal(event.Inputs[0], &attempted) != nil {
+				return TransformTranscriptBundle{}, fmt.Errorf("baseline event %d evidence JSON", index)
+			}
+			attemptBytes, _ := json.Marshal([]any{"transform-evidence-attempt/v1", "attached", "result", attempted, attemptedDigest, sink.lastOutput, sink.lastObject})
+			attemptDigest, admitErr := sink.Admit(attemptBytes)
+			if admitErr != nil {
+				return TransformTranscriptBundle{}, admitErr
+			}
+			if emitErr := sink.Emit(TransformOperation{"evidence-link", event.Phase, []string{attemptedDigest, sink.lastOutput, sink.lastObject}, []string{attemptDigest}, "attached", 10}); emitErr != nil {
+				return TransformTranscriptBundle{}, emitErr
+			}
+			continue
+		}
+		inputs := make([]string, len(event.Inputs))
+		for i, value := range event.Inputs {
+			inputs[i], err = sink.Admit(value)
+			if err != nil {
+				return TransformTranscriptBundle{}, fmt.Errorf("baseline event %d input %d: %w", index, i, err)
+			}
+		}
+		outputs := make([]string, len(event.Outputs))
+		for i, value := range event.Outputs {
+			outputs[i], err = sink.Admit(value)
+			if err != nil {
+				return TransformTranscriptBundle{}, fmt.Errorf("baseline event %d output %d: %w", index, i, err)
+			}
+		}
+		if err := sink.Emit(TransformOperation{event.Operation, event.Phase, inputs, outputs, event.Outcome, event.Category}); err != nil {
+			return TransformTranscriptBundle{}, fmt.Errorf("baseline event %d: %w", index, err)
+		}
+	}
+	input := schema
+	if len(input) == 0 {
+		input, _ = json.Marshal([]any{"transform-atom/v1", "enum", "no-schema"})
+	}
+	inputDigest, err := sink.Admit(input)
+	if err != nil {
+		return TransformTranscriptBundle{}, err
+	}
+	terminalBytes, _ := json.Marshal([]any{"transform-terminal/v1", terminal, sink.Work + 1, sink.Applications, len(sink.Events)})
+	terminalDigest, err := sink.Admit(terminalBytes)
+	if err != nil {
+		return TransformTranscriptBundle{}, err
+	}
+	if err := sink.Emit(TransformOperation{"terminal", "terminal", []string{inputDigest}, []string{terminalDigest}, terminal, 11}); err != nil {
+		return TransformTranscriptBundle{}, err
+	}
+	return sink.Bundle()
 }
 
 func transcriptFromAcquisition(run acquisitionRun, ordinal int, policy Policy, token, manifestDigest string) (TransformTranscriptBundle, error) {
