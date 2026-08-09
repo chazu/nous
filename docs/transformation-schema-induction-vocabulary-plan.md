@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Provisional Part 3 Vocabulary 2 implementation plan, revision 7. This document
+Provisional Part 3 Vocabulary 2 implementation plan, revision 8. This document
 is not implementation authority until independent architecture, transformation-
 semantics, and experimental-validity reviewers all accept the same committed
 revision.
@@ -56,6 +56,18 @@ attachment call produce one authenticated attempt object containing its status,
 the exact supplied semantic value and digest, and the preceding output/operation
 digests. Success and rejection therefore share the same bounded replay path.
 
+Revision 7 was accepted as a plan, but exact implementation review exposed two
+contradictions in the accepted protocol. Its operation matrix prohibited
+training-validation node/parent/target events that its required exact
+schema-application traces necessarily emit, and its locked statistics both
+erased every private random seed and required later byte-exact reconstruction
+of the resulting inference. No protected v1 panel was executed. Revision 8
+closes v1 as unexecuted and defines `transform-schema/v2`: application-internal
+fact events inherit the outer application phase, locked statistical randomness
+is publicly reproducible from the precommitted private-root commitment, and
+stateless PBE policies no longer manufacture Store evidence. All unaffected
+term, edit, program, partial, and schema object grammars remain v1.
+
 Vocabulary 1 ended `valid-null`; Vocabulary 2 does not consume its domain,
 artifacts, evidence, or learned state. It uses only the existing Store, Agenda,
 engine, scoped DSL-extension, and ordinary-heuristic surfaces.
@@ -77,8 +89,8 @@ constant and reproduce it in every report:
 
 ```json
 {
-  "experiment_version": "transform-schema/v1",
-  "seed_authority": "part3/transform-schema/v1",
+  "experiment_version": "transform-schema/v2",
+  "seed_authority": "part3/transform-schema/v2",
   "generator_version": "request-reference-forest/v1",
   "term_version": "typed-reference-forest/v1",
   "edit_grammar_version": "set-scalar-from-request/v1",
@@ -86,12 +98,12 @@ constant and reproduce it in every report:
   "oracle_version": "independent-forest-transform/v1",
   "baseline_version": "lgg-and-bounded-pbe/v1",
   "cache_version": "disabled/v1",
-  "cost_version": "transform-lifecycle-events/v1",
-  "statistics_version": "paired-stratified-resampling/v1",
-  "report_version": "transform-schema-trials/v1",
+  "cost_version": "transform-lifecycle-events/v2",
+  "statistics_version": "paired-stratified-resampling/v2",
+  "report_version": "transform-schema-trials/v2",
   "policy_fixture_version": "transform-policy-curriculum/v1",
   "scorer_fixture_version": "transform-scorer-curriculum/v1",
-  "transcript_version": "transform-events/v1",
+  "transcript_version": "transform-events/v2",
   "integrity_contract": "budgeted-transcript",
   "training_examples_per_curriculum": 8,
   "training_positive_examples": 4,
@@ -167,9 +179,10 @@ one-shot receipt exists; it deterministically derives 128 private curriculum
 seeds and is erased before report publication. Generator rejection and cohort
 assignment depend only on frozen term semantics, never on a policy result.
 
-Any change to objects, grammar, fixtures, information rights, costs, baselines,
-statistics, thresholds, or execution guards creates `transform-schema/v2` and
-preserves all v1 evidence.
+Any further change to objects, grammar, fixtures, information rights, costs,
+baselines, statistics, thresholds, or execution guards creates
+`transform-schema/v3` and preserves the unexecuted v1 preregistration and all
+v2 evidence.
 
 ## Terms, forests, and exact semantics
 
@@ -605,7 +618,7 @@ heldoutExpected := [opaqueCaseToken, terminal, outputOrNull]
 `["transform-profile/v1","typed-reference-forest/v1",
 "set-scalar-from-request/v1",
 "anchor-target-scope-old-guard-locality/v1",
-"transform-lifecycle-events/v1",12,4,72,48,12000]`. It cannot vary by family.
+"transform-lifecycle-events/v2",12,4,72,48,12000]`. It cannot vary by family.
 Before execution, fixture construction generates, canonicalizes,
 serializes, and root-commits the held-out inputs and sealed expectations.
 The policy training envelope contains no held-out bytes. Only after schema
@@ -627,9 +640,9 @@ fixed metadata is below the 16 MiB report cap. Exceeding either cap is `invalid`
 
 Family permutation has its own panel-level stream. Development and validation
 use the first 16 bytes of
-`SHA-256(canonical-json(["part3/transform-schema/v1","family-permutation",
+`SHA-256(canonical-json(["part3/transform-schema/v2","family-permutation",
 panel,authority]))`, with authorities 841001 and 842001. Locked uses the first 16 bytes
-of `HMAC-SHA256(root,canonical-json(["part3/transform-schema/v1",
+of `HMAC-SHA256(root,canonical-json(["part3/transform-schema/v2",
 "family-permutation","locked"]))`. Bytes are two big-endian `uint64` PCG
 seeds. Fisher-Yates visits `i=len(multiset)-1..1`, draws exactly
 `Uint64N(uint64(i+1))`, and swaps `i` with that index. The resulting whole
@@ -650,7 +663,7 @@ section, its first eight bytes are the generator seed, and
 hex strings; raw curriculum material is never serialized.
 
 Per-curriculum streams are the first 128 bits of
-`SHA-256(canonical-json(["part3/transform-schema/v1", panelCommitment,
+`SHA-256(canonical-json(["part3/transform-schema/v2", panelCommitment,
 seedCommitment, attempt, purpose]))` interpreted as two big-endian `uint64`
 values for PCG. Public development and guarded validation use commitments to
 their declared seed; locked uses a commitment to its derived private seed.
@@ -848,8 +861,8 @@ bounded search is the experiment.
 Before event zero, orchestration writes the identical primary/audit
 pre-execution leaf
 `pre/<policy>/<opaqueTaskToken>.json` with wire
-`["transform-policy-manifest/v1","transform-schema/v1",
-"transform-lifecycle-events/v1",panelCommitment,policy,opaqueTaskToken,
+`["transform-policy-manifest/v2","transform-schema/v2",
+"transform-lifecycle-events/v2",panelCommitment,policy,opaqueTaskToken,
 trainingFixtureDigest,heldoutInputDigest,queueDigest,
 [12000,50000,48,2000,20000]]`. All digests name already committed fixture
 leaves; no family, seed, attempt, expected output, ordinal, execution role,
@@ -860,7 +873,7 @@ cycle.
 
 An internal event has no curriculum ordinal. The unforgeable external sink
 attaches it and writes the canonical array
-`["transform-events/v1",panelOrdinal,policy,opaqueTaskToken,sequence,phase,
+`["transform-events/v2",panelOrdinal,policy,opaqueTaskToken,sequence,phase,
 category,operation,subjectDigest,objectDigest,outcome,previousDigest]`.
 Policy is at most 32 ASCII bytes, opaque task token exactly 16, phase at most
 20, operation at most 24, outcome at most 32, and all three digests exactly 64
@@ -945,7 +958,7 @@ The normative operation matrix is:
 
 | Operation | Legal phases | Category/charge | Input kinds -> output kinds | Outcomes |
 | --- | --- | ---: | --- | --- |
-| node | acquire,target,anchor,scope,old-guard,locality,heldout | 0/1 | forest,id -> node-facts | ok,invalid-input |
+| node | acquire,target,anchor,scope,old-guard,locality,training-validate,heldout | 0/1 | forest,id -> node-facts | ok,invalid-input |
 | parent | same as node | 1/1 | forest,id -> parent-facts | ok,absent,invalid-input |
 | target | same as node | 2/1 | forest,id -> atom | ok,absent,invalid-input |
 | compare | acquire,target,anchor,scope,old-guard,locality | 3/1 | atom,atom -> atom(boolean) | true,false,invalid-input |
@@ -998,6 +1011,12 @@ replay-application event commits that reservation and is the sole event counted
 as the application. A missing, duplicated, or nonfinal application event, or a
 crash between reservation and commit, is mechanical `invalid`; it cannot turn
 partial work into a free empirical attempt.
+
+In `training-validate`, node, parent, and target operations are legal only
+inside that exact deterministic reserved schema-application trace. They inherit
+the outer call phase. The lifecycle reducer rejects any such fact operation
+outside a reservation-derived trace; matrix legality does not authorize
+free-standing policy observations during training validation.
 
 No other phase/category/charge/kind/arity/outcome combination is valid. Result
 terminal is limited to the schema-application outcomes above plus
@@ -1087,7 +1106,7 @@ makes the run `invalid`.
 Competence has its own nonempirical caps of 26,000 schema applications, 8,000
 program applications, and 5,000,000 work. It cannot consume or replenish a
 curriculum budget, populate policy artifacts, or expose a panel fixture.
-Its exact root is `["transform-competence-root/v1",
+Its exact root is `["transform-competence-root/v2",
 [[relativePath,sha256,byteLength,"100644"]...]]`, sorted under the same path
 rules as the evidence graph, over every canonical competence input and result
 leaf and excluding the root file itself. Empty and self-referential roots are
@@ -1141,14 +1160,23 @@ one `Uint64N(2)` is drawn per pair, and `d_i` is multiplied by `+1` for zero and
 zero curriculum count is panel-level `invalid`.
 
 Public inference streams derive PCG seeds from the first 128 bits of
-`SHA-256(canonical-json(["part3/transform-schema/v1","statistics",panel,
+`SHA-256(canonical-json(["part3/transform-schema/v2","statistics",panel,
 authority,replicate,purpose]))`, where development authority is integer 841001,
 validation is 842001, and purpose is exactly `bootstrap/nous-vs-pbe` or
-`randomization/nous-vs-pbe`. Locked inference prederives both seed pairs for all
-10,000 replicates as the first 16 bytes of
-`HMAC-SHA256(root,canonical-json(["statistics","locked",replicate,purpose]))`,
-interpreted as two big-endian `uint64` values. It stores them only in an
-in-memory authority, erases the root, and then computes statistics.
+`randomization/nous-vs-pbe`. Locked inference uses the receipt's already
+durable `rootCommitment = SHA-256(privateRoot)` as public, pre-outcome
+statistical authority. For replicate `r` and either purpose, its PCG seed pair
+is the first 16 bytes of
+`SHA-256(canonical-json(["part3/transform-schema/v2","statistics","locked",
+rootCommitment,r,purpose]))`, interpreted as two big-endian `uint64` values.
+The prepared locked fixture bundle contains exactly one
+`statistics/authority.json` leaf with wire
+`["transform-statistics-authority/v2","locked",rootCommitment,10000,10000]`;
+the fixture root and running receipt bind this leaf before policy event zero.
+Independent replay requires the leaf commitment to equal the immutable receipt
+commitment, rederives all 20,000 pairs, and recomputes the complete inference.
+It rejects any serialized private root, curriculum seed, root-derived HMAC
+output, or expanded seed-pair leaf.
 
 A locked result is `valid-positive` only when:
 
@@ -1169,14 +1197,14 @@ panel supplies a final empirical label.
 Development estimates locked power by 2,000 fixed outer resamples to 128
 curricula with locked counts (the first two canonical families receive 15 and
 the final seven receive 14). For outer ordinal `o`, a fresh `panel` PCG from
-`["part3/transform-schema/v1","power",841001,o,"panel"]` visits family then
+`["part3/transform-schema/v2","power",841001,o,"panel"]` visits family then
 sample position and draws development paired rows with replacement within that
 family. It copies the complete paired outcome, false-application counts, and
 nonmatching work for each sampled curriculum.
 
 Each synthetic panel runs the same point and gates with 2,000 inner bootstrap
 and 2,000 inner randomization replicates. Inner replicate `r` uses the first 128
-SHA-256 bits of `["part3/transform-schema/v1","power",841001,o,r,purpose]`,
+SHA-256 bits of `["part3/transform-schema/v2","power",841001,o,r,purpose]`,
 where purpose is exactly `bootstrap` or `randomization`; the panel stream uses
 the shorter tuple above. Bootstrap resamples the synthetic rows within each
 family at its locked count; randomization draws one bit per synthetic row in
@@ -1250,14 +1278,14 @@ The repository guard requires:
 Canonical paths are:
 
 ```text
-.nous/transform-schema-v1-development-report.json
-.nous/transform-schema-v1-development-transcripts/
-.nous/transform-schema-v1-validation-receipt.json
-.nous/transform-schema-v1-validation-report.json
-.nous/transform-schema-v1-validation-transcripts/
-.nous/transform-schema-v1-locked-receipt.json
-.nous/transform-schema-v1-locked-report.json
-.nous/transform-schema-v1-locked-transcripts/
+.nous/transform-schema-v2-development-report.json
+.nous/transform-schema-v2-development-transcripts/
+.nous/transform-schema-v2-validation-receipt.json
+.nous/transform-schema-v2-validation-report.json
+.nous/transform-schema-v2-validation-transcripts/
+.nous/transform-schema-v2-locked-receipt.json
+.nous/transform-schema-v2-locked-report.json
+.nous/transform-schema-v2-locked-transcripts/
 ```
 
 The only panel execution exports are
@@ -1273,29 +1301,38 @@ function variables, reflection, linkname, test backdoors, and indirect wrappers.
 
 Every evidence leaf uses a closed canonical wire:
 
-- review authority is `["transform-reviews/v1",planCommit,
+- review authority is `["transform-reviews/v2",planCommit,
   implementationCommit,[[scope,status,reviewedCommit]...],
   [[protectedPath,sha256]...]]`; reviews are ordered architecture, semantics,
   experiment and paths by UTF-8 bytes;
 - an attempt receipt is
-  `["transform-attempt/v1",panel,state,head,implementationCommit,planCommit,
+  `["transform-attempt/v2",panel,state,head,implementationCommit,planCommit,
   startedUTC,rootCommitment,fixtureRoot,reportDigest,evidenceGraphDigest]`;
-- a fixture root is `["transform-fixture-root/v1",panel,
+- a fixture root is `["transform-fixture-root/v2",panel,
   [[relativePath,sha256,byteLength,"100644"]...]]`, sorted by path, over policy
   training, delayed held-out inputs, sealed scorer bytes, family assignment,
-  and queue bytes;
-- an object root is `["transform-objects/v1",
+  queue bytes, and, for locked only, the single statistical-authority leaf;
+- an object root is `["transform-objects/v2",
   [[relativeObjectPath,sha256,byteLength,"100644"]...]]`;
-- an execution manifest is `["transform-execution/v1",role,[row...]]`, where
+- an execution manifest is `["transform-execution/v2",role,[row...]]`, where
   each row is `[policy,curriculumOrdinal,opaqueTaskToken,preManifestSHA256,
   chunkSHA256,rawBytes,gzipBytes,eventCount,objectRootSHA256,vector12,work,applications,
   policyTerminal,schemaSHA256,trainingStoreSHA256,heldoutResultsSHA256]`, ordered
   by policy enum then curriculum ordinal; and
-- a report is `["transform-schema-trials/v1",classification,payloadDigest,
+- a report is `["transform-schema-trials/v2",classification,payloadDigest,
   payload]`, where payload is the fixed array `[panel,planCommit,
   implementationCommit,manifest,fixtureRootDigest,primaryManifestDigest,
   auditManifestDigest,evidenceGraphDigest,competence,policyRows,inference,power,
   gates,limitations]`.
+
+`trainingStoreSHA256` names execution state, never a synthetic summary.
+`nous-refine` and `no-equality-guard` commit their actual frozen CUE Store;
+`positive-lgg` and `concrete-replay` commit the actual acquisition-only CUE
+Store captured immediately before Store access is destroyed. `bounded-pbe` and
+`random-pbe` are stateless and must use `""`; a `training-store.json` leaf for
+either PBE policy is forbidden even on successful completion. Their training
+evidence is the committed training envelope, exact transcript and reducer
+state, frozen artifact or terminal, and independent oracle reconstruction.
 
 Nested report wires are exact. `competence` is
 `["transform-competence/v1",351,25272,7020,microcaseCount,passed,rootSHA256]`.
@@ -1320,9 +1357,10 @@ bit `1 << k`; no other bit is permitted. The two execution-manifest fields and
 the fixture-root field in a report are 64-lowercase-hex SHA-256 digests, not
 paths or embedded manifests. The `manifest` field is the complete canonical
 experiment-manifest object above; it may not be replaced by a digest, path, or
-null. Empty strings are permitted only for the explicitly inapplicable schema
-and store/result digest positions associated with abstention or pre-schema
-termination.
+null. Empty strings are permitted only for explicitly inapplicable schema and
+result digest positions associated with abstention or pre-schema termination,
+plus the training-Store position for the two stateless PBE policies defined
+above.
 
 Receipt time is exactly UTC `YYYY-MM-DDTHH:MM:SS.NNNNNNNNNZ`. `claimed` has
 empty root/fixture/report/graph fields; `running` may add root and fixture
@@ -1335,14 +1373,15 @@ values.
 Strict decoders reject unknown fields/array lengths, duplicate paths, unsorted
 leaves, noncanonical JSON, invalid UTF-8, trailing bytes, negative/overflowing
 sizes, wrong modes, and digest mismatches. The evidence graph wire is
-`["transform-evidence-graph/v1",panel,[[path,sha256,byteLength,"100644"]...]]`.
+`["transform-evidence-graph/v2",panel,[[path,sha256,byteLength,"100644"]...]]`.
 Its leaves are sorted by raw UTF-8 path bytes. A path is a nonempty relative
 POSIX ASCII path with no leading slash, empty component, `.` component, `..`
 component, backslash, or duplicate. The graph contains the review-authority
 leaf; every policy, scorer, queue, and family-assignment fixture leaf; the
 fixture root; every policy premanifest; both execution manifests; every
 transcript chunk; every object leaf and object root; and every competence leaf
-and competence root. Empty graphs are invalid. It
+and competence root; locked additionally contains its single statistical-
+authority leaf. Empty graphs are invalid. It
 excludes the graph file itself, report, and receipt. `evidenceGraphDigest` is
 the SHA-256 of these canonical graph bytes. The report contains that digest and
 its outer payload digest hashes the entire payload; after report persistence
@@ -1355,7 +1394,7 @@ Development creates public fixtures once, then primary and audit executions
 independently decode those bytes. Validation is one-shot and requires a
 committed, independently replayed development bundle with authorized power.
 Locked execution is one-shot and requires committed validation evidence plus
-the exact token `transform-schema/v1:<clean-HEAD>`. A receipt is durably claimed
+the exact token `transform-schema/v2:<clean-HEAD>`. A receipt is durably claimed
 before fixture generation and remains `invalid` after any failed protected
 attempt. Evidence leaves and every parent are regular files/directories; every
 prerequisite is read from immutable Git object bytes and checked against the
@@ -1365,12 +1404,14 @@ Validation claims its receipt before its unexported constructor receives the
 first seed. Locked claims its receipt, reads 32 random root bytes, writes only
 `SHA-256(root)` to the receipt, and derives curriculum seed `j` as the first
 eight bytes of
-`HMAC-SHA256(root, canonical-json(["part3/transform-schema/v1",
+`HMAC-SHA256(root, canonical-json(["part3/transform-schema/v2",
 "locked-curriculum",j]))`, big-endian. Fixture streams remain independently
-domain-separated from that seed as specified above. The guard prederives the
-20,000 locked inference seed pairs, constructs and serializes all policy/scorer
-fixtures, commits their root manifest to the receipt, then overwrites the root,
+domain-separated from that seed as specified above. The guard constructs and
+serializes all policy/scorer fixtures plus the statistical-authority leaf,
+commits their root manifest to the receipt, then overwrites the private root,
 derived curriculum seeds, and temporary scorer structs before any policy runs.
+Statistical pairs are subsequently rederived from the public root commitment,
+not the erased root.
 Rejected generator attempts are internal to one derived seed and do not derive
 a replacement seed. Failure at any point finalizes the already claimed receipt
 `invalid`; partial leaves remain for audit and cannot be retried.
