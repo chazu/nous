@@ -3,7 +3,6 @@ package transformexp
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -115,7 +114,7 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 		if out.acquisition != nil {
 			run := *out.acquisition
 			out.acquisition = nil
-			transcript, transcriptErr := transcriptFromAcquisition(run, c.Ordinal, policy, caseToken(c.Seed, "policy-"+string(policy), 0), policyManifestDigest(c, policy))
+			transcript, transcriptErr := transcriptFromAcquisition(run, c.Ordinal, policy, c.PolicyTokens[policy], policyManifestDigest(c, policy))
 			if transcriptErr != nil {
 				return out, transcriptErr
 			}
@@ -258,7 +257,7 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 	}
 	run.MeterRecords = records
 	manifest := policyManifestDigest(c, out.Policy)
-	out.Transcript, err = transcriptFromAcquisition(run, c.Ordinal, out.Policy, caseToken(c.Seed, "policy-"+string(out.Policy), 0), manifest)
+	out.Transcript, err = transcriptFromAcquisition(run, c.Ordinal, out.Policy, c.PolicyTokens[out.Policy], manifest)
 	experimentUnit.Set("meterToken", oldMeter)
 	storeAfter, storeErr := run.Store.CanonicalJSON()
 	if storeErr != nil {
@@ -375,8 +374,8 @@ func policyToken(c curriculum, policy Policy) string {
 }
 
 func policySeed(c curriculum, policy Policy) (uint64, uint64) {
-	d := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v1", "random-policy", c.Seed, policy}))
-	return binary.BigEndian.Uint64(d[:8]), binary.BigEndian.Uint64(d[8:16])
+	value := c.PolicyRandomness[policy]
+	return value[0], value[1]
 }
 
 func policyManifestDigest(c curriculum, policy Policy) string {
@@ -390,5 +389,5 @@ func policyManifestBytes(c curriculum, policy Policy) []byte {
 	if panel == "" {
 		panel = "safe"
 	}
-	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", panel, policy, caseToken(c.Seed, "policy-"+string(policy), 0), hex.EncodeToString(training[:]), hex.EncodeToString(heldout[:]), "", []int{12000, 50000, 48, 2000, 20000}})
+	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", panel, policy, c.PolicyTokens[policy], hex.EncodeToString(training[:]), hex.EncodeToString(heldout[:]), "", []int{12000, 50000, 48, 2000, 20000}})
 }

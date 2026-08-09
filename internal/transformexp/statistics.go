@@ -65,8 +65,15 @@ type indexedPoint struct {
 }
 
 func computeTransformInference(rows []pairedTransformRow, panel string, authority uint64, bootstrapReplicates, randomizationReplicates int) (transformInference, error) {
+	return computeTransformInferenceWithPairs(rows, panel, authority, nil, bootstrapReplicates, randomizationReplicates)
+}
+
+func computeTransformInferenceWithPairs(rows []pairedTransformRow, panel string, authority uint64, lockedPairs [][2]uint64, bootstrapReplicates, randomizationReplicates int) (transformInference, error) {
 	if len(rows) == 0 || bootstrapReplicates < 1 || randomizationReplicates < 1 {
 		return transformInference{}, fmt.Errorf("invalid inference dimensions")
+	}
+	if lockedPairs != nil && len(lockedPairs) != bootstrapReplicates+randomizationReplicates {
+		return transformInference{}, fmt.Errorf("locked inference pair count mismatch")
 	}
 	rows = slices.Clone(rows)
 	slices.SortFunc(rows, func(a, b pairedTransformRow) int { return a.Ordinal - b.Ordinal })
@@ -94,7 +101,7 @@ func computeTransformInference(rows []pairedTransformRow, panel string, authorit
 	result.Point = rationalPoint{total, int64(len(rows))}
 	bootstrap := make([]indexedPoint, bootstrapReplicates)
 	for replicate := range bootstrapReplicates {
-		rng := transformStatisticsRNG(panel, authority, replicate, "bootstrap/nous-vs-pbe")
+		rng := transformStatisticsRNGFor(panel, authority, lockedPairs, replicate, "bootstrap/nous-vs-pbe")
 		var sample int64
 		for family := range byFamily {
 			members := byFamily[family]
@@ -113,7 +120,7 @@ func computeTransformInference(rows []pairedTransformRow, panel string, authorit
 	result.Lower, result.Upper = bootstrap[lowerIndex].Point, bootstrap[upperIndex].Point
 	observed := abs64(total)
 	for replicate := range randomizationReplicates {
-		rng := transformStatisticsRNG(panel, authority, replicate, "randomization/nous-vs-pbe")
+		rng := transformStatisticsRNGFor(panel, authority, lockedPairs, bootstrapReplicates+replicate, "randomization/nous-vs-pbe")
 		var sample int64
 		for _, row := range rows {
 			difference := int64(boolInt(row.NousSuccess) - boolInt(row.PBESuccess))
@@ -128,6 +135,14 @@ func computeTransformInference(rows []pairedTransformRow, panel string, authorit
 	}
 	result.PValue = rationalPoint{int64(1 + result.RandomizationExtreme), int64(1 + randomizationReplicates)}
 	return result, nil
+}
+
+func transformStatisticsRNGFor(panel string, authority uint64, lockedPairs [][2]uint64, replicate int, purpose string) *rand.Rand {
+	if lockedPairs != nil {
+		pair := lockedPairs[replicate]
+		return rand.New(rand.NewPCG(pair[0], pair[1]))
+	}
+	return transformStatisticsRNG(panel, authority, replicate, purpose)
 }
 
 func transformStatisticsRNG(panel string, authority uint64, replicate int, purpose string) *rand.Rand {

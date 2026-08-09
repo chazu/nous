@@ -29,6 +29,7 @@ import (
 	"github.com/chazu/nous/internal/rewriteexp"
 	"github.com/chazu/nous/internal/ruleinductionexp"
 	"github.com/chazu/nous/internal/seed"
+	"github.com/chazu/nous/internal/transformexp"
 	"github.com/chazu/nous/internal/unit"
 	causal "github.com/chazu/nous/internal/vocab/causal"
 )
@@ -53,6 +54,8 @@ func main() {
 		nogoodTrialsCmd(os.Args[2:])
 	case "ruleinduction-trials":
 		ruleInductionTrialsCmd(os.Args[2:])
+	case "transform-schema-trials":
+		transformSchemaTrialsCmd(os.Args[2:])
 	case "causal-trials":
 		causalTrialsCmd(os.Args[2:])
 	case "help", "-h", "--help":
@@ -61,6 +64,52 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
 	}
+}
+
+func transformSchemaTrialsCmd(args []string) {
+	fs := flag.NewFlagSet("transform-schema-trials", flag.ExitOnError)
+	repoRoot := fs.String("repo-root", ".", "canonical repository root")
+	domainsDir := fs.String("domains-dir", "domains", "canonical repository domains/ path")
+	panel := fs.String("panel", "development", "development, validation, or locked")
+	unlockToken := fs.String("unlock-token", "", "locked token transform-schema/v1:<exact-clean-HEAD>")
+	fs.Parse(args)
+	root, err := filepath.Abs(*repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	domains := *domainsDir
+	if !filepath.IsAbs(domains) {
+		domains = filepath.Join(root, domains)
+	}
+	var encoded []byte
+	switch *panel {
+	case "development":
+		report, runErr := transformexp.ExecuteDevelopment(root, domains)
+		err = runErr
+		if err == nil {
+			encoded, err = report.JSON()
+		}
+	case "validation":
+		report, runErr := transformexp.ExecuteValidation(root, domains)
+		err = runErr
+		if err == nil {
+			encoded, err = report.JSON()
+		}
+	case "locked":
+		report, runErr := transformexp.ExecuteLocked(root, domains, *unlockToken)
+		err = runErr
+		if err == nil {
+			encoded, err = report.JSON()
+		}
+	default:
+		err = fmt.Errorf("unknown transform-schema panel %q", *panel)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(encoded))
 }
 
 func nogoodTrialsCmd(args []string) {
@@ -441,6 +490,7 @@ Usage:
   nous game-trials [flags]                      Run iterated-game strategy trials
   nous nogood-trials -panel NAME                Run guarded nogood development/validation/locked panel
   nous ruleinduction-trials [flags]             Run relational rule-induction development trials
+  nous transform-schema-trials -panel NAME      Run guarded transformation-schema panels
   nous causal-trials -panel NAME                Run v2 causal development/training/replay/validation/locked panel
   nous help                                     Show this help
 

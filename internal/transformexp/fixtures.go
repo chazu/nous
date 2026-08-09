@@ -1,6 +1,7 @@
 package transformexp
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -19,26 +20,29 @@ type expectedCase struct {
 }
 
 type curriculum struct {
-	Ordinal  int
-	Family   int
-	Seed     uint64
-	Panel    string
-	Training []byte
-	Heldout  []byte
-	Expected []expectedCase
-	Latent   []byte
+	Ordinal          int
+	Family           int
+	Seed             uint64
+	SeedCommitment   string
+	Panel            string
+	Training         []byte
+	Heldout          []byte
+	Expected         []expectedCase
+	Latent           []byte
+	PolicyTokens     map[Policy]string
+	PolicyRandomness map[Policy][2]uint64
 }
 
 var familySchemas = []transformschema.Schema{
-	{"request-target", "definition", "local", "any", "required"},
-	{"request-target", "references", "local", "equals-from", "required"},
-	{"request-target", "references", "local", "any", "required"},
-	{"request-target", "references", "global", "equals-from", "required"},
-	{"request-target", "references", "global", "any", "required"},
-	{"request-target", "definition+references", "local", "equals-from", "required"},
-	{"request-target", "definition+references", "local", "any", "required"},
-	{"request-target", "definition+references", "global", "equals-from", "required"},
-	{"request-target", "definition+references", "global", "any", "required"},
+	{Anchor: "request-target", Targets: "definition", ReferenceScope: "local", OldGuard: "any", Locality: "required"},
+	{Anchor: "request-target", Targets: "references", ReferenceScope: "local", OldGuard: "equals-from", Locality: "required"},
+	{Anchor: "request-target", Targets: "references", ReferenceScope: "local", OldGuard: "any", Locality: "required"},
+	{Anchor: "request-target", Targets: "references", ReferenceScope: "global", OldGuard: "equals-from", Locality: "required"},
+	{Anchor: "request-target", Targets: "references", ReferenceScope: "global", OldGuard: "any", Locality: "required"},
+	{Anchor: "request-target", Targets: "definition+references", ReferenceScope: "local", OldGuard: "equals-from", Locality: "required"},
+	{Anchor: "request-target", Targets: "definition+references", ReferenceScope: "local", OldGuard: "any", Locality: "required"},
+	{Anchor: "request-target", Targets: "definition+references", ReferenceScope: "global", OldGuard: "equals-from", Locality: "required"},
+	{Anchor: "request-target", Targets: "definition+references", ReferenceScope: "global", OldGuard: "any", Locality: "required"},
 }
 
 func developmentPanel() ([]curriculum, error) {
@@ -47,6 +51,53 @@ func developmentPanel() ([]curriculum, error) {
 
 func validationPanel() ([]curriculum, error) {
 	return publicPanel("validation", 842001, []int{11, 11, 11, 11, 11, 11, 10, 10, 10})
+}
+
+// lockedPanel is deliberately unexported. Its sole production caller is the
+// repository guard, after that guard has durably claimed the locked attempt.
+func lockedPanel(root []byte) ([]curriculum, [][2]uint64, error) {
+	if len(root) != sha256.Size {
+		return nil, nil, fmt.Errorf("locked root must contain 32 bytes")
+	}
+	counts := []int{15, 15, 14, 14, 14, 14, 14, 14, 14}
+	seeds := make([]uint64, LockedCount)
+	for ordinal := range seeds {
+		seeds[ordinal] = lockedUint64(root, "locked-curriculum", ordinal, 0)
+	}
+	families := make([]int, 0, LockedCount)
+	for family, count := range counts {
+		for range count {
+			families = append(families, family)
+		}
+	}
+	permutationSeed := lockedUint64(root, "locked-family-permutation", 0, 0)
+	permutationDigest := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v1", "locked-family-permutation", permutationSeed}))
+	rng := rand.New(rand.NewPCG(binary.BigEndian.Uint64(permutationDigest[:8]), binary.BigEndian.Uint64(permutationDigest[8:16])))
+	rng.Shuffle(len(families), func(i, j int) { families[i], families[j] = families[j], families[i] })
+	panel := make([]curriculum, LockedCount)
+	for ordinal := range panel {
+		value, err := makeCurriculum(ordinal, families[ordinal], seeds[ordinal])
+		if err != nil {
+			return nil, nil, fmt.Errorf("locked curriculum %d: %w", ordinal, err)
+		}
+		value.Panel = "locked"
+		panel[ordinal] = value
+	}
+	pairs := make([][2]uint64, 20000)
+	for ordinal := range pairs {
+		pairs[ordinal][0] = lockedUint64(root, "locked-inference", ordinal, 0)
+		pairs[ordinal][1] = lockedUint64(root, "locked-inference", ordinal, 1)
+	}
+	for index := range seeds {
+		seeds[index] = 0
+	}
+	return panel, pairs, nil
+}
+
+func lockedUint64(root []byte, purpose string, ordinal, lane int) uint64 {
+	mac := hmac.New(sha256.New, root)
+	mac.Write(mustJSON([]any{"part3/transform-schema/v1", purpose, ordinal, lane}))
+	return binary.BigEndian.Uint64(mac.Sum(nil)[:8])
 }
 
 func publicPanel(panel string, start uint64, counts []int) ([]curriculum, error) {
@@ -133,7 +184,14 @@ func makeCurriculum(ordinal, family int, seed uint64) (curriculum, error) {
 		}
 		return 0
 	})
-	return curriculum{Ordinal: ordinal, Family: family, Seed: seed, Training: trainingBytes, Heldout: heldoutBytes, Expected: expected, Latent: latentBytes}, nil
+	policyTokens := map[Policy]string{}
+	policyRandomness := map[Policy][2]uint64{}
+	for _, policy := range empiricalPolicies {
+		policyTokens[policy] = caseToken(seed, "policy-"+string(policy), 0)
+		digest := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v1", "random-policy", seed, policy}))
+		policyRandomness[policy] = [2]uint64{binary.BigEndian.Uint64(digest[:8]), binary.BigEndian.Uint64(digest[8:16])}
+	}
+	return curriculum{Ordinal: ordinal, Family: family, Seed: seed, SeedCommitment: digestBytes(mustJSON([]any{"transform-seed/v1", seed})), Training: trainingBytes, Heldout: heldoutBytes, Expected: expected, Latent: latentBytes, PolicyTokens: policyTokens, PolicyRandomness: policyRandomness}, nil
 }
 
 func uniqueMinimum(training transformfixturecore.Training, latent []byte) (bool, error) {

@@ -23,35 +23,16 @@ type panelEvidence struct {
 }
 
 func buildPanelEvidence(domainsDir, panel string, curricula []curriculum, authority uint64, reviewAuthority []byte) (panelEvidence, error) {
-	report, artifacts, err := runPanelDetailed(domainsDir, panel, curricula, authority)
+	return buildPanelEvidenceWithPairs(domainsDir, panel, curricula, authority, nil, reviewAuthority)
+}
+
+func buildPanelEvidenceWithPairs(domainsDir, panel string, curricula []curriculum, authority uint64, lockedPairs [][2]uint64, reviewAuthority []byte) (panelEvidence, error) {
+	report, artifacts, err := runPanelDetailedWithPairs(domainsDir, panel, curricula, authority, lockedPairs)
 	if err != nil {
 		return panelEvidence{}, err
 	}
 	files := map[string][]byte{}
-	fixtureFiles := map[string][]byte{}
-	for _, c := range curricula {
-		base := fmt.Sprintf("fixtures/%03d", c.Ordinal)
-		fixtureFiles[base+"/training.json"] = bytes.Clone(c.Training)
-		fixtureFiles[base+"/heldout.json"] = bytes.Clone(c.Heldout)
-		expected := make([]any, len(c.Expected))
-		for i, value := range c.Expected {
-			var output any
-			if len(value.Output) != 0 {
-				if json.Unmarshal(value.Output, &output) != nil {
-					return panelEvidence{}, fmt.Errorf("expected output JSON")
-				}
-			}
-			expected[i] = []any{value.Token, value.Terminal, output}
-		}
-		var latent any
-		if json.Unmarshal(c.Latent, &latent) != nil {
-			return panelEvidence{}, fmt.Errorf("latent JSON")
-		}
-		fixtureFiles[base+"/scorer.json"] = mustJSON([]any{"transform-scorer-curriculum/v1", c.Family, digestBytes(mustJSON([]any{"transform-seed/v1", panel, c.Seed})), 0, latent, expected})
-		fixtureFiles[base+"/family.json"] = mustJSON([]any{"transform-family-assignment/v1", c.Ordinal, c.Family})
-		fixtureFiles[base+"/queue.json"] = mustJSON([]any{"transform-policy-queue/v1", c.Ordinal, empiricalPolicies})
-	}
-	fixtureRoot, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
+	fixtureFiles, fixtureRoot, err := buildFixtureEvidence(panel, curricula)
 	if err != nil {
 		return panelEvidence{}, err
 	}
@@ -97,6 +78,37 @@ func buildPanelEvidence(domainsDir, panel string, curricula []curriculum, author
 	return panelEvidence{report, reportBytes, graph, files}, nil
 }
 
+func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]byte, []byte, error) {
+	fixtureFiles := map[string][]byte{}
+	for _, c := range curricula {
+		base := fmt.Sprintf("fixtures/%03d", c.Ordinal)
+		fixtureFiles[base+"/training.json"] = bytes.Clone(c.Training)
+		fixtureFiles[base+"/heldout.json"] = bytes.Clone(c.Heldout)
+		expected := make([]any, len(c.Expected))
+		for i, value := range c.Expected {
+			var output any
+			if len(value.Output) != 0 {
+				if json.Unmarshal(value.Output, &output) != nil {
+					return nil, nil, fmt.Errorf("expected output JSON")
+				}
+			}
+			expected[i] = []any{value.Token, value.Terminal, output}
+		}
+		var latent any
+		if json.Unmarshal(c.Latent, &latent) != nil {
+			return nil, nil, fmt.Errorf("latent JSON")
+		}
+		fixtureFiles[base+"/scorer.json"] = mustJSON([]any{"transform-scorer-curriculum/v1", c.Family, c.SeedCommitment, 0, latent, expected})
+		fixtureFiles[base+"/family.json"] = mustJSON([]any{"transform-family-assignment/v1", c.Ordinal, c.Family})
+		fixtureFiles[base+"/queue.json"] = mustJSON([]any{"transform-policy-queue/v1", c.Ordinal, empiricalPolicies})
+	}
+	fixtureRoot, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fixtureFiles, fixtureRoot, nil
+}
+
 func addExecutionEvidence(files map[string][]byte, role string, curricula []curriculum, reportRows []PolicyReportRow, bundles map[string]TransformTranscriptBundle) ([]byte, error) {
 	rowsByKey := map[string]PolicyReportRow{}
 	for _, row := range reportRows {
@@ -129,7 +141,7 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 			premanifest := policyManifestBytes(c, policy)
 			files[base+"/premanifest.json"] = premanifest
 			row := rowsByKey[key]
-			rows = append(rows, []any{policy, c.Ordinal, caseToken(c.Seed, "policy-"+string(policy), 0), digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, row.SchemaSHA256, digestBytes(c.Training), digestBytes(mustJSON([]any{row.HeldoutCorrectBits, row.FalseApplications}))})
+			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, row.SchemaSHA256, digestBytes(c.Training), digestBytes(mustJSON([]any{row.HeldoutCorrectBits, row.FalseApplications}))})
 		}
 	}
 	return mustJSON([]any{"transform-execution/v1", role, rows}), nil

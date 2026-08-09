@@ -66,6 +66,10 @@ func runSafePanel(domainsDir, panel string, curricula []curriculum, authority ui
 }
 
 func runPanelDetailed(domainsDir, panel string, curricula []curriculum, authority uint64) (SafePanelReport, panelArtifacts, error) {
+	return runPanelDetailedWithPairs(domainsDir, panel, curricula, authority, nil)
+}
+
+func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum, authority uint64, lockedPairs [][2]uint64) (SafePanelReport, panelArtifacts, error) {
 	if len(curricula) == 0 {
 		return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("empty panel")
 	}
@@ -122,7 +126,7 @@ func runPanelDetailed(domainsDir, panel string, curricula []curriculum, authorit
 		}
 	}
 	var err error
-	report.Inference, err = computeTransformInference(paired, panel, authority, 10000, 10000)
+	report.Inference, err = computeTransformInferenceWithPairs(paired, panel, authority, lockedPairs, 10000, 10000)
 	if err != nil {
 		return SafePanelReport{}, panelArtifacts{}, err
 	}
