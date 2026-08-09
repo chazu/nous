@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: proposed Part 3 lane-specific implementation plan, revision 6.
+Status: proposed Part 3 lane-specific implementation plan, revision 7.
 
 Revision 1 was committed at
 `10eb2deafd4d8a203257026d0c7925a4f6eaba86` and blocked independently by all
@@ -29,7 +29,11 @@ validation, and an incomplete binary grammar. Revision 5 was committed at
 `c5119a6776e91b372a1d1c042c9a055dd76761ab`; it was blocked on the common
 `Heuristic` category dispatch, remaining task/certificate/prune/terminal
 charges, power-cell support, and acquisition transcript ownership. Revision 6
-resolves that complete review union.
+resolves that complete review union. Revision 6 was committed at
+`89efcc25f67fdc601bbdff122196894a497300ba`; architecture accepted it, while
+theory found one missing agreement-result read and experimental review required
+at least two development realizations in every semantic cell. Revision 7 makes
+those final mechanical corrections.
 
 This document narrows Vocabulary 1 of the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). It is
@@ -729,11 +733,11 @@ independent-unsat cases and satisfiable for near-miss and irrelevant cases.
 
 Development's 96 tasks contain:
 
-- 64 `reusable` cases with one full motif and no completion under the supplied
+- 56 `reusable` cases with one full motif and no completion under the supplied
   blocked anchor decision;
 - 24 `near-miss` cases with one required edge absent and a branch completion;
-- 4 `irrelevant` satisfiable branches with no guard-respecting binding; and
-- 4 `independent-unsat` branches whose contradiction does not match the schema.
+- 8 `irrelevant` satisfiable branches with no guard-respecting binding; and
+- 8 `independent-unsat` branches whose contradiction does not match the schema.
 
 Validation doubles each count. Locked uses 384 tasks with exactly 312, 48, 12,
 and 12 cases respectively. Within every panel, contiguous ordinals map to
@@ -747,8 +751,8 @@ regenerating it.
 Inference and power use 24 frozen semantic strata, ordered as: four reusable
 template IDs; 12 near-miss `(template ID, missing-bit)` cells in template-major,
 then bit-major order; four irrelevant template IDs; and four independent-unsat
-template IDs. Development has respectively 16, 2, 1, and 1 task per such cell;
-validation has 32, 4, 2, and 2; locked has 78, 4, 3, and 3. Thus every locked
+template IDs. Development has respectively 14, 2, 2, and 2 tasks per such cell;
+validation has 28, 4, 4, and 4; locked has 78, 4, 3, and 3. Thus every locked
 cell is represented in development, including every anchor-edge and pair-edge
 near miss. Within a cell task order is global task ordinal. Broad cohort totals
 remain reporting groups only; bootstrap and power never pool distinct cells.
@@ -1177,7 +1181,7 @@ full fixed-branch query—not a cancelled branch fragment—establishes:
 | Complete path | Frozen bound over every allowed template and descriptor/color permutation |
 | --- | ---: |
 | standalone MAC-CBJ on a reusable branch | at least 150 events |
-| generalized matching/certificate/prune on a reusable branch | at most 124 events; hard cap 128 |
+| generalized matching/certificate/prune on a reusable branch | at most 125 events; hard cap 128 |
 | no-match bridge overhead before the identical standalone continuation | at most 78 events; hard cap 80 |
 | one complete acquisition | at most 2,000 events |
 
@@ -1217,15 +1221,16 @@ is proposed. Its exact maximum vector is:
 | root pre-bridge | 0 | 1 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | request, agenda, and both engine dispatches | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 26 | 26 |
 | anchor, seven visits, two candidates, one pair, one artifact | 3 | 17 | 0 | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 | 12 | 42 |
-| one completion and complete barrier | 0 | 5 | 0 | 3 | 0 | 0 | 0 | 0 | 1 | 19 | 0 | 6 | 34 |
+| one completion and complete barrier | 0 | 5 | 0 | 3 | 0 | 0 | 0 | 0 | 1 | 19 | 0 | 7 | 35 |
 | disposition, adapter, omitted-prefix record, root restore, terminal | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 6 | 1 | 8 | 17 |
-| **maximum** | **3** | **23** | **3** | **3** | **3** | **0** | **0** | **10** | **1** | **25** | **1** | **52** | **124** |
+| **maximum** | **3** | **23** | **3** | **3** | **3** | **0** | **0** | **10** | **1** | **25** | **1** | **53** | **125** |
 
 The guard row includes the explicit `only != escape` read/check. The matcher
 row's 12 category-12 events are seven visit records, two candidate writes, one
-binding write, and artifact match read/result. The completion row's six are the
-completion result, agreement, expected-key set, actual-key set, sealed barrier,
-and certificate-index writes; its 19 category-10 events are 18 barrier
+binding write, and artifact match read/result. The completion row's seven are
+the completion-result write, agreement result-read, agreement-record write,
+expected-key-set write, actual-key-set write, sealed-barrier write, and
+certificate-index write; its 19 category-10 events are 18 barrier
 predicates plus certificate-record creation. The final eight category-12 events
 are disposition write plus five digest checks, omitted-prefix/prune record, and
 terminal-record write.
@@ -1233,7 +1238,7 @@ terminal-record write.
 The request row is four request/agenda/digest events plus the exact 22-event
 unchanged-engine dispatch surcharge. The once-per-execution 54-event profile preflight is
 inside acquisition `A`, not this request row. Any extra task makes the
-conformance test fail before a panel. The four-event difference between 124 and
+conformance test fail before a panel. The three-event difference between 125 and
 the hard prune cap is abort headroom, not
 uncharged work and not part of this feasibility proof.
 
@@ -1257,7 +1262,7 @@ At the locked 312/48/12/12 proportions, the worst attainable total difference
 under these caps is already negative:
 
 ```text
-A + sum(L-M) <= 2000 + 312*(124-150) + 72*78 = -496
+A + sum(L-M) <= 2000 + 312*(125-150) + 72*78 = -184
 ```
 
 The standalone denominator is strictly positive, so the corresponding primary
@@ -1516,3 +1521,4 @@ counts only after the learned abstraction has paid for an independently
 inspectable proof that its prune is sound. A valid null would therefore be
 useful evidence that this proof regime overwhelms the small search saving and
 should be redesigned before broader nogood grammars are attempted.
+Validation doubles each count. Locked uses 384 tasks with exactly 312, 48, 12,
