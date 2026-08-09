@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: proposed Part 3 lane-specific implementation plan, revision 3.
+Status: proposed Part 3 lane-specific implementation plan, revision 4.
 
 Revision 1 was committed at
 `10eb2deafd4d8a203257026d0c7925a4f6eaba86` and blocked independently by all
@@ -17,7 +17,11 @@ comparator, full-task attainability math, one distractor topology, the actual
 engine task seam, CBJ failure-set lifetime, acquisition randomization, evidence
 persistence, and a duplicated random control. Revision 3 makes the utility
 object a fixed branch-completion query, restores standalone MAC-CBJ as primary,
-and closes those mechanical contracts.
+and closes those mechanical contracts. Revision 3 was committed at
+`740bd7944b0e0cb2583961fa21c32a6ba8938b05` and blocked on one stale comparator
+claim, the observable engine boundary, the fixed-decision root frame, artifact
+authorization, evidence persistence and hashing, and literal attainability
+counts. Revision 4 resolves that complete review union.
 
 This document narrows Vocabulary 1 of the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). It is
@@ -109,14 +113,17 @@ it byte-for-byte in every report:
   "target_certificate_completions": 1,
   "training_work_cap": 2000,
   "target_prune_work_cap": 120,
-  "no_match_bridge_overhead_cap": 80,
+  "no_match_bridge_overhead_cap": 64,
   "policy_work_cap_per_task": 2000000,
   "bridge_task_pop_cap": 2000,
   "attributed_unit_cap": 200000,
   "report_byte_cap": 16777216,
-  "transcript_event_cap_per_panel": 8000000,
-  "transcript_raw_byte_cap_per_panel": 1073741824,
-  "transcript_gzip_byte_cap_per_panel": 1074000000,
+  "transcript_event_cap_per_execution": 8000000,
+  "transcript_event_cap_per_bundle": 16000000,
+  "transcript_raw_byte_cap_per_execution": 1073741824,
+  "transcript_raw_byte_cap_per_bundle": 2147483648,
+  "transcript_gzip_byte_cap_per_execution": 1074000000,
+  "transcript_gzip_byte_cap_per_bundle": 2148000000,
   "minimum_primary_reduction": 0.00,
   "maximum_nonreusable_harm": 0.10,
   "alpha": 0.05,
@@ -295,8 +302,11 @@ Ordinary CUE heuristics in `domains/nogoods` own candidate population,
 one-bit refinement tasks, binding proposals, completion-unit construction,
 evidence aggregation, counterexample retention, complete-evidence barriers,
 selection, promotion, target matching, certificate construction, and prune
-proposals. Mutation is disabled. The existing engine, agenda, VM, common pack,
-credit mechanics, and all other vocabularies remain byte-unchanged.
+proposals. Mutation is disabled. Agenda, VM, common-pack semantics, credit
+mechanics, and all other vocabularies remain byte-unchanged. The engine receives
+only the observation seam specified below; with no observer installed its
+behavior and existing public `WorkOnTask` entry point are byte-for-byte
+compatible.
 
 An experiment adapter may serialize public fixtures, run the engine, and audit
 the resulting store/transcript. It may not insert the winning mask, create a
@@ -364,19 +374,43 @@ digest, exact-conflict-store digest, and artifact-store digest. It adds one
 `ngConsiderPrune` task. It may not insert a role, binding, match result,
 completion, certificate, or decision.
 
+The bridge store contains the core type/slot units needed by the interpreter and
+exactly one frozen `domains/nogoods` task heuristic,
+`NG-H-ConsiderPrune`, and no common-pack or other-domain heuristic instance.
+That heuristic has exactly one `ifWorkingOnTask` program and one ThenPart action
+program. A source-structure test compares the exact sorted
+`Examples("Heuristic")` set, nonempty program slots, and program hashes with the
+committed bridge profile before every request. Consequently an unrelated
+heuristic cannot create hidden work or change a disposition.
+
 The adapter checks `VM.InitError()` once, requires the agenda to be empty before
 that task is inserted, then repeatedly calls `Agenda.Pop()` followed by
-`Engine.WorkOnTask(task)` until `Agenda.Len()==0`. It never calls `Engine.Run`
+`Engine.WorkOnTaskObserved(task, observer)` until `Agenda.Len()==0`. It never calls `Engine.Run`
 or `Engine.WorkOnUnit`, so unit-focus, mutation, worth-growth, and periodic
 engine behavior cannot occur. At most 2,000 tasks may be popped. Before each
 `WorkOnTask`, the adapter requires the task's target unit to carry the current
 request digest; a task for any other request is `bridge-invalid`. Bridge
 heuristics may not delete units, and the adapter requires `VM.DeletedUnits` to
 remain empty after every task, so the engine's unexported deletion-bookkeeping
-path is unnecessary. `TaskNum`, agenda enqueue/dequeue, every rejected common
-heuristic antecedent, and every bridge heuristic action are charged by the
-ledger. Every policy/task uses a fresh store, agenda, VM, and engine, so no
-focused state or task number crosses a query.
+path is unnecessary. `TaskNum`, agenda enqueue/dequeue, every rejected lane
+heuristic program, and every bridge heuristic action are charged by the ledger.
+Every policy/task uses a fresh store, agenda, VM, and engine, so no focused state
+or task number crosses a query.
+
+`WorkOnTaskObserved` is the sole permitted engine change. It executes the same
+private task-rule path as `WorkOnTask` and accepts a nil-safe observer with these
+callbacks: `TaskStart(taskNum,task)`, `ProgramStart(heuristic,slot,sourceHash)`,
+`ProgramEnd(heuristic,slot,outcome,errorDigest)`, and `TaskEnd(outcome)`. Program
+`outcome` is exactly `true`, `false`, `abort`, or `error`. In observed mode any
+non-abort VM error is returned after its `ProgramEnd` event and makes the bridge
+invalid; it is never reduced to a logged rejection. `WorkOnTask` delegates with
+a nil observer and preserves existing log-and-reject behavior. The observer may
+only append ledger records and cannot mutate the task, VM, agenda, store, result,
+or control flow. Lane heuristics materialize each public/store fact read and
+each action as a typed unit; the observer supplies program outcome/error and the
+adapter/store audit supplies their exact semantic multiplicities. Tests inject
+false, aborting, and erroneous programs into every antecedent and action slot
+and prove one-to-one observation with no behavior change under a nil observer.
 
 CUE heuristics must end the request with exactly one sealed
 `NogoodDisposition`:
@@ -388,19 +422,22 @@ CUE heuristics must end the request with exactly one sealed
   over-cap, or incomplete bridge state.
 
 Target matching itself is frozen. The current literal supplies `a` and
-`blocked`. One heuristic scans the immutable anchor domain in color order and
+`blocked`. The action program's first phase scans the immutable anchor domain in color order and
 materializes its sole other color as `escape`, or resumes if the domain is not
 size two. It then visits every other variable exactly once in descriptor order,
 materializing a role candidate only when that immutable domain has size two,
-contains `blocked`, and has one derived `only` color. A second heuristic proposes
+contains `blocked`, and has one derived `only` color. Its second phase proposes
 every unordered pair of retained candidates in descriptor order, checks equal
-`only`, normalizes the lower variable as `x`, and creates one binding. A third
+`only`, explicitly checks `only != escape`, normalizes the lower variable as
+`x`, and creates one binding. Its third phase
 visits every frozen artifact in semantic-key order and checks its three bits and
 target edges. Zero applicable bindings yields `resume`; exactly one may build
 the completion/certificate; more than one complete applicable binding is
 `bridge-invalid`. No index, driver prefilter, early no-match exit, or Go role
 enumerator exists. The maximum is seven role candidates and 21 pair proposals,
-and all rejected candidates/pairs remain charged.
+and all rejected candidates/pairs, including a rejected `only == escape`, remain
+charged. Exhaustive matcher/oracle tests include all two-color anchor/pair
+domain triples and require agreement with all five guard conditions.
 
 Every disposition includes the request digest and authoritative digest of every
 referenced unit. The Go adapter may check one already materialized disposition
@@ -415,12 +452,12 @@ assignment/domain digest, multiple dispositions, residual agenda task, or
 the pause. `propose-prune` restores the pre-proposal domain snapshot, records
 the omitted fixed branch, and returns `no-solution`; no AC-3 event for that
 decision occurs. `match-only` validates the same
-proposal but deliberately executes the `resume` path. The primary
-`mac-cbj-empty`, no-artifact, reset, learned, match-only, corrupted, wrong-family, and
-random policies cross this bridge only on the supplied branch decision. An
+proposal but deliberately executes the `resume` path. The bridge controls
+`mac-cbj-empty`, no-artifact, reset, learned, match-only, corrupted, wrong-family,
+and random cross this bridge only on the supplied branch decision. An
 explicit empty artifact store therefore pays the same request, agenda,
-disposition, and adapter path as the learned store. Standalone MAC-CBJ without
-the bridge is diagnostic only and cannot become the primary comparator.
+disposition, and adapter path as the learned store. Standalone `mac-cbj`, which
+does not cross the bridge, is the only primary comparator.
 
 Certificates are occurrence-specific: even the same binding/literal under a
 different current assignment or reduced-domain digest must be rematerialized.
@@ -432,8 +469,25 @@ receive byte-identical public cases and legal operations. Corrupted mask 5
 removes edge `a--y`; wrong-family uses a domain-separated valid mask-7 artifact
 whose pair domains have three colors instead of two; random chooses one
 mask uniformly from `0..6` once at the training freeze and reuses that one
-frozen artifact for the entire panel. None may silently fall back to the correct
-artifact.
+frozen artifact for the entire panel. Only an artifact whose mask, promotion
+substitution set, evidence-boundary digest, and provenance digest equal the
+accepted training freeze is authoritative. A nonauthoritative artifact may be
+matched and diagnosed but can only seal `resume`; the adapter rejects any prune
+proposal naming it. None may silently fall back to the correct artifact.
+
+Expected control dispositions are frozen:
+
+| Policy | reusable | near-miss | irrelevant | independent-unsat |
+| --- | --- | --- | --- | --- |
+| `nous-generalized` | `propose-prune` | `resume` | `resume` | `resume` |
+| `match-only` | valid proposal, then adapter `resume` | `resume` | `resume` | `resume` |
+| `corrupted`, `random` | diagnostic match allowed, always `resume` | diagnostic match allowed, always `resume` | `resume` | `resume` |
+| `wrong-family`, `reset`, `no-artifact`, `mac-cbj-empty` | `resume` | `resume` | `resume` | `resume` |
+
+The exhaustive control test crosses every policy with every cohort, all three
+near-miss masks, and every descriptor/color permutation. A corrupted or random
+artifact is never authorization evidence, even when its weaker mask happens to
+match and its sampled completion happens to conflict.
 
 ## Training fixtures
 
@@ -619,7 +673,8 @@ distractor edges plus `a--x,x--y`. An `independent-unsat` case gives every
 variable all four colors except `d0` and `d1`, whose domains are the singleton
 `{blocked}`, and adds `d0--d1` plus the selected distractor template; duplicate
 edges are canonicalized before serialization. These rules cannot cross the
-18-edge cap. Every utility query supplies decision `a=blocked`. An independent
+18-edge cap. Every utility query has the explicit empty base partial assignment
+and supplies decision `a=blocked`. An independent
 exhaustive check requires the fixed branch to be empty for reusable and
 independent-unsat cases and satisfiable for near-miss and irrelevant cases.
 
@@ -681,13 +736,26 @@ deferred to source constants.
 ### Frozen MAC-CBJ algorithm
 
 Standalone `mac-cbj` and every resumed learned/control policy execute this
-identical procedure. Current domains begin as immutable public domains. The
-policy validates and binds the supplied branch decision, removes its other
-values with that decision variable as explanation, and then initializes AC-3
-exactly as step 3 below. Bridge policies pause once between that bind and the
-initial AC-3 queue; standalone `mac-cbj` does not. A sound top-level prune ends
+identical procedure. Current domains begin as immutable public domains and the
+base partial assignment is empty. The supplied decision is a distinguished
+one-value root activation for `a`: snapshot the empty prefix, save the literal
+`a=blocked`, validate/propose/bind it, remove `escape` with explanation `{a}`,
+and initialize AC-3 exactly as step 3 below. Bridge policies pause once between
+that bind and the initial AC-3 queue; standalone `mac-cbj` does not. A sound
+top-level prune records the saved literal, restores the root snapshot, and ends
 the fixed-branch query. A `resume` enters the same initial AC-3 and recursive
 state byte-for-byte.
+
+Failure in the root activation has one wrapper rule independent of where it
+arises. Immediate public-domain or assigned-edge failure, initial AC-3 wipeout,
+and failure returned by recursion are normalized to a set containing only
+variables assigned in the root activation's caller prefix plus `a`. While the
+root assignment is still present, seal the exact saved-literal nogood; project
+the failure through `failure - {a}`; restore domains, explanations, and the empty
+base prefix; and require the projected set to be empty. Empty means
+`no-solution`; nonempty is an internal baseline error because the base prefix is
+empty. A resumed bridge uses this same wrapper. Tests cover all three failure
+origins and a learned `resume` separately.
 
 Variable choice minimizes current domain cardinality, then maximizes static
 degree in the original public graph, then minimizes variable descriptor
@@ -706,14 +774,15 @@ Each recursive activation selects `v`, creates one fresh empty local
 2. propose and bind `v=value`; remove each other current value of `v` in color
    order with explanation `{v}`; reject immediately on a public-domain or
    already-assigned-edge violation;
-3. initialize a FIFO AC-3 queue with `(neighbor,v)` for every neighbor in
-   increasing descriptor position, suppressing duplicate queued pairs;
+3. initialize a FIFO AC-3 queue with `(neighbor,v)` for every neighbor ordered by
+   decreasing static degree in the original public graph, then increasing
+   descriptor position, suppressing duplicate queued pairs;
 4. pop FIFO and revise `Xi` against `Xj`. For each current `Xi` value in color
    order, scan current `Xj` values in color order until inequality support is
    found. If none exists, delete it. Its explanation is the sorted union of the
    deletion explanations of every original `Xj` value unequal to it. If `Xi`
    changed but is nonempty, append `(Xk,Xi)` for every neighbor `Xk != Xj` in
-   descriptor order unless already queued;
+   decreasing static degree and then descriptor order unless already queued;
 5. a domain wipeout returns the sorted union of explanations for every original
    value of the wiped variable. Otherwise recurse;
 6. while the failed branch assignment is still present, materialize any exact
@@ -724,8 +793,8 @@ Each recursive activation selects `v`, creates one fresh empty local
    and
 8. after all values fail, materialize the exhausted-variable consequence from
    the surviving caller-prefix literals named by `conflicts(v)`, then return
-   `conflicts(v)`, never `v`. An empty return at the fixed branch root is
-   `no-solution`. The first witness stops the task.
+   `conflicts(v)`, never `v`. The root wrapper above performs the only terminal
+   failure projection. The first witness stops the task.
 
 An absent deletion explanation is the empty set. Union iterates source sets and
 members in descriptor order, charges each attempted member, and deduplicates by
@@ -753,8 +822,8 @@ and learned adapter after `resume` must be bisimilar on every golden trace.
 
 - `nous-generalized` runs the frozen top-level bridge and, on `resume`, the same
   standalone `mac-cbj` continuation; on a sound proposal it returns
-  `no-solution` for the supplied branch without entering AC-3.
-  full target certificate construction, and legal pruning.
+  `no-solution` for the supplied branch without entering AC-3, after full target
+  certificate construction and legal pruning.
 - `no-artifact` runs the identical adapter path with an explicit empty artifact
   store and must be byte-equal to `mac-cbj-empty`, including adapter records;
   it is a second execution identity used to detect policy branching.
@@ -809,6 +878,7 @@ failed member.
 | Transition | Required events |
 | --- | --- |
 | schedule/pop one agenda task | one category 12 enqueue and one category 12 dequeue |
+| observed task dispatch | one category 12 each for task start, task-number write, profile check, and task end; one category 12 each for program start and program end |
 | evaluate heuristic antecedent | one category 2 per requested public/store atom; one category 12 disposition even when rejected |
 | propose one candidate or one-bit edge | one category 1; one category 12 semantic-key read |
 | duplicate refinement path | the same proposal/key-read events; no candidate write |
@@ -842,38 +912,101 @@ successful artifacts.
 
 Complete transcripts are evidence-bundle artifacts, not embedded in the JSON
 report. For panel `<panel>` the canonical directory is
-`.nous/nogoods-v1-<panel>-transcripts/`; it contains one deterministic
-`<policy>.ngt.gz` per required policy and `manifest.json`. Validation and locked
-guards exclusively create this directory alongside their receipt/report and
-refuse any existing path or symlink. Development uses the same layout and
-requires an absent output directory at command start.
+`.nous/nogoods-v1-<panel>-transcripts/`; it contains `primary/` and `audit/`,
+each with one deterministic `<policy>.ngt.gz` for all 13 required policies and
+an `execution-manifest.json`, plus one root `manifest.json`. Development writes
+only `primary/` and marks the absent audit execution in the root manifest;
+validation and locked write all 26 chunks. Validation and locked guards
+exclusively create the root directory alongside their receipt/report and refuse
+any existing path or symlink. Development requires an absent output directory
+at command start. Neither protected execution may discard, replace, or alias a
+chunk from the other execution.
 
-Uncompressed `ngt/v1` begins with a 4 KiB header and a length-prefixed canonical
-UTF-8 dictionary capped at 1 MiB per policy; dictionary strings are at most 128
-bytes and sorted by SHA-256 then bytes. Each event is one fixed 96-byte record:
-format/category/transition/flags, task ordinal, sequence, eight signed 32-bit
-operand/dictionary IDs, the 32-byte SHA-256 of its canonical tuple payload, and
-reserved zero bytes. This retains every exact event tuple while bounding size;
-the independent reducer reconstructs and rehashes each tuple from the dictionary
-and operands. Gzip uses level 9, empty name/comment, zero modification time,
-OS byte 255, and one member. The manifest records policy, raw/compressed sizes,
-event count, raw SHA-256, gzip SHA-256, first/last sequence, and report hash.
+Uncompressed `ngt/v1` begins with a 4 KiB header, followed by a length-prefixed
+canonical UTF-8 dictionary capped at 1 MiB per policy; dictionary strings are at
+most 128 bytes and sorted by SHA-256 then bytes. Header bytes `0:4` are ASCII
+`NGT1`; `4:6` are unsigned big-endian header version 1; `6:8` are unsigned
+big-endian record width 96; `8:16` are the unsigned big-endian dictionary byte
+length; `16:24` are the unsigned big-endian event count; `24:56` are the
+dictionary SHA-256; and `56:4096` are zero.
+
+Every event record is exactly 96 bytes, with all integers big-endian:
+
+| Offset | Width | Field |
+| ---: | ---: | --- |
+| 0 | 1 | record format, fixed `1` |
+| 1 | 1 | category `1..12` |
+| 2 | 1 | transition code from the committed transition enum |
+| 3 | 1 | flags; undefined bits must be zero |
+| 4 | 4 | unsigned task ordinal |
+| 8 | 8 | unsigned event sequence, starting at zero |
+| 16 | 32 | eight signed 32-bit operands `o0..o7` |
+| 48 | 32 | SHA-256 of the reconstructed canonical tuple payload |
+| 80 | 16 | zero |
+
+Dictionary ID zero means absent; positive IDs are one-based. Numeric operands
+are signed literals rather than dictionary IDs where the table says `number`.
+Each transition uses operands as follows; all unlisted slots are zero:
+
+| Transition family | `o0..o7` meaning |
+| --- | --- |
+| candidate/refinement | candidate ID, parent ID, mask number, added-bit number, outcome ID |
+| public/store fact | subject ID, predicate/slot ID, object ID, outcome ID |
+| assignment | variable ID, color ID, depth number, operation ID, outcome ID |
+| inequality | left-variable ID, left-color ID, right-variable ID, right-color ID, outcome ID |
+| domain/AC-3 | variable ID, color ID, peer-variable ID, operation ID, explanation ID, queue-position number, outcome ID |
+| conflict/nogood | conflict ID, variable ID, literal ID, operation ID, target-depth number, outcome ID |
+| binding/schema | artifact ID, binding ID, atom-or-bit number, subject ID, object ID, outcome ID |
+| completion | binding ID, completion ID, constraint ID, left-value ID, right-value ID, outcome ID |
+| certificate/barrier | certificate ID, record ID, predicate ID, expected ID, actual ID, outcome ID |
+| agenda/engine | task ID, unit ID, slot ID, heuristic ID, program-slot ID, operation ID, outcome ID |
+| cache/store | key ID, unit ID, slot ID, operation ID, outcome ID |
+| witness/terminal | witness-or-terminal ID, operation ID, outcome ID |
+
+The transition enum fixes the family and whether each operand is an ID or a
+number; its checked-in generated table is hashed by the source manifest. No
+transition may overload a slot. This retains every exact event tuple while
+bounding size; the independent reducer reconstructs and rehashes each tuple
+from dictionary plus operands. Gzip uses level 9, empty name/comment, zero
+modification time, OS byte 255, and one member.
+
+Each execution manifest records execution role, policy, raw/compressed sizes,
+event count, raw SHA-256, gzip SHA-256, and first/last sequence for its 13
+chunks. The root manifest records both execution-manifest digests and the
+report-payload digest. The report payload excludes evidence digests and is
+hashed first. The report then retains that payload, its digest, and only the
+root-manifest digest—not manifest contents. The root manifest never contains a
+hash of the final report, so the graph is acyclic:
+
+```text
+chunks -> execution manifests -> root manifest <- report payload
+                                      |
+                                      v
+                              final report reference
+```
+
+Receipt finalization hashes the final report, root manifest, both execution
+manifests, and all chunks. The primary and audit canonical semantic report
+payloads exclude execution role and evidence paths and must be byte-equal;
+their transcript hashes are compared positionally before the wrapper report is
+formed.
 
 Scopes and abort boundaries are exact:
 
 - `training_work_cap=2000` covers the one complete acquisition transcript;
 - `target_prune_work_cap=120` covers one learned request from supplied-decision
   validation through a prune terminal;
-- `no_match_bridge_overhead_cap=80` covers the learned/control target work in
+- `no_match_bridge_overhead_cap=64` covers the learned/control target work in
   excess of its byte-identical standalone continuation when no prune occurs;
 - `policy_work_cap_per_task=2000000` covers one policy on one utility task and
   aborts before the exceeding event;
 - `bridge_task_pop_cap=2000` covers one request and aborts before pop 2,001;
 - `attributed_unit_cap=200000` covers one fresh training or utility store;
 - `report_byte_cap=16777216` covers each uncompressed canonical JSON report;
-- transcript event/raw/gzip caps cover the sum across every required policy in
-  one panel, including dictionary/header bytes, and are checked before an event,
-  before raw close, and after deterministic compression respectively.
+- transcript per-execution caps cover the sum across its 13 policies and bundle
+  caps cover both protected executions, including dictionary/header bytes. They
+  are checked before an event, before raw close, after deterministic compression,
+  and again before root-manifest finalization respectively.
 
 At eight million events, 96-byte records plus thirteen maximum dictionaries and
 headers are below 0.75 GiB and therefore below the 1 GiB raw cap; the exact
@@ -881,11 +1014,11 @@ integer preflight is a test vector. Across 13 chunks, the DEFLATE stored-block
 worst case adds at most five bytes per 32,768 raw bytes, one partial-block
 allowance and 18-byte header/trailer per chunk. A 1 GiB aggregate is therefore
 below 1,073,906,000 bytes and below the 1,074,000,000-byte gzip cap even without
-compression. The report is separately bounded at 16 MiB.
-The report retains the complete transcript manifest and aggregate vectors;
-individual events remain in the hashed chunks. Receipt finalization hashes the
-report, manifest, and every chunk. No transcript can be discarded after a
-positive, null, invalid, or crashed protected attempt.
+compression. Two executions are therefore below the exact doubled bundle caps.
+The report is separately bounded at 16 MiB and retains aggregate vectors and the
+root-manifest digest; individual events remain in the 13 or 26 hashed chunks.
+No transcript can be discarded after a positive, null, invalid, or crashed
+protected attempt.
 
 Training candidate construction, evidence, artifact validation, promotion,
 storage, and serialization are charged once to `nous-generalized`. At each
@@ -911,22 +1044,75 @@ minimum magnitude. That endpoint is attainable without consulting a
 development, validation, or locked seed. A literal expansion of the frozen
 full fixed-branch query—not a cancelled branch fragment—establishes:
 
-| Complete path | Bound over every allowed template and descriptor/color permutation |
-| --- | --- |
-| standalone MAC-CBJ on a reusable branch | at least 160 events before the root contradiction is returned |
-| generalized matching/certificate/prune | at most 120 events from supplied-decision validation through `no-solution` terminal |
-| no-match bridge followed by standalone continuation | at most 80 events more than standalone on each near-miss, irrelevant, or independent-unsat task |
+| Complete path | Frozen bound over every allowed template and descriptor/color permutation |
+| --- | ---: |
+| standalone MAC-CBJ on a reusable branch | at least 141 events |
+| generalized matching/certificate/prune on a reusable branch | at most 107 events; hard cap 120 |
+| no-match bridge overhead before the identical standalone continuation | at most 64 events |
 | one complete acquisition | at most 2,000 events |
 
-The reusable lower bound counts the supplied bind, all seven initial fan/pair
-arc enqueues, FIFO dequeue/revision/support work, every forced `blocked`
-deletion and explanation, mandatory requeues from the fixed distractor graph,
-the singleton pair wipeout, conflict construction, and terminal. The learned
-upper bound uses the frozen matcher maxima of seven variable visits, seven role
-candidates, 21 pair proposals, one artifact, one completion, one barrier, the
-actual `WorkOnTask` antecedent count, disposition validation, and terminal.
-The no-match upper bound uses the same maxima but no completion/certificate.
-All request/agenda/adapter/store records are included; standalone has none.
+The standalone bound is derived from template 3, the componentwise minimum
+among the four templates. Every distractor has static degree at least four and
+`x,y` have degree two, so the frozen initial queue processes all five distractor
+anchor arcs before either pair anchor arc under every descriptor permutation.
+The distractor requeues therefore precede the pair requeues. Initial support
+comparisons are at least 17 over distractors plus four over `x,y`. Exactly six
+minimum-path neighbor domains contain `blocked`. Those changes enqueue at least
+13 directed distractor arcs and the two directed pair arcs. Every distractor
+arc is processed before the first pair arc and needs at least two support
+comparisons; the first pair arc needs one and wipes out its target. Color
+permutation changes which comparison succeeds, not these minima. Denser or
+larger-domain templates can only add directed arcs or comparisons.
+
+The literal minimum 12-category vector, including the root wrapper, is:
+
+| Path component | c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 | c11 | c12 | total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| root validate, bind, restore | 0 | 1 | 3 | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 7 |
+| seven initial arcs | 0 | 0 | 0 | 21 | 12 | 21 | 0 | 0 | 0 | 0 | 0 | 0 | 54 |
+| 15 required requeue enqueues | 0 | 0 | 0 | 0 | 0 | 15 | 0 | 0 | 0 | 0 | 0 | 0 | 15 |
+| 13 distractor requeues | 0 | 0 | 0 | 26 | 0 | 26 | 0 | 0 | 0 | 0 | 0 | 0 | 52 |
+| first pair requeue/wipeout | 0 | 0 | 0 | 1 | 2 | 2 | 3 | 0 | 0 | 0 | 0 | 0 | 8 |
+| root projection/nogood/terminal | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 1 | 3 | 5 |
+| **minimum** | **0** | **1** | **3** | **48** | **17** | **64** | **4** | **0** | **0** | **0** | **1** | **3** | **141** |
+
+The seven initial arcs contribute seven enqueues plus seven dequeues and seven
+revision attempts. Each of the 13 distractor requeues contributes one dequeue
+and one revision attempt. The pair row includes its dequeue and revision. The
+four conflict events are the final deletion explanation member, two wipeout
+union attempts, and root removal of `a`. The three final store events are exact
+nogood lookup, exact-nogood write, and terminal-record write. These are lower
+bounds: duplicate checks, extra union attempts, and larger support scans only
+increase standalone work.
+
+The reusable learned path is fixture-specific: exactly `x,y`, not seven
+variables, pass the size-two/contains-`blocked` role guard, so exactly one pair
+is proposed. Its exact maximum vector is:
+
+| Path component | c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 | c11 | c12 | total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| root pre-bridge | 0 | 1 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
+| request and observed dispatch | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 12 |
+| anchor, seven visits, two candidates, one pair, one artifact | 3 | 17 | 0 | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 | 12 | 42 |
+| one completion and complete barrier | 0 | 5 | 0 | 3 | 0 | 0 | 0 | 0 | 1 | 18 | 0 | 6 | 33 |
+| disposition, adapter, root restore, terminal | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 6 | 1 | 6 | 15 |
+| **maximum** | **3** | **23** | **3** | **3** | **3** | **0** | **0** | **10** | **1** | **24** | **1** | **36** | **107** |
+
+The guard row includes the explicit `only != escape` read/check. The request row
+is four request/agenda/digest events, four task start/number/profile/end events,
+and start/end observation of exactly the predicate and action programs. Any
+extra task or program makes the conformance test fail before a panel. The
+13-event difference between 107 and the hard prune cap is abort headroom, not
+uncharged work and not part of this feasibility proof.
+
+For a no-prune target the shared root and resumed MAC-CBJ events are
+byte-identical and cancel. The maximum extra vector is the 12-event observed
+dispatch plus the 42-event matcher row plus ten disposition/adapter events,
+exactly 64. Near misses have the same two candidates and one pair; irrelevant
+and independent-unsat cases retain fewer candidates. Nonauthoritative controls
+stop after provenance diagnostics and never construct a completion, so they do
+not exceed this bound. The complete acquisition has its separately enforced
+2,000-event cap.
 
 These are deliberately conservative integer bounds, not mean estimates. The
 plan-conformance test encodes each transition-table multiplicity as a literal
@@ -939,7 +1125,7 @@ At the locked 288/32/32/32 proportions, the worst attainable total difference
 under these caps is already negative:
 
 ```text
-A + sum(L-M) <= 2000 + 288*(120-160) + 96*80 = -1840
+A + sum(L-M) <= 2000 + 288*(107-141) + 96*64 = -1648
 ```
 
 The standalone denominator is strictly positive, so the corresponding primary
@@ -1105,18 +1291,26 @@ Before any empirical run, tests must cover:
 - rejection of missing, duplicate, corrupted, cross-target, cross-decision,
   and stale certificate records;
 - no prune for every single-edge near miss and wrong anchor decision;
+- exhaustive matcher agreement for `only != escape` and every other complete
+  guard atom;
 - a successful prune before ordinary continuation evaluation;
 - standalone-primary proof that no bridge/agenda/adapter event enters
   `mac-cbj`, plus byte-equal continuation after every bridge `resume`;
-- exact `Agenda.Pop`/`Engine.WorkOnTask` bridge execution, task-pop overflow,
+- exact `Agenda.Pop`/`Engine.WorkOnTaskObserved` bridge execution, nil-observer
+  compatibility, observed false/abort/error outcomes, task-pop overflow,
   cross-request task rejection, and proof that `Engine.Run`, unit-focus, and
   deletion bookkeeping are unreachable;
+- exact bridge heuristic-set/program-hash profile with no common-pack or
+  other-domain heuristic instance;
 - byte-equal no-artifact and `mac-cbj-empty` solution/transcript projections;
 - concrete-memo failure under complete alias renaming;
-- corrupted, wrong-family, random, recomputed, and match-only behavior;
+- corrupted, wrong-family, random, recomputed, and match-only behavior crossed
+  with every cohort, with nonauthoritative artifacts unable to prune;
 - AC-3 and CBJ microcases independent of production semantics;
-- failed-branch literal capture before restoration, empty root conflict, and
-  activation-local conflict reset when a variable is revisited;
+- failed-branch literal capture before restoration, root projection from
+  immediate edge failure, initial propagation failure, recursive failure and
+  resumed execution, and activation-local conflict reset when a variable is
+  revisited;
 - literal full-task attainability multiplicities and acquisition/prune/no-match
   cap enforcement without importing experiment code;
 - satisfiability parity and complete omitted-branch solution-set audit for every
@@ -1127,8 +1321,9 @@ Before any empirical run, tests must cover:
   reads in source constants, runtime open traces, dependencies, stores, and
   reports;
 - deterministic stream/randomization vectors, reruns, statistics, report
-  encoding, transcript reducer parity, chunk hashes, raw/gzip worst-case bounds,
-  and every cap scope;
+  encoding, exact 96-byte record layout/operand reconstruction, transcript
+  reducer parity, all 13/26 chunk hashes, acyclic payload/manifest/report hashes,
+  raw/gzip worst-case bounds, and every per-execution/bundle cap scope;
 - validation and locked refusal before their gates; and
 - one-shot locked refusal after an existing or partial receipt.
 
