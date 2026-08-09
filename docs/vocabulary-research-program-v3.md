@@ -1,6 +1,6 @@
 # Vocabulary research program, Part 3
 
-Status: revision 2, under adversarial review.
+Status: revision 3, under adversarial review.
 
 Revision record:
 
@@ -10,8 +10,12 @@ Revision record:
   transformation diff, inconsistent partial-order lifecycle accounting, and
   an exhaustive-audit loophole; and
 - revision 2 closes those blockers and the associated soundness, baseline,
-  work-ledger, latent-preference, and terminal-classification concerns. It has
-  no implementation authority until a new adversarial review accepts it.
+  work-ledger, latent-preference, and terminal-classification concerns; it was
+  accepted with four lane-plan concerns; and
+- revision 3 resolves those concerns in the umbrella by freezing preference
+  semantics, materialized nogood certification, the guarded-commutativity V1
+  claim, and hierarchical endpoint rules. It has no implementation authority
+  until a new adversarial review accepts it.
 
 Part 3 is a destination-independent curriculum for improving Nous one
 reasoning operation at a time. It does not amend, resume, or claim completion
@@ -68,7 +72,8 @@ reasoning moves:
 
 1. convert a failed search branch into a reusable constraint;
 2. generalize concrete transformations into a parameterized schema;
-3. discover when operations commute, interfere, enable, or disable;
+3. discover and causally use guarded commutativity, while retaining other
+   action-relation observations as non-claim diagnostics;
 4. refine a conjectured invariant in response to counterexamples;
 5. compress recurring programs into a reusable executable library;
 6. construct minimal explanations and rank discriminating evidence from a
@@ -129,12 +134,12 @@ Repository and claim identities are also fixed:
 | Lane | Production, fixture, experiment, and CLI identities | Frozen hypothesis, artifact, and primary endpoint |
 | --- | --- | --- |
 | Nogoods | `internal/vocab/nogoods`; `internal/nogoodfixture`; `internal/nogoodexp`; `nogood-trials` | a scoped learned nogood reduces total held-out CSP lifecycle work while preserving the exact solution set |
-| Transformation schema | `internal/vocab/transformschema`; `internal/transformschemafixture`; `internal/transformschemaexp`; `transformschema-trials` | an induced executable schema improves exact held-out transformation success/work under alpha-renaming without false application |
+| Transformation schema | `internal/vocab/transformschema`; `internal/transformschemafixture`; `internal/transformschemaexp`; `transformschema-trials` | an induced executable schema improves exact held-out transformation success under a fixed lifecycle budget and alpha-renaming without false application |
 | Action relations | `internal/vocab/actionrelations`; `internal/actionrelationfixture`; `internal/actionrelationexp`; `actionrelation-trials` | a learned guarded relation plus charged local certificates reduces total lifecycle work while preserving terminal behaviors |
-| Invariant refinement | `internal/vocab/invariantrefine`; `internal/invariantrefinefixture`; `internal/invariantrefineexp`; `invariantrefine-trials` | counterexample-driven formula lineage improves held-out soundness/recall and lifecycle work on a fixed public trace corpus |
+| Invariant refinement | `internal/vocab/invariantrefine`; `internal/invariantrefinefixture`; `internal/invariantrefineexp`; `invariantrefine-trials` | counterexample-driven formula lineage improves held-out macro F1 under a fixed lifecycle budget on a public trace corpus |
 | Macro library | `internal/vocab/macrolib`; `internal/macrolibfixture`; `internal/macrolibexp`; `macrolib-trials` | a learned expansion-equivalent macro reduces total stream proposal/construction work after full amortization |
 | Abduction | `internal/vocab/abduction`; `internal/abductionfixture`; `internal/abductionexp`; `abduction-trials` | a learned fault signature reduces passive diagnosis lifecycle work while preserving every subset-minimal diagnosis |
-| Preferences | `internal/vocab/preferences`; `internal/preferencefixture`; `internal/preferenceexp`; `preference-trials` | a contextual partial-preference rule reduces held-out latent regret at frozen coverage and lifecycle work without changing the frontier |
+| Preferences | `internal/vocab/preferences`; `internal/preferencefixture`; `internal/preferenceexp`; `preference-trials` | a contextual preference rule reduces held-out latent regret under fixed coverage and lifecycle-budget gates without changing the frontier |
 
 Each lane uses a fresh fixture package, experiment package, CLI identity,
 generator version, and seed derivation rooted only in its `part3/.../v1`
@@ -163,7 +168,7 @@ Every design must name one distinguishing learned artifact and one causal use:
 | Invariant learning | refined invariant with evidence boundary | reject or classify a held-out trace/state |
 | Macro libraries | parameterized executable macro | reduce later synthesis work after full amortization |
 | Abductive diagnosis | fault-signature schema plus complete minimal diagnoses | reduce later passive diagnosis search and optionally rank public measurements offline |
-| Preference reasoning | contextual preference rule | select among retained Pareto alternatives in a new context |
+| Preference reasoning | contextual preference rule with abstention | select among retained Pareto alternatives in a new context |
 
 If the artifact is only a renamed candidate, cached answer, human-written
 feature, or conventional algorithm result copied into a unit, the vocabulary
@@ -260,6 +265,14 @@ vector is always reported. Independent post-termination oracle work is reported
 separately and cannot create a search-advantage claim; policy-visible or
 artifact-validation work can never be relabelled as oracle audit.
 
+Every empirical hypothesis is hierarchical and fixed before panel generation.
+Mechanical correctness is always first. A lane then has exactly one primary
+endpoint under either a frozen total lifecycle-work budget or a frozen
+correctness/noninferiority gate; all remaining measures are secondary. A plan
+may instead use one preregistered scalar only if its integer terms and weights
+are justified and frozen before fixtures exist. No plan may combine accuracy,
+regret, coverage, and work after observing a panel.
+
 ### Evidence status
 
 Each vocabulary ends as:
@@ -323,8 +336,9 @@ Ordinary heuristics:
 5. replace concrete identities with descriptor roles only when multiple
    alpha-renamed conflicts support the substitution;
 6. independently enumerate every role-respecting substitution and every legal
-   completion inside the proposed finite scope, retaining each agreement or
-   counterexample;
+   completion inside the proposed finite scope as ordinary candidate units,
+   retaining a separate charged evaluation and agreement/counterexample for
+   each one;
 7. retain failed generalizations and counterexamples; and
 8. promote a sound, minimal-within-grammar nogood only when the scoped
    completion check is exhaustive.
@@ -334,9 +348,13 @@ partial assignment. A match may prune only the represented branch. The
 transcript must record the skipped refinement set and an oracle audit must show
 that no solution was removed. Before a held-out prune, an instance-specific
 certificate binds every schema role to public target variables/constraints and
-exhaustively checks the artifact's declared completion universe. Certificate
-construction and checking are charged; a schema may be useful only when that
-bounded check is cheaper than exploring all skipped continuations.
+materializes every member of the artifact's declared completion universe and
+its evaluation before a complete-evidence barrier validates the certificate.
+Production Go may evaluate only one explicit completion or check one proposed
+certificate record; it cannot enumerate the universe or return certificate
+validity for a set in one call. Construction and checking are charged; a schema
+may be useful only when that bounded materialized check is cheaper than
+exploring all skipped continuations.
 
 ### Task stream and controls
 
@@ -456,11 +474,12 @@ and no whole-pair diff. If a future lane elects to make an answer-bearing diff
 public, concrete program recovery becomes an input rather than evidence and
 cannot contribute to a discovery claim.
 
-The primary endpoint is held-out exact transformation success under a fixed
-semantic-work budget, including schema-acquisition cost over the declared task
-horizon. False application is a hard safety endpoint. Secondary measures are
-schema compression, tasks solved per schema, binding ambiguity, and inference
-work.
+Mechanical validity requires zero false applications and exact agreement for
+every claimed success. The single primary endpoint is held-out exact
+transformation success under a fixed total lifecycle-work budget that already
+includes schema acquisition over the declared task horizon. Schema compression,
+tasks solved per schema, binding ambiguity, and raw/inference work are
+secondary and cannot trade against success after the panel is observed.
 
 ### Main risks and non-claims
 
@@ -505,6 +524,13 @@ The domain contains:
 - equivalence classes or dependency partial orders derived from accepted
   guarded relations.
 
+V1's sole empirical learned-relation claim is guarded commutativity and its
+causal use in certified pruning. `Enables`, `disables`, and `conflicts`
+observations exercise representation and supply negative/counterexample
+evidence, but they have no V1 causal endpoint and cannot be reported as
+demonstrated reasoning capabilities. Adding one requires a separately reviewed
+amendment that defines its correctness denominator and causal use.
+
 Examples should use a tiny neutral world: counters with limits, locks and
 resources, token movement, independent key updates, and create/use/delete
 dependencies. Production may execute one action or explicit history and
@@ -527,7 +553,8 @@ For a chosen state and action pair, ordinary heuristics execute `a;b` and
 They form unconditional relation conjectures from repeated agreement, then
 specialize them with state guards when counterexamples appear. Enabling,
 disabling, and conflict claims require asymmetric evidence, not the absence of
-a successful swap.
+a successful swap; in V1 they remain diagnostic observations rather than
+promoted capability claims.
 
 A frozen reduction heuristic may use an accepted guarded commutativity relation
 to propose a canonical representative among adjacent swaps. It may omit the
@@ -671,12 +698,14 @@ Required comparisons are:
 - shuffled, alpha-renamed, and adversarial rare-mode controls; and
 - an exhaustive bounded model/trace oracle.
 
-The primary endpoint combines held-out soundness and useful-property recall at
-a frozen complexity bound with total lifecycle work over the frozen corpus
-horizon. A search-advantage claim requires fewer charged formula/trace
-evaluations than the strongest equal-grammar baseline at noninferior accuracy.
-Reports distinguish observed, bounded-verified, refuted, and undetermined
-status.
+Mechanical validity requires exact formula semantics and no false
+`bounded-verified` classification. The single primary endpoint is held-out
+macro F1 over the frozen formula-class denominator under one fixed total
+lifecycle-work budget. Soundness, useful-property recall, formula complexity,
+and raw work categories are secondary. A separate search-advantage claim is
+permitted only if its preregistration adds an accuracy-noninferiority gate and
+then uses lifecycle work as its sole primary endpoint. Reports distinguish
+observed, bounded-verified, refuted, and undetermined status.
 
 ### Main risks and non-claims
 
@@ -950,12 +979,16 @@ dominates another when it does not.
 
 ### Task stream and controls
 
-Each fixture first generates a latent context-conditioned utility/partial-order
-function from a seed stream independent of alternatives, context order, and
-policy randomness. It then freezes alternatives and contexts. The primary
-panel is noiseless: each public training comparison is the deterministic latent
-relation `left`, `right`, `tie`, or `abstain`. Held-out latent utilities remain
-oracle-only until all policies terminate.
+Each fixture first generates one canonical latent model from a seed stream
+independent of alternatives, context order, and policy randomness. The model is
+an integer utility function `U(context, alternative)` bounded to `[-1000,1000]`,
+an integer tie threshold `epsilon` in `[0,100]`, and a public Boolean context-
+applicability predicate. It then freezes alternatives and contexts. In an
+applicable context, a training pair is `tie` when
+`abs(U(left)-U(right)) <= epsilon` and otherwise selects the higher utility. In
+an inapplicable context the label is `abstain`. This is a total preorder within
+each applicable context; V1 claims no arbitrary latent partial-order semantics.
+Held-out utilities remain oracle-only until all policies terminate.
 
 A separately labelled sensitivity panel adds inconsistent/noisy choices. Its
 response table is generated once from a distinct frozen noise stream indexed
@@ -976,13 +1009,17 @@ Required comparisons are:
 - Nous with contextual preference rules;
 - no-context, wrong-context, forced-total-order, and random-rule ablations.
 
-The primary endpoint is mean normalized held-out latent regret at a fixed
-coverage requirement, combined with total lifecycle semantic work over the
-frozen training/use horizon. Ties have zero regret for every latent-maximal
-choice; an abstention pays its preregistered coverage penalty; forced guesses
-do not convert abstention into correctness. Pairwise realized-choice accuracy,
-calibration, abstention rate, and noisy sensitivity are secondary. Frontier
-recall must remain exact: learning preferences may choose among nondominated
+Mechanical validity requires exact frontier recall and a prediction in the
+declared output grammar. The single primary endpoint is mean normalized
+held-out latent regret under a fixed total lifecycle-work budget and a frozen
+minimum coverage gate. For an applicable context with utility range `R > 0`,
+regret is `(max U - U(chosen)) / R`; a latent-maximal choice has zero regret and
+a policy abstention has regret one. When `R = 0`, every frontier choice has zero
+regret. For an inapplicable context, abstention is correct with zero regret and
+any forced choice has regret one. `epsilon` affects pairwise training labels but
+not the numeric regret formula. Pairwise realized-choice accuracy, calibration,
+coverage above the gate, abstention rate, raw lifecycle work, and noisy
+sensitivity are secondary. Learning preferences may choose among nondominated
 points but may not rewrite objective values or discard a point before evidence
 permits it.
 
