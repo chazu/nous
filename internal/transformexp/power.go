@@ -114,9 +114,9 @@ func transformSyntheticPanelPasses(rows []pairedTransformRow, outer, replicates 
 func transformPowerRNG(outer, inner int, purpose string) *rand.Rand {
 	var preimage []byte
 	if purpose == "panel" {
-		preimage, _ = json.Marshal([]any{"part3/transform-schema/v1", "power", 841001, outer, purpose})
+		preimage, _ = json.Marshal([]any{"part3/transform-schema/v2", "power", 841001, outer, purpose})
 	} else {
-		preimage, _ = json.Marshal([]any{"part3/transform-schema/v1", "power", 841001, outer, inner, purpose})
+		preimage, _ = json.Marshal([]any{"part3/transform-schema/v2", "power", 841001, outer, inner, purpose})
 	}
 	digest := sha256.Sum256(preimage)
 	return rand.New(rand.NewPCG(binary.BigEndian.Uint64(digest[:8]), binary.BigEndian.Uint64(digest[8:16])))

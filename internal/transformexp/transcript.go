@@ -12,6 +12,8 @@ import (
 	"io"
 	"slices"
 	"time"
+
+	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
 )
 
 const (
@@ -44,7 +46,7 @@ func (e TransformEvent) canonicalJSON() ([]byte, error) {
 	if e.PanelOrdinal < 0 || e.PanelOrdinal > 999 || len(e.Policy) == 0 || len(e.Policy) > 32 || !ascii(e.Policy) || len(e.TaskToken) != 16 || !ascii(e.TaskToken) || e.Sequence < 0 || e.Sequence > 99999 || !oneOfString(e.Phase, "acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "freeze", "heldout", "terminal") || e.Category < 0 || e.Category >= len(lifecycleCharges) || len(e.Operation) == 0 || len(e.Operation) > 24 || !ascii(e.Operation) || len(e.Outcome) == 0 || len(e.Outcome) > 32 || !ascii(e.Outcome) || !digestString(e.Subject) || !digestString(e.Object) || !digestString(e.Previous) {
 		return nil, errors.New("invalid transformation event")
 	}
-	b, err := json.Marshal([]any{"transform-events/v1", e.PanelOrdinal, e.Policy, e.TaskToken, e.Sequence, e.Phase, e.Category, e.Operation, e.Subject, e.Object, e.Outcome, e.Previous})
+	b, err := json.Marshal([]any{"transform-events/v2", e.PanelOrdinal, e.Policy, e.TaskToken, e.Sequence, e.Phase, e.Category, e.Operation, e.Subject, e.Object, e.Outcome, e.Previous})
 	if err != nil || len(b) > EventByteCap {
 		return nil, errors.New("transformation event exceeds canonical cap")
 	}
@@ -167,6 +169,7 @@ type TransformTranscriptSink struct {
 	reservedStartWork    int64
 	reservedMaximumWork  int64
 	applicationCommitted bool
+	waitingForComparison bool
 }
 
 var errTransformApplicationBudget = errors.New("transformation application budget exhausted")
@@ -336,13 +339,14 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	if o.Operation == "schema-application" || o.Operation == "replay-application" {
 		s.Applications++
 		s.applicationCommitted = true
+		s.waitingForComparison = o.Operation == "schema-application" && o.Phase == "training-validate" && s.reservedMaximumWork == 80 && o.Outcome == "applied"
 		if o.Operation == "replay-application" {
 			s.finishApplicationReservation()
 		}
 	}
 	if o.Operation == "evidence-link" {
 		s.lastAttach = false
-		if s.reserved && s.applicationCommitted {
+		if s.reserved && s.applicationCommitted && !s.waitingForComparison {
 			s.finishApplicationReservation()
 		}
 	} else {
@@ -352,6 +356,9 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 			s.lastOutput = o.Outputs[0]
 		}
 		s.lastAttach = oneOfString(o.Operation, "node", "parent", "target", "compare", "candidate-allocate", "refine", "edit-validate", "edit-apply", "schema-application", "output-compare", "verify")
+	}
+	if o.Operation == "output-compare" && s.waitingForComparison && s.outputComparisonIsEndpoint(o) {
+		s.finishApplicationReservation()
 	}
 	if o.Phase == "terminal" && o.Operation == "terminal" {
 		s.terminal = true
@@ -366,6 +373,23 @@ func (s *TransformTranscriptSink) finishApplicationReservation() {
 	s.reservedStartWork = 0
 	s.reservedMaximumWork = 0
 	s.applicationCommitted = false
+	s.waitingForComparison = false
+}
+
+func (s *TransformTranscriptSink) outputComparisonIsEndpoint(operation TransformOperation) bool {
+	if len(operation.Inputs) != 3 {
+		return false
+	}
+	forest, err := transformschema.ParseForest(s.Objects.Objects[operation.Inputs[1]])
+	if err != nil || len(forest.Nodes) == 0 {
+		return false
+	}
+	kind, value, err := decodeTransformAtom(s.Objects.Objects[operation.Inputs[2]])
+	id, ok := jsonInteger(value)
+	if err != nil || kind != "id" || !ok {
+		return false
+	}
+	return id == len(forest.Nodes)-1
 }
 
 func (s *TransformTranscriptSink) validateOperation(o TransformOperation) error {
@@ -486,6 +510,26 @@ type transformApplicationSpan struct {
 }
 
 func transformApplicationSpans(raw []byte, objects map[string][]byte) (map[int]transformApplicationSpan, error) {
+	type decodedEvent struct {
+		operation TransformOperation
+	}
+	var decoded []decodedEvent
+	preScanner := bufio.NewScanner(bytes.NewReader(raw))
+	preScanner.Buffer(make([]byte, EventByteCap+1), EventByteCap+1)
+	for preScanner.Scan() {
+		event, err := parseTransformEvent(preScanner.Bytes())
+		if err != nil || event.Sequence != len(decoded) {
+			return nil, errors.New("cannot predecode application reservations")
+		}
+		operation, err := parseTransformOperation(objects[event.Object])
+		if err != nil {
+			return nil, errors.New("cannot predecode application operation")
+		}
+		decoded = append(decoded, decodedEvent{operation})
+	}
+	if err := preScanner.Err(); err != nil {
+		return nil, err
+	}
 	spans := map[int]transformApplicationSpan{}
 	covered := map[int]bool{}
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
@@ -516,7 +560,17 @@ func transformApplicationSpans(raw []byte, objects map[string][]byte) (map[int]t
 			if json.Unmarshal(certificate[10], &first) != nil || json.Unmarshal(certificate[11], &last) != nil || first < 0 || first > sequence || last != sequence+1 {
 				return nil, errors.New("schema application reservation range")
 			}
-			span = transformApplicationSpan{first, sequence, last, operation.Phase, 80, operation.Operation}
+			maximumWork := int64(68)
+			endpoint := last
+			if operation.Phase == "training-validate" && operation.Outcome == "applied" {
+				for next := last + 1; next < len(decoded) && decoded[next].operation.Operation == "output-compare" && decoded[next].operation.Phase == operation.Phase; next++ {
+					endpoint = next
+				}
+				if endpoint > last {
+					maximumWork = 80
+				}
+			}
+			span = transformApplicationSpan{first, sequence, endpoint, operation.Phase, maximumWork, operation.Operation}
 		default:
 			sequence++
 			continue
@@ -540,6 +594,10 @@ func transformApplicationSpans(raw []byte, objects map[string][]byte) (map[int]t
 }
 
 func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDigest string) (TransformTranscriptBundle, error) {
+	return reduceTransformTranscriptWithTraining(raw, objects, manifestDigest, nil)
+}
+
+func reduceTransformTranscriptWithTraining(raw []byte, objects map[string][]byte, manifestDigest string, training []byte) (TransformTranscriptBundle, error) {
 	if len(raw) == 0 || len(raw) > RawChunkByteCap || raw[len(raw)-1] != '\n' || !digestString(manifestDigest) {
 		return TransformTranscriptBundle{}, errors.New("invalid transcript framing")
 	}
@@ -571,7 +629,10 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 		}
 		if len(events) == 0 {
 			panelOrdinal, policy, taskToken = event.PanelOrdinal, event.Policy, event.TaskToken
-			lifecycle = newTransformLifecycleState(policy)
+			lifecycle, err = newTransformLifecycleState(policy, training)
+			if err != nil {
+				return TransformTranscriptBundle{}, errors.New("invalid committed training fixture")
+			}
 			initial, _ := json.Marshal([]any{"transform-chain/v1", manifestDigest, event.TaskToken})
 			previous = digestBytes(initial)
 		} else if event.PanelOrdinal != panelOrdinal || event.Policy != policy || event.TaskToken != taskToken {
@@ -660,7 +721,11 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 			return TransformTranscriptBundle{}, errors.New("application exceeded reserved work")
 		}
 		if activeReservation != nil && event.Sequence == activeReservation.last {
-			if activeReservation.operation == "schema-application" && operation.Operation != "evidence-link" || activeReservation.operation == "replay-application" && operation.Operation != "replay-application" {
+			wantEndpoint := "evidence-link"
+			if activeReservation.operation == "schema-application" && activeReservation.maximumWork == 80 {
+				wantEndpoint = "output-compare"
+			}
+			if activeReservation.operation == "schema-application" && operation.Operation != wantEndpoint || activeReservation.operation == "replay-application" && operation.Operation != "replay-application" {
 				return TransformTranscriptBundle{}, errors.New("application reservation has invalid final event")
 			}
 			activeReservation = nil
@@ -773,12 +838,12 @@ func validateReducedOperation(operation TransformOperation, applications int, la
 		"refine":             {[]string{"target", "anchor", "scope", "old-guard", "locality"}, []string{"refined", "rejected", "invalid-input"}, 2, 2, 0, 1},
 		"edit-validate":      {[]string{"acquire", "training-validate", "heldout"}, []string{"valid", "no-op", "invalid-input"}, 2, 2, 1, 1},
 		"edit-apply":         {[]string{"acquire", "training-validate", "heldout"}, []string{"applied", "invalid-input"}, 2, 2, 1, 1},
-		"schema-predicate":   {[]string{"training-validate", "heldout"}, []string{"true", "false", "invalid-input"}, 4, 4, 1, 1},
-		"output-compare":     {[]string{"acquire", "training-validate", "heldout"}, []string{"equal", "different", "invalid-input"}, 2, 2, 0, 1},
+		"schema-predicate":   {[]string{"training-validate", "heldout"}, []string{"true", "false", "invalid-input"}, 4, 4, 0, 1},
+		"output-compare":     {[]string{"acquire", "training-validate"}, []string{"equal", "different", "invalid-input"}, 3, 3, 0, 1},
 		"evidence-link":      {[]string{"acquire", "target", "anchor", "scope", "old-guard", "locality", "training-validate", "freeze", "heldout"}, []string{"attached", "rejected"}, 3, 3, 1, 1},
 		"canonicalize":       {nonterminal, []string{"canonical", "invalid-input"}, 1, 1, 1, 1},
 		"hash":               {nonterminal, []string{"hashed", "invalid-input"}, 1, 1, 1, 1},
-		"verify":             {[]string{"acquire", "training-validate", "freeze", "heldout"}, []string{"verified", "rejected"}, 1, 2, 1, 1},
+		"verify":             {[]string{"acquire", "freeze"}, []string{"verified", "rejected"}, 1, 1, 1, 1},
 		"schema-application": {[]string{"training-validate", "heldout"}, []string{"applied", "abstain/request-count", "abstain/anchor", "abstain/locality", "abstain/expansion", "abstain/no-op", "invalid-input"}, 2, 2, 1, 1},
 		"replay-application": {[]string{"training-validate", "heldout"}, []string{"applied", "abstain/replay-miss", "invalid-input"}, 2, 2, 1, 1},
 		"terminal":           {[]string{"terminal"}, []string{"completed", "no-discovery", "budget-exhausted"}, 1, 1, 1, 1},
@@ -817,6 +882,10 @@ func validateTransformOutcomeArity(operation TransformOperation) error {
 			want = 0
 		}
 	case "output-compare", "canonicalize", "hash":
+		if operation.Outcome == "invalid-input" {
+			want = 0
+		}
+	case "schema-predicate":
 		if operation.Outcome == "invalid-input" {
 			want = 0
 		}
@@ -893,7 +962,7 @@ func parseTransformEvent(data []byte) (TransformEvent, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	var row []any
-	if err := decoder.Decode(&row); err != nil || len(row) != 12 || row[0] != "transform-events/v1" {
+	if err := decoder.Decode(&row); err != nil || len(row) != 12 || row[0] != "transform-events/v2" {
 		return TransformEvent{}, errors.New("event wire")
 	}
 	integer := func(value any) (int, bool) {

@@ -63,24 +63,66 @@ var familySchemas = []transformschema.Schema{
 }
 
 func developmentPanel() ([]curriculum, error) {
-	return publicPanel("development", 841001, []int{6, 6, 6, 5, 5, 5, 5, 5, 5})
+	families := publicFamilyPermutation("development", 841001, []int{6, 6, 6, 5, 5, 5, 5, 5, 5})
+	panelCommitment := digestBytes(mustJSON([]any{"transform-panel/v1", "development", 841001}))
+	out := make([]curriculum, len(families))
+	for ordinal, family := range families {
+		seed := uint64(841001 + ordinal)
+		seedCommitment := digestBytes(mustJSON([]any{"transform-seed/v1", "development", seed}))
+		var value curriculum
+		var err error
+		for attempt := 0; attempt < 100; attempt++ {
+			value, err = generateCurriculumAttempt(ordinal, family, seed, panelCommitment, seedCommitment, attempt)
+			if errors.Is(err, errRejectedCurriculumAttempt) {
+				continue
+			}
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("development curriculum %d: %w", ordinal, err)
+		}
+		value.Panel = "development"
+		out[ordinal] = value
+	}
+	return out, nil
 }
 
 func validationPanel() ([]curriculum, error) {
-	return publicPanel("validation", 842001, []int{11, 11, 11, 11, 11, 11, 10, 10, 10})
+	families := publicFamilyPermutation("validation", 842001, []int{11, 11, 11, 11, 11, 11, 10, 10, 10})
+	panelCommitment := digestBytes(mustJSON([]any{"transform-panel/v1", "validation", 842001}))
+	out := make([]curriculum, len(families))
+	for ordinal, family := range families {
+		seed := uint64(842001 + ordinal)
+		seedCommitment := digestBytes(mustJSON([]any{"transform-seed/v1", "validation", seed}))
+		var value curriculum
+		var err error
+		for attempt := 0; attempt < 100; attempt++ {
+			value, err = generateCurriculumAttempt(ordinal, family, seed, panelCommitment, seedCommitment, attempt)
+			if errors.Is(err, errRejectedCurriculumAttempt) {
+				continue
+			}
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("validation curriculum %d: %w", ordinal, err)
+		}
+		value.Panel = "validation"
+		out[ordinal] = value
+	}
+	return out, nil
 }
 
 // lockedPanel is deliberately unexported. Its sole production caller is the
 // repository guard, after that guard has durably claimed the locked attempt.
-func lockedPanel(root []byte) ([]curriculum, [][2]uint64, error) {
+func lockedPanel(root []byte) ([]curriculum, error) {
 	if len(root) != sha256.Size {
-		return nil, nil, fmt.Errorf("locked root must contain 32 bytes")
+		return nil, fmt.Errorf("locked root must contain 32 bytes")
 	}
 	counts := []int{15, 15, 14, 14, 14, 14, 14, 14, 14}
 	materials := make([][]byte, LockedCount)
 	seeds := make([]uint64, LockedCount)
 	for ordinal := range seeds {
-		materials[ordinal] = lockedHMAC(root, []any{"part3/transform-schema/v1", "locked-curriculum", ordinal})
+		materials[ordinal] = lockedHMAC(root, []any{"part3/transform-schema/v2", "locked-curriculum", ordinal})
 		seeds[ordinal] = binary.BigEndian.Uint64(materials[ordinal][:8])
 	}
 	families := make([]int, 0, LockedCount)
@@ -89,29 +131,26 @@ func lockedPanel(root []byte) ([]curriculum, [][2]uint64, error) {
 			families = append(families, family)
 		}
 	}
-	permutationDigest := lockedHMAC(root, []any{"part3/transform-schema/v1", "family-permutation", "locked"})
+	permutationDigest := lockedHMAC(root, []any{"part3/transform-schema/v2", "family-permutation", "locked"})
 	rng := rand.New(rand.NewPCG(binary.BigEndian.Uint64(permutationDigest[:8]), binary.BigEndian.Uint64(permutationDigest[8:16])))
 	shuffleFixtureValues(rng, families)
 	panelCommitment := hex.EncodeToString(lockedHMAC(root, []any{"transform-panel/v1", "locked"}))
 	panel := make([]curriculum, LockedCount)
 	for ordinal := range panel {
-		value, err := makeCurriculumWithAuthority(ordinal, families[ordinal], seeds[ordinal], panelCommitment, digestBytes(materials[ordinal]))
+		var value curriculum
+		var err error
+		for attempt := 0; attempt < 100; attempt++ {
+			value, err = generateCurriculumAttempt(ordinal, families[ordinal], seeds[ordinal], panelCommitment, digestBytes(materials[ordinal]), attempt)
+			if errors.Is(err, errRejectedCurriculumAttempt) {
+				continue
+			}
+			break
+		}
 		if err != nil {
-			return nil, nil, fmt.Errorf("locked curriculum %d: %w", ordinal, err)
+			return nil, fmt.Errorf("locked curriculum %d: %w", ordinal, err)
 		}
 		value.Panel = "locked"
 		panel[ordinal] = value
-	}
-	pairs := make([][2]uint64, 20000)
-	for replicate := 0; replicate < 10000; replicate++ {
-		for purposeIndex, purpose := range []string{"bootstrap/nous-vs-pbe", "randomization/nous-vs-pbe"} {
-			material := lockedHMAC(root, []any{"statistics", "locked", replicate, purpose})
-			index := replicate
-			if purposeIndex == 1 {
-				index += 10000
-			}
-			pairs[index] = [2]uint64{binary.BigEndian.Uint64(material[:8]), binary.BigEndian.Uint64(material[8:16])}
-		}
 	}
 	for index := range seeds {
 		seeds[index] = 0
@@ -119,7 +158,7 @@ func lockedPanel(root []byte) ([]curriculum, [][2]uint64, error) {
 			materials[index][byteIndex] = 0
 		}
 	}
-	return panel, pairs, nil
+	return panel, nil
 }
 
 func lockedHMAC(root []byte, preimage []any) []byte {
@@ -128,38 +167,22 @@ func lockedHMAC(root []byte, preimage []any) []byte {
 	return mac.Sum(nil)
 }
 
-func publicPanel(panel string, start uint64, counts []int) ([]curriculum, error) {
+func publicFamilyPermutation(panel string, start uint64, counts []int) []int {
 	var families []int
 	for family, count := range counts {
 		for range count {
 			families = append(families, family)
 		}
 	}
-	seed := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v1", "family-permutation", panel, start}))
+	seed := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v2", "family-permutation", panel, start}))
 	rng := rand.New(rand.NewPCG(binary.BigEndian.Uint64(seed[:8]), binary.BigEndian.Uint64(seed[8:16])))
 	shuffleFixtureValues(rng, families)
-	panelCommitment := digestBytes(mustJSON([]any{"transform-panel/v1", panel, start}))
-	out := make([]curriculum, len(families))
-	for i, family := range families {
-		curriculumSeed := start + uint64(i)
-		seedCommitment := digestBytes(mustJSON([]any{"transform-seed/v1", panel, curriculumSeed}))
-		c, err := makeCurriculumWithAuthority(i, family, curriculumSeed, panelCommitment, seedCommitment)
-		if err != nil {
-			return nil, fmt.Errorf("curriculum %d: %w", i, err)
-		}
-		c.Panel = panel
-		out[i] = c
-	}
-	return out, nil
+	return families
 }
 
 func makeCurriculum(ordinal, family int, seed uint64) (curriculum, error) {
 	panelCommitment := digestBytes(mustJSON([]any{"transform-panel/v1", "safe", seed}))
 	seedCommitment := digestBytes(mustJSON([]any{"transform-seed/v1", "safe", seed}))
-	return makeCurriculumWithAuthority(ordinal, family, seed, panelCommitment, seedCommitment)
-}
-
-func makeCurriculumWithAuthority(ordinal, family int, seed uint64, panelCommitment, seedCommitment string) (curriculum, error) {
 	for attempt := 0; attempt < 100; attempt++ {
 		value, err := generateCurriculumAttempt(ordinal, family, seed, panelCommitment, seedCommitment, attempt)
 		if errors.Is(err, errRejectedCurriculumAttempt) {
@@ -542,7 +565,7 @@ func streamedNegativeForest(structureSeed, aliasSeed, scalarSeed, childSeed uint
 }
 
 func fixtureStream(panelCommitment, seedCommitment string, attempt int, purpose string) *rand.Rand {
-	d := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v1", panelCommitment, seedCommitment, attempt, purpose}))
+	d := sha256.Sum256(mustJSON([]any{"part3/transform-schema/v2", panelCommitment, seedCommitment, attempt, purpose}))
 	return rand.New(rand.NewPCG(binary.BigEndian.Uint64(d[:8]), binary.BigEndian.Uint64(d[8:16])))
 }
 

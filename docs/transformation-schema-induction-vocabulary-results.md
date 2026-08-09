@@ -1,6 +1,7 @@
 # Transformation-schema induction vocabulary: implementation and trial record
 
-Status: **implementation-review candidate; no protected panel has run**
+Status: **v2 implementation-review candidate; v1 was closed unexecuted and no
+v2 protected panel has run**
 
 This document records Vocabulary 2 of the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) as it
@@ -12,11 +13,11 @@ canonical review manifest.
 
 ## Frozen identity and goal
 
-- accepted plan: `baff1990798846b9314c9b42745198098c8087f1`;
+- accepted plan: `268b0065f80e86a617fa956e90f228da2d64cfa0` (revision 11);
 - vocabulary: `domains/transformschema` and
   `internal/vocab/transformschema`;
-- seed authority: `part3/transform-schema/v1`;
-- experiment manifest: `transform-schema/v1`;
+- seed authority: `part3/transform-schema/v2`;
+- experiment manifest: `transform-schema/v2`;
 - learned artifact: an executable five-factor transformation schema;
 - primary comparison: ordinary Nous refinement against bounded PBE; and
 - protected claim: improved exact held-out transformation success under the
@@ -58,7 +59,11 @@ input, output, and operation objects. The trace now authenticates:
 - exactly five canonical closure objects, including every alternative,
   committed factor result, status, parent, and sole survivor;
 - one verified frozen schema artifact;
-- training and held-out applications with immediate evidence attachment;
+- positive-training applications through immediate evidence attachment and one
+  exact comparison per output node, with the final node as the reservation
+  endpoint;
+- abstaining training applications and all truth-independent held-out
+  applications through their immediate evidence endpoint;
 - replay applications with the same evidence boundary; and
 - a terminal object whose work, application, and sequence totals reconstruct.
 
@@ -68,6 +73,13 @@ object completeness, gzip framing, and terminal totals. A separate oracle that
 does not import the production vocabulary reconstructs the learned programs,
 applications, and score.
 
+Factor truth remains heuristic-owned: each CUE factor action emits its own
+boolean claim. The reducer reconstructs that claim afterward from the four
+acquired programs and explicit local observations. It does not return an
+answer to the VM or alter candidate selection. Definition-only scope and guard
+normalization uses one enum comparison, explicit `redundant-noncanonical`
+closure status, and no example scan.
+
 Committed protected evidence is checked more strongly than the in-memory safe
 trial. The verifier rebuilds the exact evidence graph and competence root from
 Git blobs, then independently derives each execution row's frozen artifact,
@@ -75,9 +87,17 @@ eight held-out outcomes, correctness bit vector, false-application count,
 nonmatching work, family assignment, and premanifest fixture bindings. Report
 and execution-manifest agreement alone is not accepted as evidence.
 
+Store-backed policies persist their actual canonical CUE Store, not a summary.
+Independent verification reruns the exact acquisition configuration and
+requires byte-identical Store and promoted-program evidence. Bounded and random
+PBE remain stateless and are forbidden from emitting Store leaves. Locked
+statistics contain no private root or expanded random-pair leaf: the fixture
+root instead commits one `transform-statistics-authority/v2` leaf, and replay
+derives all 20,000 PCG seed pairs from the receipt's public root commitment.
+
 ## Pre-review trials
 
-On 2026-08-09 the safe six-policy trial and all scoped packages passed:
+On 2026-08-08 the safe six-policy trial and all scoped packages passed:
 
 ```text
 GOWORK=off mise exec -- go test \
@@ -93,7 +113,8 @@ The tests cover all nine generated semantic families, policy/scorer isolation,
 purpose-separated fixture streams and golden vectors, deterministic primary
 and audit trials, the six policy controls, exact object reduction, forged
 closure rejection, committed score/artifact reconstruction for every policy,
-receipt and repository attacks, and the source-authority call graph.
+receipt and repository attacks, actual Store replay, public locked-statistics
+reconstruction, and the source-authority call graph including test files.
 
 The competence suite also passed its frozen exhaustive bounds:
 
@@ -104,9 +125,9 @@ The competence suite also passed its frozen exhaustive bounds:
 | Concrete-program applications | 7,020 |
 | Committed executable microcases | 14 |
 
-The repository-wide `GOWORK=off mise exec -- go test ./... -count=1` run
-completed every other listed package, including `internal/transformexp`, but
-the overall command remains red because the pre-existing
+The repository-wide suite was also run on this implementation-review
+candidate. It completed every other listed package, including
+`internal/transformexp`, but remained red because the pre-existing
 `internal/causalexpv2.TestDependencyProofPreflightCoversCurrentTrackedTree`
 rejects the current causal dependency proof. That failure is outside this
 vocabulary and was not changed or waived.
@@ -114,9 +135,10 @@ vocabulary and was not changed or waived.
 ## What these trials do and do not show
 
 They show that the implemented vocabulary can recover and execute the expected
-schema families on safe generated curricula, that its distinguishing Store
-artifacts and evidence barriers are causally necessary, and that its reports
-can be reconstructed from semantic evidence rather than trusted counters.
+schema families on safe generated curricula and that its reports can be
+reconstructed from semantic evidence rather than trusted counters. Ablation
+and control behavior supports—but does not by itself prove—the causal value of
+the factorized Store artifacts and evidence barriers.
 They also show expected qualitative separation: concrete replay memorizes
 positive cases but cannot generalize, LGG over-applies, and removing the
 equality guard prevents safe completion where that guard is required.

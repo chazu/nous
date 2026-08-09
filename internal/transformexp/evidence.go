@@ -8,8 +8,10 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/chazu/nous/internal/transformfixturecore"
+	"github.com/chazu/nous/internal/transformoracle"
 )
 
 type evidenceLeaf struct {
@@ -33,21 +35,22 @@ func buildPanelEvidence(domainsDir, panel string, curricula []curriculum, author
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	return buildPanelEvidenceFromPrepared(domainsDir, panel, files, fixtureRoot, len(curricula), authority, nil, reviewAuthority)
+	return buildPanelEvidenceFromPrepared(domainsDir, panel, files, fixtureRoot, len(curricula), authority, reviewAuthority)
 }
 
-func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][]byte, fixtureRoot []byte, count int, authority uint64, lockedPairs [][2]uint64, reviewAuthority []byte) (panelEvidence, error) {
+func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][]byte, fixtureRoot []byte, count int, authority uint64, reviewAuthority []byte) (panelEvidence, error) {
+	var lockedPairs [][2]uint64
 	if panel == "locked" {
-		if len(lockedPairs) != 20000 {
-			return panelEvidence{}, fmt.Errorf("locked statistics pair count %d", len(lockedPairs))
+		rootCommitment, err := parseLockedStatisticsAuthority(files["statistics/authority.json"])
+		if err != nil {
+			return panelEvidence{}, err
 		}
-		rows := make([]any, len(lockedPairs))
-		for index, pair := range lockedPairs {
-			rows[index] = []any{fmt.Sprintf("%016x", pair[0]), fmt.Sprintf("%016x", pair[1])}
+		lockedPairs, err = lockedStatisticsPairs(rootCommitment)
+		if err != nil {
+			return panelEvidence{}, err
 		}
-		files["statistics/locked-pairs.json"] = mustJSON([]any{"transform-statistics-pairs/v1", rows})
-	} else if len(lockedPairs) != 0 {
-		return panelEvidence{}, errors.New("statistics pairs supplied outside locked panel")
+	} else if _, exists := files["statistics/authority.json"]; exists {
+		return panelEvidence{}, errors.New("statistics authority supplied outside locked panel")
 	}
 	executionCurricula, err := decodePreparedCurricula(files, panel, count)
 	if err != nil {
@@ -76,7 +79,7 @@ func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][
 	files["audit/execution-manifest.json"] = auditManifest
 	report.PrimaryManifestDigest = digestBytes(primaryManifest)
 	report.AuditManifestDigest = digestBytes(auditManifest)
-	competenceFiles, err := runTransformMicrocases()
+	competenceFiles, err := runTransformMicrocases(domainsDir)
 	if err != nil {
 		return panelEvidence{}, err
 	}
@@ -85,12 +88,12 @@ func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][
 	}
 	competenceBytes, _ := json.Marshal(report.Competence)
 	files["competence/report.json"] = competenceBytes
-	competenceRoot, err := canonicalEvidenceRoot("transform-competence-root/v1", "", competenceFiles)
+	competenceRoot, err := canonicalEvidenceRoot("transform-competence-root/v2", "", competenceFiles)
 	if err != nil {
 		return panelEvidence{}, err
 	}
 	files["competence/root.json"] = competenceRoot
-	graph, err := canonicalEvidenceRoot("transform-evidence-graph/v1", panel, files)
+	graph, err := canonicalEvidenceRoot("transform-evidence-graph/v2", panel, files)
 	if err != nil {
 		return panelEvidence{}, err
 	}
@@ -102,8 +105,8 @@ func buildPanelEvidenceFromPrepared(domainsDir, panel string, files map[string][
 	return panelEvidence{report, reportBytes, graph, files}, nil
 }
 
-func buildPreparedEvidence(panel string, curricula []curriculum) (map[string][]byte, []byte, error) {
-	files, fixtureRoot, err := buildFixtureEvidence(panel, curricula)
+func buildPreparedEvidence(panel string, curricula []curriculum, statisticAuthority ...string) (map[string][]byte, []byte, error) {
+	files, fixtureRoot, err := buildFixtureEvidence(panel, curricula, statisticAuthority...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -124,7 +127,7 @@ func buildPreparedEvidence(panel string, curricula []curriculum) (map[string][]b
 	return files, fixtureRoot, nil
 }
 
-func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]byte, []byte, error) {
+func buildFixtureEvidence(panel string, curricula []curriculum, statisticAuthority ...string) (map[string][]byte, []byte, error) {
 	fixtureFiles := map[string][]byte{}
 	for _, c := range curricula {
 		base := fmt.Sprintf("fixtures/%03d", c.Ordinal)
@@ -136,15 +139,36 @@ func buildFixtureEvidence(panel string, curricula []curriculum) (map[string][]by
 		}
 		fixtureFiles[base+"/scorer.json"] = scorer
 		fixtureFiles[base+"/family.json"] = mustJSON([]any{"transform-family-assignment/v1", c.Ordinal, c.Family})
-		fixtureFiles[base+"/acceptance.json"] = mustJSON([]any{"transform-generator-acceptance-ledger/v1", c.GeneratorLedger.Applications, c.GeneratorLedger.Work, c.GeneratorLedger.MatrixSHA256, c.GeneratorLedger.Accepted})
-		fixtureFiles[base+"/authority.json"] = mustJSON([]any{"transform-fixture-authority/v1", c.Ordinal, panel, c.PanelCommitment})
 		fixtureFiles[base+"/queue.json"] = policyQueueBytes(c)
 	}
-	fixtureRoot, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
+	if panel == "locked" {
+		if len(statisticAuthority) != 1 || !isLowerHex(statisticAuthority[0], 64) {
+			return nil, nil, errors.New("locked fixture requires one root commitment")
+		}
+		fixtureFiles["statistics/authority.json"] = mustJSON([]any{"transform-statistics-authority/v2", "locked", statisticAuthority[0], 10000, 10000})
+	} else if len(statisticAuthority) != 0 {
+		return nil, nil, errors.New("statistics authority supplied outside locked fixture")
+	}
+	fixtureRoot, err := canonicalEvidenceRoot("transform-fixture-root/v2", panel, fixtureFiles)
 	if err != nil {
 		return nil, nil, err
 	}
 	return fixtureFiles, fixtureRoot, nil
+}
+
+func parseLockedStatisticsAuthority(data []byte) (string, error) {
+	var wire []json.RawMessage
+	var version, panel, commitment string
+	var bootstrap, randomization int
+	if !canonicalJSON(data) || json.Unmarshal(data, &wire) != nil || len(wire) != 5 ||
+		json.Unmarshal(wire[0], &version) != nil || version != "transform-statistics-authority/v2" ||
+		json.Unmarshal(wire[1], &panel) != nil || panel != "locked" ||
+		json.Unmarshal(wire[2], &commitment) != nil || !isLowerHex(commitment, 64) ||
+		json.Unmarshal(wire[3], &bootstrap) != nil || bootstrap != 10000 ||
+		json.Unmarshal(wire[4], &randomization) != nil || randomization != 10000 {
+		return "", errors.New("invalid locked statistics authority")
+	}
+	return commitment, nil
 }
 
 func decodePreparedCurricula(files map[string][]byte, panel string, count int) ([]curriculum, error) {
@@ -178,27 +202,21 @@ func decodePreparedCurricula(files map[string][]byte, panel string, count int) (
 		if err != nil {
 			return nil, err
 		}
-		acceptanceBytes, err := read("acceptance.json")
-		if err != nil {
-			return nil, err
-		}
-		authorityBytes, err := read("authority.json")
-		if err != nil {
-			return nil, err
-		}
-		var familyWire, acceptanceWire, authorityWire []json.RawMessage
-		var familyVersion, acceptanceVersion, authorityVersion, gotPanel, panelCommitment string
-		var familyOrdinal, family, authorityOrdinal int
-		ledger := acceptanceLedger{}
+		var familyWire []json.RawMessage
+		var familyVersion, panelCommitment string
+		var familyOrdinal, family int
 		if json.Unmarshal(familyBytes, &familyWire) != nil || len(familyWire) != 3 || json.Unmarshal(familyWire[0], &familyVersion) != nil || familyVersion != "transform-family-assignment/v1" || json.Unmarshal(familyWire[1], &familyOrdinal) != nil || familyOrdinal != ordinal || json.Unmarshal(familyWire[2], &family) != nil || family < 0 || family >= len(familySchemas) {
 			return nil, fmt.Errorf("invalid prepared family %d", ordinal)
 		}
-		if json.Unmarshal(acceptanceBytes, &acceptanceWire) != nil || len(acceptanceWire) != 5 || json.Unmarshal(acceptanceWire[0], &acceptanceVersion) != nil || acceptanceVersion != "transform-generator-acceptance-ledger/v1" || json.Unmarshal(acceptanceWire[1], &ledger.Applications) != nil || json.Unmarshal(acceptanceWire[2], &ledger.Work) != nil || json.Unmarshal(acceptanceWire[3], &ledger.MatrixSHA256) != nil || json.Unmarshal(acceptanceWire[4], &ledger.Accepted) != nil {
-			return nil, fmt.Errorf("invalid prepared acceptance ledger %d", ordinal)
+		panelCommitment, err = preparedPanelCommitment(files, queue)
+		if err != nil {
+			return nil, fmt.Errorf("invalid prepared panel commitment %d: %w", ordinal, err)
 		}
-		if json.Unmarshal(authorityBytes, &authorityWire) != nil || len(authorityWire) != 4 || json.Unmarshal(authorityWire[0], &authorityVersion) != nil || authorityVersion != "transform-fixture-authority/v1" || json.Unmarshal(authorityWire[1], &authorityOrdinal) != nil || authorityOrdinal != ordinal || json.Unmarshal(authorityWire[2], &gotPanel) != nil || gotPanel != panel || json.Unmarshal(authorityWire[3], &panelCommitment) != nil || !digestString(panelCommitment) {
-			return nil, fmt.Errorf("invalid prepared authority %d", ordinal)
+		audit, err := transformoracle.AuditAcceptance(training, heldout, scorer)
+		if err != nil {
+			return nil, fmt.Errorf("prepared acceptance audit %d: %w", ordinal, err)
 		}
+		ledger := acceptanceLedger{audit.Applications, audit.Work, audit.MatrixSHA256, audit.Accepted}
 		c := curriculum{Ordinal: ordinal, Family: family, Panel: panel, PanelCommitment: panelCommitment, Training: training, Heldout: heldout, Queue: queue, Scorer: scorer, GeneratorLedger: ledger}
 		scorerView, err := decodeScorerView(c)
 		if err != nil || scorerView.Family != family {
@@ -216,6 +234,26 @@ func decodePreparedCurricula(files map[string][]byte, panel string, count int) (
 		result[ordinal] = c
 	}
 	return result, nil
+}
+
+func preparedPanelCommitment(files map[string][]byte, queue []byte) (string, error) {
+	var queueWire []json.RawMessage
+	var rows [][]json.RawMessage
+	if json.Unmarshal(queue, &queueWire) != nil || len(queueWire) != 2 || json.Unmarshal(queueWire[1], &rows) != nil || len(rows) == 0 || len(rows[0]) != 4 {
+		return "", errors.New("policy queue wire")
+	}
+	var policy Policy
+	var token string
+	if json.Unmarshal(rows[0][0], &policy) != nil || policy != empiricalPolicies[0] || json.Unmarshal(rows[0][1], &token) != nil {
+		return "", errors.New("policy queue first row")
+	}
+	premanifest := files[fmt.Sprintf("pre/%s/%s.json", policy, token)]
+	var wire []json.RawMessage
+	var commitment string
+	if json.Unmarshal(premanifest, &wire) != nil || len(wire) != 10 || json.Unmarshal(wire[3], &commitment) != nil || !digestString(commitment) {
+		return "", errors.New("policy premanifest panel commitment")
+	}
+	return commitment, nil
 }
 
 func addExecutionEvidence(files map[string][]byte, role string, curricula []curriculum, reportRows []PolicyReportRow, bundles map[string]TransformTranscriptBundle, trainingStores, trainingPrograms map[string][]byte) ([]byte, error) {
@@ -237,10 +275,18 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 			}
 			base := role + "/" + key
 			trainingStore := trainingStores[key]
-			if len(trainingStore) == 0 || !canonicalJSON(trainingStore) {
+			storeBacked := policy == NousRefine || policy == PositiveLGG || policy == ConcreteReplay || policy == NoEqualityGuard
+			if storeBacked && (len(trainingStore) == 0 || !canonicalStoreJSON(trainingStore)) {
 				return nil, fmt.Errorf("missing canonical %s training Store %s", role, key)
 			}
-			files[base+"/training-store.json"] = bytes.Clone(trainingStore)
+			if !storeBacked && len(trainingStore) != 0 {
+				return nil, fmt.Errorf("stateless %s policy has a training Store %s", role, key)
+			}
+			trainingStoreDigest := ""
+			if storeBacked {
+				files[base+"/training-store.json"] = bytes.Clone(trainingStore)
+				trainingStoreDigest = digestBytes(trainingStore)
+			}
 			if programs := trainingPrograms[key]; len(programs) != 0 {
 				if _, err := transformfixturecore.ParseProgramBatch(programs); err != nil {
 					return nil, fmt.Errorf("invalid %s training programs %s", role, key)
@@ -257,7 +303,7 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 				files[objectPath] = bytes.Clone(value)
 				objectFiles[objectPath] = value
 			}
-			objectRoot, err := canonicalEvidenceRoot("transform-objects/v1", "", objectFiles)
+			objectRoot, err := canonicalEvidenceRoot("transform-objects/v2", "", objectFiles)
 			if err != nil {
 				return nil, err
 			}
@@ -276,10 +322,10 @@ func addExecutionEvidence(files map[string][]byte, role string, curricula []curr
 			if err != nil {
 				return nil, fmt.Errorf("reconstruct %s heldout results %s: %w", role, key, err)
 			}
-			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, artifactDigest, digestBytes(trainingStore), digestBytes(heldoutResults)})
+			rows = append(rows, []any{policy, c.Ordinal, c.PolicyTokens[policy], digestBytes(premanifest), digestBytes(bundle.Gzip), len(bundle.Raw), len(bundle.Gzip), bytes.Count(bundle.Raw, []byte{'\n'}), digestBytes(objectRoot), bundle.Vector, bundle.Work, row.Applications, row.Terminal, artifactDigest, trainingStoreDigest, digestBytes(heldoutResults)})
 		}
 	}
-	return mustJSON([]any{"transform-execution/v1", role, rows}), nil
+	return mustJSON([]any{"transform-execution/v2", role, rows}), nil
 }
 
 func canonicalEvidenceRoot(version, panel string, files map[string][]byte) ([]byte, error) {
@@ -331,4 +377,71 @@ func canonicalJSON(data []byte) bool {
 	}
 	canonical, err := json.Marshal(value)
 	return err == nil && bytes.Equal(canonical, data)
+}
+
+func canonicalStoreJSON(data []byte) bool {
+	if len(data) == 0 || len(data) > 16777216 {
+		return false
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) == nil {
+		return false
+	}
+	root, ok := value.(map[string]any)
+	if !ok || len(root) > 20000 {
+		return false
+	}
+	for name, rawSlots := range root {
+		if !validStoreKey(name) {
+			return false
+		}
+		slots, ok := rawSlots.(map[string]any)
+		if !ok || len(slots) > 256 {
+			return false
+		}
+		for slot, slotValue := range slots {
+			if !validStoreKey(slot) || !validStoreValue(slotValue, 0) {
+				return false
+			}
+		}
+	}
+	canonical, err := json.Marshal(value)
+	return err == nil && bytes.Equal(canonical, data)
+}
+
+func validStoreKey(value string) bool {
+	return value != "" && len(value) <= 256 && utf8.ValidString(value)
+}
+
+func validStoreValue(value any, depth int) bool {
+	if depth > 64 {
+		return false
+	}
+	switch typed := value.(type) {
+	case nil, bool:
+		return true
+	case json.Number:
+		_, err := typed.Int64()
+		return err == nil
+	case string:
+		return len(typed) <= 61440 && utf8.ValidString(typed)
+	case []any:
+		for _, item := range typed {
+			if !validStoreValue(item, depth+1) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		for key, item := range typed {
+			if !validStoreKey(key) || !validStoreValue(item, depth+1) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }

@@ -146,9 +146,25 @@ func transformStatisticsRNGFor(panel string, authority uint64, lockedPairs [][2]
 }
 
 func transformStatisticsRNG(panel string, authority uint64, replicate int, purpose string) *rand.Rand {
-	preimage, _ := json.Marshal([]any{"part3/transform-schema/v1", "statistics", panel, authority, replicate, purpose})
+	preimage, _ := json.Marshal([]any{"part3/transform-schema/v2", "statistics", panel, authority, replicate, purpose})
 	digest := sha256.Sum256(preimage)
 	return rand.New(rand.NewPCG(binary.BigEndian.Uint64(digest[:8]), binary.BigEndian.Uint64(digest[8:16])))
+}
+
+func lockedStatisticsPairs(rootCommitment string) ([][2]uint64, error) {
+	if !isLowerHex(rootCommitment, 64) {
+		return nil, fmt.Errorf("invalid locked statistics root commitment")
+	}
+	pairs := make([][2]uint64, 20000)
+	for replicate := 0; replicate < 10000; replicate++ {
+		for purposeIndex, purpose := range []string{"bootstrap/nous-vs-pbe", "randomization/nous-vs-pbe"} {
+			preimage, _ := json.Marshal([]any{"part3/transform-schema/v2", "statistics", "locked", rootCommitment, replicate, purpose})
+			digest := sha256.Sum256(preimage)
+			index := replicate + purposeIndex*10000
+			pairs[index] = [2]uint64{binary.BigEndian.Uint64(digest[:8]), binary.BigEndian.Uint64(digest[8:16])}
+		}
+	}
+	return pairs, nil
 }
 
 func bootstrapIntervalIndices(replicates int) (int, int) {

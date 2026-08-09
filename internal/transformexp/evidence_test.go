@@ -11,16 +11,16 @@ import (
 
 func TestEvidenceRootIsCanonicalAndRejectsPaths(t *testing.T) {
 	files := map[string][]byte{"a/x.json": []byte(`[]`), "b.json": []byte(`{}`)}
-	first, err := canonicalEvidenceRoot("transform-evidence-graph/v1", "safe", files)
+	first, err := canonicalEvidenceRoot("transform-evidence-graph/v2", "safe", files)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := canonicalEvidenceRoot("transform-evidence-graph/v1", "safe", map[string][]byte{"b.json": []byte(`{}`), "a/x.json": []byte(`[]`)})
+	second, err := canonicalEvidenceRoot("transform-evidence-graph/v2", "safe", map[string][]byte{"b.json": []byte(`{}`), "a/x.json": []byte(`[]`)})
 	if err != nil || !bytes.Equal(first, second) {
 		t.Fatalf("nondeterministic root err=%v", err)
 	}
 	for _, invalid := range []string{"", "/a", "../a", "a/../b", "a\\b", "a//b"} {
-		if _, err := canonicalEvidenceRoot("transform-evidence-graph/v1", "safe", map[string][]byte{invalid: []byte{}}); err == nil {
+		if _, err := canonicalEvidenceRoot("transform-evidence-graph/v2", "safe", map[string][]byte{invalid: []byte{}}); err == nil {
 			t.Fatalf("accepted path %q", invalid)
 		}
 	}
@@ -35,7 +35,7 @@ func TestPanelEvidenceGraphBindsFixturesTranscriptsAndObjects(t *testing.T) {
 		}
 		curricula[family] = c
 	}
-	evidence, err := buildPanelEvidence("../../domains", "safe", curricula, 841001, []byte(`["transform-reviews/v1"]`))
+	evidence, err := buildPanelEvidence("../../domains", "safe", curricula, 841001, []byte(`["transform-reviews/v2"]`))
 	if err != nil {
 		t.Fatal(err)
 	}

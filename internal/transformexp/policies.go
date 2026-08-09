@@ -133,9 +133,6 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 	default:
 		return out, fmt.Errorf("unknown policy %q", policy)
 	}
-	if len(out.trainingStore) == 0 {
-		out.trainingStore = baselineTrainingStore(c, out)
-	}
 	if out.Terminal != "completed" || len(out.Schema) == 0 {
 		if out.acquisition != nil {
 			run := *out.acquisition
@@ -148,7 +145,7 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 			out.TrainingWork = int(out.Transcript.Work)
 			out.Applications = out.Transcript.Applications
 		} else if len(out.baselineEvents) != 0 {
-			transcript, transcriptErr := transcriptFromBaselineEvents(out.baselineEvents, c, ordinal, policy, out.Terminal, nil)
+			transcript, transcriptErr := transcriptFromBaselineEvents(out.baselineEvents, c, ordinal, policy, out.Terminal, nil, out.trainingStore)
 			if transcriptErr != nil {
 				return out, transcriptErr
 			}
@@ -160,22 +157,6 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 		return out, nil
 	}
 	return out, nil
-}
-
-func baselineTrainingStore(c policyCurriculum, out PolicyOutcome) []byte {
-	store := unit.NewStore()
-	state := unit.New("TransformBaselineTrainingState")
-	state.Set("isA", []string{"TransformTrainingState", "Anything"})
-	state.Set("policy", string(out.Policy))
-	state.Set("terminal", out.Terminal)
-	state.Set("applications", out.Applications)
-	state.Set("trainingDigest", digestBytes(c.Training))
-	state.Set("schemaDigest", digestBytes(out.Schema))
-	state.Set("programBatchDigest", digestBytes(out.frozenReplayBatch))
-	state.Set("eventCount", len(out.baselineEvents))
-	store.Put(state)
-	encoded, _ := store.CanonicalJSON()
-	return encoded
 }
 
 func executeHeldoutInputs(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (PolicyOutcome, error) {
@@ -200,7 +181,7 @@ func scoreSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (Po
 		return out, err
 	}
 	for _, test := range heldout.Cases {
-		if !reserveBaselineApplication(out.baselineEvents, "heldout", 80) {
+		if !reserveBaselineApplication(out.baselineEvents, "heldout", 68) {
 			out.Terminal = "budget-exhausted"
 			break
 		}
@@ -215,7 +196,7 @@ func scoreSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (Po
 		out.heldoutObservations = append(out.heldoutObservations, heldoutObservation{test.Token, application.Terminal, bytes.Clone(application.Output), baselineEventWork(out.baselineEvents[beforeEventCount:])})
 	}
 	if out.Policy == PositiveLGG || out.Policy == BoundedPBE || out.Policy == RandomPBE {
-		out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.ordinal, out.Policy, out.Terminal, out.Schema)
+		out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.ordinal, out.Policy, out.Terminal, out.Schema, out.trainingStore)
 		if err != nil {
 			return out, err
 		}
@@ -352,7 +333,7 @@ func scoreReplayHeldout(c policyCurriculum, heldoutBytes []byte, out PolicyOutco
 		out.baselineEvents = append(out.baselineEvents, events...)
 		out.heldoutObservations = append(out.heldoutObservations, heldoutObservation{test.Token, application.Terminal, bytes.Clone(application.Output), baselineEventWork(out.baselineEvents[beforeEventCount:])})
 	}
-	out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.ordinal, out.Policy, out.Terminal, out.frozenReplayBatch)
+	out.Transcript, err = transcriptFromBaselineEvents(out.baselineEvents, c, out.ordinal, out.Policy, out.Terminal, out.frozenReplayBatch, out.trainingStore)
 	if err != nil {
 		return out, err
 	}
@@ -371,7 +352,7 @@ func scoreTrainingNegatives(c policyCurriculum, out PolicyOutcome) (PolicyOutcom
 		if test.Kind != "abstain" {
 			continue
 		}
-		if !reserveBaselineApplication(out.baselineEvents, "training-validate", 80) {
+		if !reserveBaselineApplication(out.baselineEvents, "training-validate", 68) {
 			out.Terminal = "budget-exhausted"
 			break
 		}
@@ -517,5 +498,5 @@ func policyManifestDigest(c policyCurriculum, policy Policy) string {
 func policyManifestBytes(c policyCurriculum, policy Policy) []byte {
 	training := sha256.Sum256(c.Training)
 	queueDigest := digestBytes(policyQueueBytesFromView(c))
-	return mustJSON([]any{"transform-policy-manifest/v1", "transform-schema/v1", "transform-lifecycle-events/v1", c.PanelCommitment, policy, c.PolicyTokens[policy], hex.EncodeToString(training[:]), c.HeldoutDigest, queueDigest, []int{12000, 50000, 48, 2000, 20000}})
+	return mustJSON([]any{"transform-policy-manifest/v2", "transform-schema/v2", "transform-lifecycle-events/v2", c.PanelCommitment, policy, c.PolicyTokens[policy], hex.EncodeToString(training[:]), c.HeldoutDigest, queueDigest, []int{12000, 50000, 48, 2000, 20000}})
 }

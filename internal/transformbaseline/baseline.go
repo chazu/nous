@@ -140,7 +140,11 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 		}
 		exact := true
 		for _, c := range training.Cases {
-			if !budget.reserveApplication("training-validate", 80) {
+			maximumWork := int64(68)
+			if c.Kind == "positive" {
+				maximumWork = 80
+			}
+			if !budget.reserveApplication("training-validate", maximumWork) {
 				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
 			}
 			terminal, output, err := apply(c.Before, candidate)
@@ -149,7 +153,10 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 			}
 			if metered {
 				applicationTrace := applicationEvents(c.Before, candidateBytes, candidate, terminal, output, "training-validate", len(events))
-				if !budget.commitApplication(&events, "training-validate", 80, applicationTrace...) {
+				if c.Kind == "positive" && terminal == "applied" {
+					applicationTrace = append(applicationTrace, outputComparisonEvents(output, c.After, "training-validate")...)
+				}
+				if !budget.commitApplication(&events, "training-validate", maximumWork, applicationTrace...) {
 					return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
 				}
 			} else {
@@ -161,11 +168,6 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 			if !match {
 				exact = false
 				break
-			}
-			if metered && c.Kind == "positive" && terminal == "applied" {
-				if !budget.append(&events, outputComparisonEvents(output, c.After, "training-validate")...) {
-					return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
-				}
 			}
 		}
 		if exact {

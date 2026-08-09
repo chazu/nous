@@ -86,7 +86,11 @@ func applicationReservations(events []transformbaseline.Event) (map[int]applicat
 			if _, exists := reservations[first]; exists {
 				return nil, errors.New("overlapping schema application reservation")
 			}
-			reservations[first] = applicationReservation{event.Phase, 80}
+			maximumWork := int64(68)
+			if event.Phase == "training-validate" && event.Outcome == "applied" && index+2 < len(events) && events[index+2].Operation == "output-compare" {
+				maximumWork = 80
+			}
+			reservations[first] = applicationReservation{event.Phase, maximumWork}
 		}
 	}
 	return reservations, nil
@@ -119,7 +123,7 @@ func emitMeteredEvents(sink *TransformTranscriptSink, events []transformbaseline
 	return nil
 }
 
-func transcriptFromBaselineEvents(events []transformbaseline.Event, c policyCurriculum, ordinal int, policy Policy, terminal string, schema []byte) (TransformTranscriptBundle, error) {
+func transcriptFromBaselineEvents(events []transformbaseline.Event, c policyCurriculum, ordinal int, policy Policy, terminal string, schema, storeBytes []byte) (TransformTranscriptBundle, error) {
 	sink, err := newTransformTranscriptSink(ordinal, string(policy), c.PolicyTokens[policy], policyManifestDigest(c, policy))
 	if err != nil {
 		return TransformTranscriptBundle{}, err
@@ -128,7 +132,9 @@ func transcriptFromBaselineEvents(events []transformbaseline.Event, c policyCurr
 		return TransformTranscriptBundle{}, err
 	}
 	input := schema
-	if _, parseErr := transformschema.ParseSchema(input); parseErr != nil {
+	if len(storeBytes) != 0 {
+		input, _ = json.Marshal([]any{"transform-store-boundary/v1", "freeze", digestBytes(storeBytes)})
+	} else if _, parseErr := transformschema.ParseSchema(input); parseErr != nil {
 		input, _ = json.Marshal([]any{"transform-store-boundary/v1", "freeze", digestBytes(schema)})
 	}
 	terminalBytes, _ := json.Marshal([]any{"transform-terminal/v1", terminal, sink.Work + 1, sink.Applications, len(sink.Events)})
@@ -152,9 +158,6 @@ func transcriptFromAcquisition(run acquisitionRun, ordinal int, policy Policy, t
 	}
 	storeBytes, _ := run.Store.CanonicalJSON()
 	inputBytes, _ := json.Marshal([]any{"transform-store-boundary/v1", "freeze", digestBytes(storeBytes)})
-	if run.Artifact != "" {
-		inputBytes = []byte(run.Store.Get(run.Artifact).GetString("schema"))
-	}
 	terminalBytes, _ := json.Marshal([]any{"transform-terminal/v1", terminal, sink.Work + 1, sink.Applications, len(sink.Events)})
 	if err := sink.EmitValues("terminal", "terminal", terminal, 11, [][]byte{inputBytes}, [][]byte{terminalBytes}); err != nil {
 		return TransformTranscriptBundle{}, err

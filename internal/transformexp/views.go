@@ -127,6 +127,10 @@ func decodeScorerView(c curriculum) (scorerCurriculum, error) {
 	if err != nil {
 		return scorerCurriculum{}, err
 	}
+	return decodeScorerBytes(encoded)
+}
+
+func decodeScorerBytes(encoded []byte) (scorerCurriculum, error) {
 	var wire []json.RawMessage
 	if json.Unmarshal(encoded, &wire) != nil || len(wire) != 6 {
 		return scorerCurriculum{}, fmt.Errorf("invalid scorer wire")

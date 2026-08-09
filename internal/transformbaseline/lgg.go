@@ -2,6 +2,7 @@ package transformbaseline
 
 import (
 	"bytes"
+	"encoding/json"
 	"slices"
 
 	"github.com/chazu/nous/internal/transformfixturecore"
@@ -33,6 +34,8 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int, in
 			positives[c.Token] = c
 		}
 	}
+	var events []Event
+	budget := newMeterBudget(initialWork, initialApplications)
 	observations := make([]lggObservation, 0, 4)
 	for _, row := range batch.Rows {
 		caseValue := positives[row.Token]
@@ -67,17 +70,19 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int, in
 		}
 		observation.definition = f.nodes[definitionID]
 		slices.Sort(observation.editedReference)
+		if !budget.append(&events, lggForestObservations(caseValue.Before, f)...) {
+			return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+		}
 		observations = append(observations, observation)
 	}
-	var events []Event
-	budget := newMeterBudget(initialWork, initialApplications)
 	targetChoices := []string{"definition", "references", "definition+references"}
 	var targetExact []string
 	for _, choice := range targetChoices {
 		exact := true
 		for _, observation := range observations {
 			match := choice == "definition" && observation.editedKinds["definition"] && !observation.editedKinds["reference"] || choice == "references" && observation.editedKinds["reference"] && !observation.editedKinds["definition"] || choice == "definition+references" && observation.editedKinds["definition"] && observation.editedKinds["reference"]
-			if !budget.append(&events, lggComparison("target", choice, match)) {
+			actual := lggEditedKindSignature(observation.editedKinds)
+			if !budget.append(&events, lggComparison("target", baselineAtom("enum", choice), baselineAtom("enum", actual))) {
 				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
 			}
 			exact = exact && match
@@ -118,7 +123,7 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int, in
 				}
 			}
 			match := selected == observation.definition.id
-			if !budget.append(&events, lggComparison("anchor", choice, match)) {
+			if !budget.append(&events, lggComparison("anchor", baselineAtom("id", selected), baselineAtom("id", observation.definition.id))) {
 				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
 			}
 			exact = exact && match
@@ -181,14 +186,12 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int, in
 		if err != nil || application.Terminal != "applied" {
 			return Result{}, nil, errInvalid
 		}
-		if !budget.commitApplication(&events, "training-validate", 80, applicationEvents...) {
-			return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
-		}
 		_, comparisonEvents, err := CompareOutputsMetered(application.Output, c.After, "training-validate")
 		if err != nil || !bytes.Equal(application.Output, c.After) {
 			return Result{}, nil, errInvalid
 		}
-		if !budget.append(&events, comparisonEvents...) {
+		applicationEvents = append(applicationEvents, comparisonEvents...)
+		if !budget.commitApplication(&events, "training-validate", 80, applicationEvents...) {
 			return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
 		}
 	}
@@ -207,7 +210,7 @@ func lggReferenceProjectionExact(observations []lggObservation, scope, guard str
 		}
 		slices.Sort(predicted)
 		match := slices.Equal(predicted, observation.editedReference)
-		if !budget.append(events, lggComparison(phase, scope+"/"+guard, match)) {
+		if !budget.append(events, lggComparison(phase, baselineAtom("id-set", predicted), baselineAtom("id-set", observation.editedReference))) {
 			return false, true
 		}
 		exact = exact && match
@@ -215,12 +218,38 @@ func lggReferenceProjectionExact(observations []lggObservation, scope, guard str
 	return exact, false
 }
 
-func lggComparison(phase, value string, result bool) Event {
-	observed := value
-	if !result {
-		observed = "not-" + value
+func lggComparison(phase string, predicted, observed []byte) Event {
+	result := bytes.Equal(predicted, observed)
+	return Event{3, "compare", phase, map[bool]string{true: "true", false: "false"}[result], [][]byte{predicted, observed}, [][]byte{baselineAtom("boolean", result)}}
+}
+
+func lggEditedKindSignature(kinds map[string]bool) string {
+	if kinds["definition"] && kinds["reference"] {
+		return "definition+references"
 	}
-	return Event{3, "compare", phase, map[bool]string{true: "true", false: "false"}[result], [][]byte{baselineAtom("enum", value), baselineAtom("enum", observed)}, [][]byte{baselineAtom("boolean", result)}}
+	if kinds["definition"] {
+		return "definition"
+	}
+	if kinds["reference"] {
+		return "references"
+	}
+	return "none"
+}
+
+func lggForestObservations(forestBytes []byte, value forest) []Event {
+	events := make([]Event, 0, len(value.nodes)*3)
+	for _, item := range value.nodes {
+		facts, _ := json.Marshal([]any{"transform-node-facts/v1", item.kind, item.value, item.from, item.to})
+		events = append(events, Event{0, "node", "acquire", "ok", [][]byte{forestBytes, baselineAtom("id", item.id)}, [][]byte{facts}})
+		if item.kind != "group" {
+			parent, _ := json.Marshal([]any{"transform-parent-facts/v1", item.parent, item.key})
+			events = append(events, Event{1, "parent", "acquire", "ok", [][]byte{forestBytes, baselineAtom("id", item.id)}, [][]byte{parent}})
+		}
+		if item.kind == "request" || item.kind == "reference" {
+			events = append(events, Event{2, "target", "acquire", "ok", [][]byte{forestBytes, baselineAtom("id", item.id)}, [][]byte{baselineAtom("id", item.target)}})
+		}
+	}
+	return events
 }
 
 func cheapest(values []string, costs map[string]int, order []string) string {

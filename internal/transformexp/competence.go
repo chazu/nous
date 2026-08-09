@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/dsl"
@@ -21,7 +22,7 @@ type CompetenceReport struct {
 	Passed              bool `json:"passed"`
 }
 
-func runTransformCompetence() (CompetenceReport, error) {
+func runTransformCompetence(domainsDir string) (CompetenceReport, error) {
 	report := CompetenceReport{}
 	for _, forest := range tinyTransformForests() {
 		report.Forests++
@@ -59,7 +60,7 @@ func runTransformCompetence() (CompetenceReport, error) {
 			}
 		}
 	}
-	microcases, err := runTransformMicrocases()
+	microcases, err := runTransformMicrocases(domainsDir)
 	if err != nil {
 		return report, err
 	}
@@ -71,7 +72,7 @@ func runTransformCompetence() (CompetenceReport, error) {
 	return report, nil
 }
 
-func runTransformMicrocases() (map[string][]byte, error) {
+func runTransformMicrocases(domainsDir string) (map[string][]byte, error) {
 	type check struct {
 		name  string
 		input any
@@ -113,7 +114,14 @@ func runTransformMicrocases() (map[string][]byte, error) {
 			absent.Nodes[2].From = "c"
 			ambiguous := cloneBase()
 			ambiguous.Nodes = append(ambiguous.Nodes, transformschema.Node{ID: 4, Kind: "definition", Parent: 0, Key: "e", Value: "a", Target: -1})
-			return apply(absent, transformschema.Schema{"from-value", "definition", "local", "any", "required"}).Terminal == "abstain/anchor" && apply(ambiguous, transformschema.Schema{"from-value", "definition", "local", "any", "required"}).Terminal == "abstain/anchor"
+			remote := cloneBase()
+			remote.Nodes = append(remote.Nodes, transformschema.Node{ID: 4, Kind: "group", Parent: -1, Target: -1})
+			remote.Nodes[1].Parent = 4
+			firstLocal := apply(ambiguous, transformschema.Schema{"first-local", "definition", "local", "any", "required"})
+			return apply(absent, transformschema.Schema{"from-value", "definition", "local", "any", "required"}).Terminal == "abstain/anchor" &&
+				apply(ambiguous, transformschema.Schema{"from-value", "definition", "local", "any", "required"}).Terminal == "abstain/anchor" &&
+				apply(remote, transformschema.Schema{"first-local", "definition", "local", "any", "required"}).Terminal == "abstain/anchor" &&
+				firstLocal.Terminal == "applied" && firstLocal.Certificate.DefinitionID == 1
 		}},
 		{"expansion-modes", []any{"definition", "references", "combined"}, func() bool {
 			definition := apply(base, transformschema.Schema{"request-target", "definition", "local", "any", "required"})
@@ -166,7 +174,11 @@ func runTransformMicrocases() (map[string][]byte, error) {
 			forest := cloneBase()
 			forest.Nodes[1].Key, forest.Nodes[2].Key, forest.Nodes[3].Key = "service", "change", "usage"
 			forest.Nodes = append(forest.Nodes, transformschema.Node{ID: 4, Kind: "decoy", Parent: 0, Key: "occupied", Value: "c", Target: -1})
-			return apply(forest, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}).Terminal == "applied"
+			store := unit.NewStore()
+			for _, name := range []string{"service", "change", "usage", "occupied", "0", "1", "2", "3"} {
+				store.Put(unit.New(name))
+			}
+			return store.Count() == 8 && apply(forest, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"}).Terminal == "applied"
 		}},
 		{"primitive-edit-rejection", []any{"zero", "five", "duplicate-target", "no-op"}, func() bool {
 			duplicate := transformschema.Program{Edits: []transformschema.Edit{{1, "b"}, {1, "c"}}}
@@ -175,29 +187,46 @@ func runTransformMicrocases() (map[string][]byte, error) {
 			five := transformschema.Program{Edits: []transformschema.Edit{{1, "b"}, {2, "b"}, {3, "b"}, {4, "b"}, {5, "b"}}}
 			return (transformschema.Program{}).Validate() != nil && five.Validate() != nil && duplicate.Validate() != nil && noOpErr != nil
 		}},
-		{"wrong-context-corruption", []any{"two-requests", "remote", "digest"}, func() bool {
+		{"wrong-context-corruption", []any{"two-requests", "remote", "reducer-rejection"}, func() bool {
 			forest := cloneBase()
 			forest.Nodes = append(forest.Nodes, transformschema.Node{ID: 4, Kind: "request", Parent: 0, Key: "x", From: "a", To: "b", Target: 1})
 			schema := transformschema.Schema{"request-target", "definition", "local", "any", "required"}
-			encoded, _ := schema.CanonicalJSON()
-			schema.Locality = "none"
-			mutated, _ := schema.CanonicalJSON()
-			return apply(forest, transformschema.Schema{"request-target", "definition", "local", "any", "required"}).Terminal == "abstain/request-count" && digestBytes(encoded) != digestBytes(mutated)
-		}},
-		{"concrete-program-recovery", []any{"local-facts", "no-pair-helper"}, func() bool {
-			program := transformschema.Program{Edits: []transformschema.Edit{{Target: 1, Value: "b"}, {Target: 3, Value: "b"}}}
-			programBytes, err := program.CanonicalJSON()
+			c, err := makeCurriculum(0, 8, 992001)
 			if err != nil {
 				return false
 			}
-			parsed, err := transformschema.ParseProgram(programBytes)
-			output, applyErr := parsed.Apply(base)
-			want := apply(base, transformschema.Schema{"request-target", "definition+references", "local", "any", "required"})
-			outputBytes, _ := output.CanonicalJSON()
-			wantBytes, _ := want.Output.CanonicalJSON()
-			return err == nil && applyErr == nil && bytes.Equal(outputBytes, wantBytes)
+			run, err := runAcquisition(domainsDir, c.Training, "competence-corruption")
+			if err != nil {
+				return false
+			}
+			bundle, err := transcriptFromAcquisition(run, 0, NousRefine, "0123456789abcdef", digestBytes([]byte("competence-corruption-manifest")))
+			if err != nil || len(bundle.Raw) < 2 {
+				return false
+			}
+			corrupt := bytes.Clone(bundle.Raw)
+			corrupt[len(corrupt)-2] ^= 1
+			_, reduceErr := reduceTransformTranscriptWithTraining(corrupt, bundle.Objects, digestBytes([]byte("competence-corruption-manifest")), c.Training)
+			return apply(forest, schema).Terminal == "abstain/request-count" && reduceErr != nil
 		}},
-		{"ties-evidence-barriers", []any{"mdl-tie", "five-stages"}, func() bool {
+		{"concrete-program-recovery", []any{"ordinary-heuristic", "four-promoted", "exact-replay"}, func() bool {
+			c, err := makeCurriculum(0, 8, 992002)
+			if err != nil {
+				return false
+			}
+			run, err := runAcquisitionConfigured(domainsDir, c.Training, "competence-programs", func(store *unit.Store) {
+				store.Get("H-TransformAcquireConcretePrograms").Set("acquisitionOnly", true)
+			})
+			if err != nil || len(run.Programs) != 4 {
+				return false
+			}
+			batch, err := programBatch(run)
+			if err != nil {
+				return false
+			}
+			audit, err := transformoracle.AuditPolicy(c.Training, c.Heldout, nil, batch)
+			return err == nil && audit.ProgramsExact
+		}},
+		{"ties-evidence-barriers", []any{"mdl-order", "five-closures", "five-barriers"}, func() bool {
 			left := transformschema.Schema{"request-target", "definition", "local", "equals-from", "none"}
 			right := transformschema.Schema{"request-target", "references", "global", "any", "none"}
 			partial := transformschema.Partial{}
@@ -208,7 +237,26 @@ func runTransformMicrocases() (map[string][]byte, error) {
 					return false
 				}
 			}
-			return schemaDescription(left) == schemaDescription(right) && partial.Stage == 5
+			c, err := makeCurriculum(0, 8, 992003)
+			if err != nil {
+				return false
+			}
+			run, err := runAcquisition(domainsDir, c.Training, "competence-barriers")
+			if err != nil {
+				return false
+			}
+			closures, barriers := 0, 0
+			for _, record := range run.MeterRecords {
+				if record.Operation == "verify" && record.Phase == "freeze" && len(record.Inputs) == 1 && objectVersion(record.Inputs[0], "transform-closure/v1") {
+					closures++
+				}
+			}
+			for _, name := range run.Store.All() {
+				if strings.HasPrefix(name, "TS.Barrier.") {
+					barriers++
+				}
+			}
+			return schemaDescription(left) == schemaDescription(right) && partial.Stage == 5 && barriers == 5 && closures == 5
 		}},
 		{"application-prefixes", []any{"standalone", "driver", "byte-identical"}, func() bool {
 			forestBytes, _ := base.CanonicalJSON()
@@ -243,7 +291,11 @@ func runTransformMicrocases() (map[string][]byte, error) {
 					break
 				}
 			}
-			return executeErr == nil && snapshotErr == nil && standalonePrefix == driverPrefix && bytes.Equal(mustJSON(standalone[:standalonePrefix]), mustJSON(driver[:driverPrefix]))
+			malformedForest := append(bytes.Clone(forestBytes), byte('x'))
+			malformedSchema := []byte(`["transform-schema/v1","request-target"]`)
+			_, forestErr := transformschema.ParseForest(malformedForest)
+			_, schemaErr := transformschema.ParseSchema(malformedSchema)
+			return executeErr == nil && snapshotErr == nil && standalonePrefix == driverPrefix && bytes.Equal(mustJSON(standalone[:standalonePrefix]), mustJSON(driver[:driverPrefix])) && forestErr != nil && schemaErr != nil
 		}},
 	}
 	files := map[string][]byte{}

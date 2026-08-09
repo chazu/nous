@@ -1,6 +1,7 @@
 package transformexp
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,11 +14,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/chazu/nous/internal/transformfixturecore"
 	"github.com/chazu/nous/internal/transformoracle"
+	"github.com/chazu/nous/internal/unit"
 )
 
 const ReviewManifestPath = "docs/transformation-schema-implementation-reviews.json"
@@ -139,7 +141,7 @@ func ExecuteLocked(repoRoot, domainsDir, unlockToken string) (report protectedRe
 	if err != nil {
 		return protectedReport{}, err
 	}
-	if unlockToken != "transform-schema/v1:"+authority.Head {
+	if unlockToken != "transform-schema/v2:"+authority.Head {
 		return protectedReport{}, fmt.Errorf("locked token does not name exact clean HEAD")
 	}
 	development, err := verifyCommittedPanel(authority, "development")
@@ -180,11 +182,11 @@ func ExecuteLocked(repoRoot, domainsDir, unlockToken string) (report protectedRe
 	if err := startAttempt(authority.Root, receipt, commitment, ""); err != nil {
 		return protectedReport{}, err
 	}
-	curricula, pairs, err := lockedPanel(root)
+	curricula, err := lockedPanel(root)
 	if err != nil {
 		return protectedReport{}, err
 	}
-	fixtureRoot, err := persistPreparedFixtures(authority.Root, "locked", curricula)
+	fixtureRoot, err := persistPreparedFixtures(authority.Root, "locked", curricula, commitment)
 	if err != nil {
 		return protectedReport{}, err
 	}
@@ -198,11 +200,7 @@ func ExecuteLocked(repoRoot, domainsDir, unlockToken string) (report protectedRe
 	for index := range curricula {
 		curricula[index].Seed = 0
 	}
-	evidence, err := buildCommittedLockedEvidence(authority, pairs)
-	for index := range pairs {
-		pairs[index] = [2]uint64{}
-	}
-	pairs = nil
+	evidence, err := buildCommittedLockedEvidence(authority)
 	if err != nil {
 		return protectedReport{}, err
 	}
@@ -446,7 +444,7 @@ func reviewAuthorityWire(manifest ImplementationReviewManifest) ([]byte, error) 
 	for index, path := range paths {
 		pathRows[index] = []any{path, manifest.ProtectedPaths[path]}
 	}
-	return json.Marshal([]any{"transform-reviews/v1", manifest.PlanCommit, manifest.ImplementationCommit, reviews, pathRows})
+	return json.Marshal([]any{"transform-reviews/v2", manifest.PlanCommit, manifest.ImplementationCommit, reviews, pathRows})
 }
 
 func requiredProtectedPaths(root string) ([]string, error) {
@@ -550,7 +548,7 @@ func claimAttempt(authority repositoryAuthority, panel string) (*attemptReceipt,
 }
 
 func receiptBytes(receipt *attemptReceipt) []byte {
-	return mustJSON([]any{"transform-attempt/v1", receipt.Panel, receipt.State, receipt.Head, receipt.ImplementationCommit, PlanCommit, receipt.StartedUTC, receipt.RootCommitment, receipt.FixtureRoot, receipt.ReportDigest, receipt.GraphDigest})
+	return mustJSON([]any{"transform-attempt/v2", receipt.Panel, receipt.State, receipt.Head, receipt.ImplementationCommit, PlanCommit, receipt.StartedUTC, receipt.RootCommitment, receipt.FixtureRoot, receipt.ReportDigest, receipt.GraphDigest})
 }
 
 func startAttempt(root string, receipt *attemptReceipt, commitment, fixture string) error {
@@ -616,8 +614,8 @@ func replaceReceiptBytes(root string, receipt *attemptReceipt) error {
 	return syncDirectory(filepath.Dir(path))
 }
 
-func persistPreparedFixtures(root, panel string, curricula []curriculum) (string, error) {
-	files, fixtureRoot, err := buildPreparedEvidence(panel, curricula)
+func persistPreparedFixtures(root, panel string, curricula []curriculum, statisticAuthority ...string) (string, error) {
+	files, fixtureRoot, err := buildPreparedEvidence(panel, curricula, statisticAuthority...)
 	if err != nil {
 		return "", err
 	}
@@ -650,7 +648,7 @@ func buildCommittedDevelopmentEvidence(authority repositoryAuthority) (panelEvid
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "development", files, fixtureRoot, DevelopmentCount, 841001, nil, authority.ReviewAuthority)
+	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "development", files, fixtureRoot, DevelopmentCount, 841001, authority.ReviewAuthority)
 }
 
 func buildCommittedValidationEvidence(authority repositoryAuthority) (panelEvidence, error) {
@@ -658,15 +656,15 @@ func buildCommittedValidationEvidence(authority repositoryAuthority) (panelEvide
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "validation", files, fixtureRoot, ValidationCount, 842001, nil, authority.ReviewAuthority)
+	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "validation", files, fixtureRoot, ValidationCount, 842001, authority.ReviewAuthority)
 }
 
-func buildCommittedLockedEvidence(authority repositoryAuthority, pairs [][2]uint64) (panelEvidence, error) {
+func buildCommittedLockedEvidence(authority repositoryAuthority) (panelEvidence, error) {
 	files, fixtureRoot, err := loadCommittedPreparedEvidence(authority.Root, "locked", LockedCount)
 	if err != nil {
 		return panelEvidence{}, err
 	}
-	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "locked", files, fixtureRoot, LockedCount, 0, pairs, authority.ReviewAuthority)
+	return buildPanelEvidenceFromPrepared(filepath.Join(authority.Root, "domains"), "locked", files, fixtureRoot, LockedCount, 0, authority.ReviewAuthority)
 }
 
 func loadCommittedPreparedEvidence(root, panel string, count int) (map[string][]byte, []byte, error) {
@@ -694,7 +692,8 @@ func loadCommittedPreparedEvidence(root, panel string, count int) (map[string][]
 			return err
 		}
 		relative = filepath.ToSlash(relative)
-		if relative != "fixture-root.json" && !strings.HasPrefix(relative, "fixtures/") && !strings.HasPrefix(relative, "pre/") || !validEvidencePath(relative) {
+		statisticsAuthority := panel == "locked" && relative == "statistics/authority.json"
+		if relative != "fixture-root.json" && !strings.HasPrefix(relative, "fixtures/") && !strings.HasPrefix(relative, "pre/") && !statisticsAuthority || !validEvidencePath(relative) {
 			return fmt.Errorf("unexpected prepared evidence path %s", relative)
 		}
 		value, err := os.ReadFile(name)
@@ -711,7 +710,11 @@ func loadCommittedPreparedEvidence(root, panel string, count int) (map[string][]
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(files) != count*(7+len(empiricalPolicies))+1 {
+	wantFiles := count*(5+len(empiricalPolicies)) + 1
+	if panel == "locked" {
+		wantFiles++
+	}
+	if len(files) != wantFiles {
 		return nil, nil, fmt.Errorf("prepared evidence file count %d", len(files))
 	}
 	fixtureRoot, ok := files["fixture-root.json"]
@@ -720,11 +723,11 @@ func loadCommittedPreparedEvidence(root, panel string, count int) (map[string][]
 	}
 	fixtureFiles := map[string][]byte{}
 	for name, value := range files {
-		if strings.HasPrefix(name, "fixtures/") {
+		if strings.HasPrefix(name, "fixtures/") || name == "statistics/authority.json" {
 			fixtureFiles[name] = value
 		}
 	}
-	rebuilt, err := canonicalEvidenceRoot("transform-fixture-root/v1", panel, fixtureFiles)
+	rebuilt, err := canonicalEvidenceRoot("transform-fixture-root/v2", panel, fixtureFiles)
 	if err != nil || !bytes.Equal(rebuilt, fixtureRoot) {
 		return nil, nil, errors.New("prepared fixture root does not reconstruct")
 	}
@@ -835,6 +838,7 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	read := func(name string) ([]byte, error) {
 		return readCommittedBlob(authority.Root, authority.Head, relativeTo(authority.Root, filepath.Join(base, filepath.FromSlash(name))))
 	}
+	manifestGate := bytes.Equal(report.Payload.Manifest, []byte(PreregisteredManifestJSON)) && validateManifest() == nil
 	checks := []struct {
 		Path, Digest string
 	}{{"fixture-root.json", report.Payload.FixtureRoot}, {"primary/execution-manifest.json", report.Payload.PrimaryManifest}, {"audit/execution-manifest.json", report.Payload.AuditManifest}, {"competence/root.json", report.Payload.CompetenceRoot}}
@@ -887,15 +891,16 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 		}
 		competenceLeaves[relative] = value
 	}
-	rebuiltCompetence, err := canonicalEvidenceRoot("transform-competence-root/v1", "", competenceLeaves)
+	rebuiltCompetence, err := canonicalEvidenceRoot("transform-competence-root/v2", "", competenceLeaves)
 	committedCompetenceRoot, rootErr := read("competence/root.json")
 	if err != nil || rootErr != nil || !bytes.Equal(rebuiltCompetence, committedCompetenceRoot) {
 		return fmt.Errorf("%s competence root does not reconstruct from case leaves", panel)
 	}
-	replayedCompetence, replayErr := runTransformMicrocases()
+	replayedCompetence, replayErr := runTransformMicrocases(filepath.Join(authority.Root, "domains"))
 	if replayErr != nil || len(replayedCompetence) != len(competenceLeaves) {
 		return fmt.Errorf("%s competence microcases do not replay", panel)
 	}
+	competenceGate := report.Payload.Competence == (CompetenceReport{351, 25272, 7020, 14, true}) && len(replayedCompetence) == len(competenceLeaves)
 	for name, value := range replayedCompetence {
 		if !bytes.Equal(value, competenceLeaves[name]) {
 			return fmt.Errorf("%s competence microcase changed: %s", panel, name)
@@ -911,22 +916,18 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	if len(report.Payload.Rows) != wantRows || len(report.Payload.Limitations) != 0 {
 		return fmt.Errorf("%s report row/limitation cardinality mismatch", panel)
 	}
+	acceptanceGate := true
 	for ordinal := 0; ordinal < wantRows/len(empiricalPolicies); ordinal++ {
 		training, trainingErr := read(fmt.Sprintf("fixtures/%03d/training.json", ordinal))
 		heldout, heldoutErr := read(fmt.Sprintf("fixtures/%03d/heldout.json", ordinal))
 		scorer, scorerErr := read(fmt.Sprintf("fixtures/%03d/scorer.json", ordinal))
-		ledgerBytes, ledgerErr := read(fmt.Sprintf("fixtures/%03d/acceptance.json", ordinal))
-		var ledgerWire []json.RawMessage
-		var ledgerVersion, matrixDigest string
-		var ledgerApplications int
-		var ledgerWork int64
-		var ledgerAccepted bool
-		if trainingErr != nil || heldoutErr != nil || scorerErr != nil || ledgerErr != nil || json.Unmarshal(ledgerBytes, &ledgerWire) != nil || len(ledgerWire) != 5 || json.Unmarshal(ledgerWire[0], &ledgerVersion) != nil || ledgerVersion != "transform-generator-acceptance-ledger/v1" || json.Unmarshal(ledgerWire[1], &ledgerApplications) != nil || json.Unmarshal(ledgerWire[2], &ledgerWork) != nil || json.Unmarshal(ledgerWire[3], &matrixDigest) != nil || json.Unmarshal(ledgerWire[4], &ledgerAccepted) != nil {
-			return fmt.Errorf("%s acceptance ledger %d does not decode", panel, ordinal)
+		if trainingErr != nil || heldoutErr != nil || scorerErr != nil {
+			return fmt.Errorf("%s acceptance fixtures %d do not decode", panel, ordinal)
 		}
 		audit, auditErr := transformoracle.AuditAcceptance(training, heldout, scorer)
-		if auditErr != nil || audit.Applications != ledgerApplications || audit.Work != ledgerWork || audit.MatrixSHA256 != matrixDigest || audit.Accepted != ledgerAccepted || !ledgerAccepted {
-			return fmt.Errorf("%s acceptance ledger %d does not independently reconstruct", panel, ordinal)
+		if auditErr != nil || audit.Applications != 72*16 || audit.Work != 109161 || !digestString(audit.MatrixSHA256) || !audit.Accepted {
+			acceptanceGate = false
+			return fmt.Errorf("%s acceptance matrix %d does not independently reconstruct", panel, ordinal)
 		}
 	}
 	for index, row := range report.Payload.Rows {
@@ -950,17 +951,13 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 			return fmt.Errorf("%s inference does not reconstruct from policy rows", panel)
 		}
 	} else {
-		pairBytes, pairErr := read("statistics/locked-pairs.json")
-		pairs, decodeErr := decodeCommittedStatisticPairs(pairBytes)
-		if pairErr != nil || decodeErr != nil {
-			return fmt.Errorf("locked statistic pairs do not decode")
-		}
-		inference, inferenceErr := computeTransformInferenceWithPairs(paired, panel, 0, pairs, 10000, 10000)
-		for index := range pairs {
-			pairs[index] = [2]uint64{}
-		}
-		if inferenceErr != nil || !bytes.Equal(mustJSON(inference), mustJSON(report.Payload.Inference)) {
-			return fmt.Errorf("locked inference does not reconstruct from committed statistic pairs")
+		statisticAuthority, authorityErr := read("statistics/authority.json")
+		rootCommitment, parseErr := parseLockedStatisticsAuthority(statisticAuthority)
+		receiptCommitment, receiptErr := committedReceiptRoot(authority, panel)
+		pairs, pairsErr := lockedStatisticsPairs(rootCommitment)
+		inference, inferenceErr := computeTransformInferenceWithPairs(paired, "locked", 0, pairs, 10000, 10000)
+		if authorityErr != nil || parseErr != nil || receiptErr != nil || pairsErr != nil || inferenceErr != nil || rootCommitment != receiptCommitment || !bytes.Equal(mustJSON(inference), mustJSON(report.Payload.Inference)) {
+			return fmt.Errorf("locked inference does not reconstruct from committed statistical authority")
 		}
 	}
 	if panel == "development" {
@@ -975,48 +972,68 @@ func verifyReportReconstruction(authority repositoryAuthority, report protectedR
 	if err != nil || classification != report.Classification {
 		return fmt.Errorf("%s classification does not reconstruct", panel)
 	}
-	reconstructedGates := [12]bool{true, true, true, true, true, true, true, true, true, true, true, true}
+	rowShapeGate := len(report.Payload.Rows) == wantRows
+	transcriptGate := digestString(report.Payload.PrimaryManifest) && digestString(report.Payload.AuditManifest)
+	conservationGate := rowShapeGate
+	applicationsGate := rowShapeGate
+	artifactGate := rowShapeGate
+	heldoutGate := rowShapeGate
+	for _, row := range report.Payload.Rows {
+		conservationGate = conservationGate && row.Work > 0 && row.Work <= LifecycleWorkCap
+		applicationsGate = applicationsGate && row.Applications >= 0 && row.Applications <= ApplicationsPerPolicy
+		artifactGate = artifactGate && (row.Terminal != "completed" && row.SchemaSHA256 == "" || row.Terminal == "completed" && digestString(row.SchemaSHA256))
+		bits, bitErr := hex.DecodeString(row.HeldoutCorrectBits)
+		heldoutGate = heldoutGate && bitErr == nil && len(bits) == 1
+	}
+	programCount, storeCount, leafCountErr := committedTrainingLeafCounts(authority, panel)
+	wantPrograms := 2 * 4 * (wantRows / len(empiricalPolicies))
+	wantStores := 2 * 4 * (wantRows / len(empiricalPolicies))
+	programsGate := leafCountErr == nil && programCount == wantPrograms
+	storeGate := leafCountErr == nil && storeCount == wantStores
+	sourceGate := bytes.Equal(reviewBytes, authority.ReviewAuthority) && report.Payload.ImplementationCommit == authority.Reviews.ImplementationCommit
+	graphBytes, graphErr := readCommittedBlob(authority.Root, authority.Head, relativeTo(authority.Root, filepath.Join(base, "evidence-graph.json")))
+	graphGate := graphErr == nil && digestBytes(graphBytes) == report.Payload.EvidenceGraph
+	reconstructedGates := [12]bool{manifestGate, competenceGate, bytes.Equal(primaryWire[2], auditWire[2]), transcriptGate, conservationGate, acceptanceGate, programsGate, applicationsGate, artifactGate, heldoutGate && storeGate, sourceGate, graphGate}
 	if report.Payload.Gates != reconstructedGates {
 		return fmt.Errorf("%s committed gates do not match reconstructed evidence", panel)
 	}
 	return nil
 }
 
-func decodeCommittedStatisticPairs(data []byte) ([][2]uint64, error) {
-	var wire []json.RawMessage
-	var version string
-	var rows [][]json.RawMessage
-	if json.Unmarshal(data, &wire) != nil || len(wire) != 2 || json.Unmarshal(wire[0], &version) != nil || version != "transform-statistics-pairs/v1" || json.Unmarshal(wire[1], &rows) != nil || len(rows) != 20000 {
-		return nil, errors.New("committed statistic pair wire")
+func committedTrainingLeafCounts(authority repositoryAuthority, panel string) (programs, stores int, err error) {
+	prefix := relativeTo(authority.Root, transcriptPath(authority.Root, panel)) + "/"
+	tracked, err := gitOutput(authority.Root, "ls-tree", "-r", "--name-only", authority.Head, "--", strings.TrimSuffix(prefix, "/"))
+	if err != nil {
+		return 0, 0, err
 	}
-	pairs := make([][2]uint64, len(rows))
-	for index, row := range rows {
-		var first, second string
-		if len(row) != 2 || json.Unmarshal(row[0], &first) != nil || json.Unmarshal(row[1], &second) != nil || len(first) != 16 || len(second) != 16 || !isLowerHex(first, 16) || !isLowerHex(second, 16) {
-			return nil, fmt.Errorf("committed statistic pair %d", index)
+	for _, path := range strings.Split(tracked, "\n") {
+		if strings.HasSuffix(path, "/training-programs.json") {
+			programs++
 		}
-		var err error
-		pairs[index][0], err = strconv.ParseUint(first, 16, 64)
-		if err != nil {
-			return nil, err
-		}
-		pairs[index][1], err = strconv.ParseUint(second, 16, 64)
-		if err != nil {
-			return nil, err
+		if strings.HasSuffix(path, "/training-store.json") {
+			stores++
 		}
 	}
-	if !bytes.Equal(data, mustJSON([]any{"transform-statistics-pairs/v1", statisticPairRows(pairs)})) {
-		return nil, errors.New("committed statistic pairs are not canonical")
-	}
-	return pairs, nil
+	return programs, stores, nil
 }
 
-func statisticPairRows(pairs [][2]uint64) []any {
-	rows := make([]any, len(pairs))
-	for index, pair := range pairs {
-		rows[index] = []any{fmt.Sprintf("%016x", pair[0]), fmt.Sprintf("%016x", pair[1])}
+func committedReceiptRoot(authority repositoryAuthority, panel string) (string, error) {
+	data, err := readCommittedBlob(authority.Root, authority.Head, relativeTo(authority.Root, receiptPath(authority.Root, panel)))
+	if err != nil {
+		return "", err
 	}
-	return rows
+	var wire []json.RawMessage
+	var version, gotPanel, root string
+	if !canonicalJSON(data) || json.Unmarshal(data, &wire) != nil || len(wire) != 11 ||
+		json.Unmarshal(wire[0], &version) != nil || version != "transform-attempt/v2" ||
+		json.Unmarshal(wire[1], &gotPanel) != nil || gotPanel != panel ||
+		json.Unmarshal(wire[7], &root) != nil {
+		return "", errors.New("invalid committed receipt authority")
+	}
+	if panel == "locked" && !isLowerHex(root, 64) || panel != "locked" && root != "" {
+		return "", errors.New("invalid committed receipt root commitment")
+	}
+	return root, nil
 }
 
 func verifyCommittedExecution(authority repositoryAuthority, report protectedReport, role string) error {
@@ -1039,7 +1056,7 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 	var wire []json.RawMessage
 	var version, gotRole string
 	var rows [][]json.RawMessage
-	if json.Unmarshal(manifestBytes, &wire) != nil || len(wire) != 3 || json.Unmarshal(wire[0], &version) != nil || version != "transform-execution/v1" || json.Unmarshal(wire[1], &gotRole) != nil || gotRole != role || json.Unmarshal(wire[2], &rows) != nil || len(rows) != len(report.Payload.Rows) {
+	if json.Unmarshal(manifestBytes, &wire) != nil || len(wire) != 3 || json.Unmarshal(wire[0], &version) != nil || version != "transform-execution/v2" || json.Unmarshal(wire[1], &gotRole) != nil || gotRole != role || json.Unmarshal(wire[2], &rows) != nil || len(rows) != len(report.Payload.Rows) {
 		return fmt.Errorf("%s %s execution manifest shape mismatch", panel, role)
 	}
 	reportRows := map[string]PolicyReportRow{}
@@ -1114,11 +1131,11 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 			objectFiles[relative] = value
 		}
 		objectRoot, err := read(role + "/" + key + "/object-root.json")
-		rebuiltRoot, rebuildErr := canonicalEvidenceRoot("transform-objects/v1", "", objectFiles)
+		rebuiltRoot, rebuildErr := canonicalEvidenceRoot("transform-objects/v2", "", objectFiles)
 		if err != nil || rebuildErr != nil || !bytes.Equal(objectRoot, rebuiltRoot) || digestBytes(objectRoot) != objectRootDigest {
 			return fmt.Errorf("%s %s object root mismatch: %s", panel, role, key)
 		}
-		reduced, err := reduceTransformTranscript(rawTranscript, objects, premanifestDigest)
+		reduced, err := reduceTransformTranscriptWithTraining(rawTranscript, objects, premanifestDigest, trainingFixture)
 		if err != nil || reduced.Vector != vector || reduced.Work != work || reduced.Applications != applications || reduced.Terminal != terminal {
 			return fmt.Errorf("%s %s transcript does not reduce to manifest: %s", panel, role, key)
 		}
@@ -1126,19 +1143,29 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 		if artifactErr != nil || artifactDigest != schemaDigest {
 			return fmt.Errorf("%s %s frozen artifact does not reconstruct: %s", panel, role, key)
 		}
-		trainingStore, err := read(role + "/" + key + "/training-store.json")
-		if err != nil || !canonicalJSON(trainingStore) || digestBytes(trainingStore) != trainingStoreDigest {
-			return fmt.Errorf("%s %s training Store mismatch: %s", panel, role, key)
+		storeBacked := policy == NousRefine || policy == PositiveLGG || policy == ConcreteReplay || policy == NoEqualityGuard
+		trainingStore, storeErr := read(role + "/" + key + "/training-store.json")
+		if storeBacked {
+			if storeErr != nil || !canonicalStoreJSON(trainingStore) || digestBytes(trainingStore) != trainingStoreDigest {
+				return fmt.Errorf("%s %s training Store mismatch: %s", panel, role, key)
+			}
+		} else if storeErr == nil || trainingStoreDigest != "" {
+			return fmt.Errorf("%s %s stateless policy has training Store evidence: %s", panel, role, key)
 		}
 		trainingPrograms, programsErr := read(role + "/" + key + "/training-programs.json")
 		requiresPrograms := policy == NousRefine || policy == PositiveLGG || policy == ConcreteReplay || policy == NoEqualityGuard
 		if requiresPrograms {
-			programAudit, auditErr := transformoracle.AuditPolicy(trainingFixture, heldoutFixture, nil, trainingPrograms)
-			if programsErr != nil || auditErr != nil || !programAudit.ProgramsExact {
+			if programsErr != nil || replayCommittedTrainingStore(filepath.Join(authority.Root, "domains"), policy, trainingFixture, token, trainingStore, trainingPrograms) != nil {
 				return fmt.Errorf("%s %s training programs do not independently replay: %s", panel, role, key)
 			}
 		} else if programsErr == nil {
 			return fmt.Errorf("%s %s unexpected training programs: %s", panel, role, key)
+		}
+		if storeBacked {
+			boundaryDigest, boundaryErr := terminalStoreBoundaryDigest(rawTranscript, objects)
+			if boundaryErr != nil || boundaryDigest != trainingStoreDigest {
+				return fmt.Errorf("%s %s terminal Store boundary mismatch: %s", panel, role, key)
+			}
 		}
 		familyBytes, familyErr := read(fmt.Sprintf("fixtures/%03d/family.json", ordinal))
 		if familyErr != nil || !bytes.Equal(familyBytes, mustJSON([]any{"transform-family-assignment/v1", ordinal, reportRow.Family})) {
@@ -1157,6 +1184,64 @@ func verifyCommittedExecution(authority repositoryAuthority, report protectedRep
 	return nil
 }
 
+func replayCommittedTrainingStore(domainsDir string, policy Policy, training []byte, token string, wantStore, wantPrograms []byte) error {
+	if _, err := transformfixturecore.ParseProgramBatch(wantPrograms); err != nil {
+		return err
+	}
+	var configure func(*unit.Store)
+	switch policy {
+	case NousRefine:
+	case NoEqualityGuard:
+		configure = func(store *unit.Store) { store.Get("H-TransformEvaluateFactor").Set("ablateEquality", true) }
+	case PositiveLGG, ConcreteReplay:
+		configure = func(store *unit.Store) { store.Get("H-TransformAcquireConcretePrograms").Set("acquisitionOnly", true) }
+	default:
+		return errors.New("stateless policy cannot replay a Store")
+	}
+	run, err := runAcquisitionConfigured(domainsDir, training, token, configure)
+	if err != nil {
+		return err
+	}
+	storeBytes, err := run.Store.CanonicalJSON()
+	if err != nil || !bytes.Equal(storeBytes, wantStore) {
+		return errors.New("replayed Store differs from committed leaf")
+	}
+	programs, err := programBatch(run)
+	if err != nil || !bytes.Equal(programs, wantPrograms) {
+		return errors.New("replayed program batch differs from committed leaf")
+	}
+	return nil
+}
+
+func terminalStoreBoundaryDigest(raw []byte, objects map[string][]byte) (string, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, EventByteCap+1), EventByteCap+1)
+	var terminal TransformOperation
+	for scanner.Scan() {
+		event, err := parseTransformEvent(scanner.Bytes())
+		if err != nil {
+			return "", err
+		}
+		operation, err := parseTransformOperation(objects[event.Object])
+		if err != nil {
+			return "", err
+		}
+		if operation.Operation == "terminal" {
+			terminal = operation
+		}
+	}
+	if err := scanner.Err(); err != nil || len(terminal.Inputs) != 1 {
+		return "", errors.New("missing terminal Store boundary")
+	}
+	var wire []json.RawMessage
+	var version, phase, digest string
+	data := objects[terminal.Inputs[0]]
+	if json.Unmarshal(data, &wire) != nil || len(wire) != 3 || json.Unmarshal(wire[0], &version) != nil || version != "transform-store-boundary/v1" || json.Unmarshal(wire[1], &phase) != nil || phase != "freeze" || json.Unmarshal(wire[2], &digest) != nil || !digestString(digest) {
+		return "", errors.New("invalid terminal Store boundary")
+	}
+	return digest, nil
+}
+
 func verifyCommittedPremanifest(data []byte, policy Policy, token, trainingDigest, heldoutDigest, wantQueueDigest string) error {
 	var wire []json.RawMessage
 	if json.Unmarshal(data, &wire) != nil || len(wire) != 10 {
@@ -1171,7 +1256,7 @@ func verifyCommittedPremanifest(data []byte, policy Policy, token, trainingDiges
 			return errors.New("policy premanifest field")
 		}
 	}
-	if version != "transform-policy-manifest/v1" || experiment != "transform-schema/v1" || cost != "transform-lifecycle-events/v1" || gotPolicy != policy || gotToken != token || gotTraining != trainingDigest || !digestString(panelCommitment) || heldoutFixture != heldoutDigest || queueDigest != wantQueueDigest || !slices.Equal(caps, []int{12000, 50000, 48, 2000, 20000}) {
+	if version != "transform-policy-manifest/v2" || experiment != "transform-schema/v2" || cost != "transform-lifecycle-events/v2" || gotPolicy != policy || gotToken != token || gotTraining != trainingDigest || !digestString(panelCommitment) || heldoutFixture != heldoutDigest || queueDigest != wantQueueDigest || !slices.Equal(caps, []int{12000, 50000, 48, 2000, 20000}) {
 		return errors.New("policy premanifest value")
 	}
 	return nil
@@ -1184,7 +1269,7 @@ func verifyGraphBlobs(authority repositoryAuthority, panel string, graph []byte)
 	}
 	var version, graphPanel string
 	var leaves [][]json.RawMessage
-	if json.Unmarshal(wire[0], &version) != nil || version != "transform-evidence-graph/v1" || json.Unmarshal(wire[1], &graphPanel) != nil || graphPanel != panel || json.Unmarshal(wire[2], &leaves) != nil || len(leaves) == 0 {
+	if json.Unmarshal(wire[0], &version) != nil || version != "transform-evidence-graph/v2" || json.Unmarshal(wire[1], &graphPanel) != nil || graphPanel != panel || json.Unmarshal(wire[2], &leaves) != nil || len(leaves) == 0 {
 		return fmt.Errorf("invalid evidence graph identity")
 	}
 	previous := ""
@@ -1202,7 +1287,7 @@ func verifyGraphBlobs(authority repositoryAuthority, panel string, graph []byte)
 		files[path] = data
 		previous = path
 	}
-	rebuilt, err := canonicalEvidenceRoot("transform-evidence-graph/v1", panel, files)
+	rebuilt, err := canonicalEvidenceRoot("transform-evidence-graph/v2", panel, files)
 	if err != nil || !bytes.Equal(rebuilt, graph) {
 		return fmt.Errorf("evidence graph does not reconstruct from its leaves")
 	}
@@ -1257,7 +1342,7 @@ func verifyCommittedReceipt(authority repositoryAuthority, panel string, report 
 	if panel == "locked" {
 		rootValid = isLowerHex(root, 64)
 	}
-	if version != "transform-attempt/v1" || gotPanel != panel || state != "published" || implementation != authority.Reviews.ImplementationCommit || plan != PlanCommit || gitCommand(authority.Root, "merge-base", "--is-ancestor", head, authority.Head).Run() != nil || fixture != report.Payload.FixtureRoot || reportDigest != digestBytes(reportBytes) || graph != report.Payload.EvidenceGraph || !rootValid {
+	if version != "transform-attempt/v2" || gotPanel != panel || state != "published" || implementation != authority.Reviews.ImplementationCommit || plan != PlanCommit || gitCommand(authority.Root, "merge-base", "--is-ancestor", head, authority.Head).Run() != nil || fixture != report.Payload.FixtureRoot || reportDigest != digestBytes(reportBytes) || graph != report.Payload.EvidenceGraph || !rootValid {
 		return fmt.Errorf("committed receipt provenance mismatch")
 	}
 	if _, err := time.Parse("2006-01-02T15:04:05.000000000Z", started); err != nil {
@@ -1311,13 +1396,13 @@ func gitCommand(root string, args ...string) *exec.Cmd {
 }
 
 func reportPath(root, panel string) string {
-	return filepath.Join(root, ".nous", "transform-schema-v1-"+panel+"-report.json")
+	return filepath.Join(root, ".nous", "transform-schema-v2-"+panel+"-report.json")
 }
 func transcriptPath(root, panel string) string {
-	return filepath.Join(root, ".nous", "transform-schema-v1-"+panel+"-transcripts")
+	return filepath.Join(root, ".nous", "transform-schema-v2-"+panel+"-transcripts")
 }
 func receiptPath(root, panel string) string {
-	return filepath.Join(root, ".nous", "transform-schema-v1-"+panel+"-receipt.json")
+	return filepath.Join(root, ".nous", "transform-schema-v2-"+panel+"-receipt.json")
 }
 func relativeTo(root, path string) string {
 	value, _ := filepath.Rel(root, path)

@@ -45,6 +45,13 @@ func bTSEqual(vm *VM) error {
 		vm.push(BoolVal(false))
 		return nil
 	}
+	if transformAtomKind(leftBytes) != transformAtomKind(rightBytes) {
+		if err := recordTransform(vm, "compare", "invalid-input", 3, [][]byte{leftBytes, rightBytes}, nil); err != nil {
+			return err
+		}
+		vm.push(BoolVal(false))
+		return nil
+	}
 	equal := bytes.Equal(leftBytes, rightBytes)
 	outcome := "false"
 	if equal {
@@ -55,6 +62,15 @@ func bTSEqual(vm *VM) error {
 	}
 	vm.push(BoolVal(equal))
 	return nil
+}
+
+func transformAtomKind(data []byte) string {
+	var wire []json.RawMessage
+	var kind string
+	if json.Unmarshal(data, &wire) != nil || len(wire) != 3 || json.Unmarshal(wire[1], &kind) != nil {
+		return ""
+	}
+	return kind
 }
 
 func bTSFactorResult(vm *VM) error {
@@ -90,7 +106,23 @@ func transformComparisonAtom(value Value) ([]byte, bool) {
 	case VNil:
 		return boundedTransformComparisonAtom("enum", nil)
 	case VList:
-		return boundedTransformComparisonAtom("scalar", tsSerializable(value))
+		serial := tsSerializable(value)
+		if values, ok := serial.([]any); ok {
+			ids := make([]int, len(values))
+			idSet := true
+			for index, item := range values {
+				id, ok := item.(int)
+				if !ok || id < 0 || id >= transformschema.MaxNodes || len(values) > 6 || index > 0 && id <= ids[index-1] {
+					idSet = false
+					break
+				}
+				ids[index] = id
+			}
+			if idSet {
+				return boundedTransformComparisonAtom("id-set", ids)
+			}
+		}
+		return boundedTransformComparisonAtom("scalar", serial)
 	default:
 		return nil, false
 	}
@@ -152,6 +184,8 @@ type transformMeter struct {
 	reservedStartWork    int64
 	reservedMaximumWork  int64
 	applicationCommitted bool
+	trainingPositive     bool
+	waitingForComparison bool
 }
 
 var ErrTransformBudgetExhausted = errors.New("transformation application budget exhausted")
@@ -314,21 +348,53 @@ func recordTransformAtPhase(vm *VM, phase, operation, outcome string, category i
 			return errors.New("unreserved transformation application")
 		}
 		m.applicationCommitted = true
+		m.waitingForComparison = phase == "training-validate" && m.trainingPositive && outcome == "applied"
 		m.applications++
 	}
 	m.records = append(m.records, TransformMeterRecord{uint8(category), operation, subject, object, outcome, phase, cloneTransformBytes(inputs), cloneTransformBytes(outputs)})
 	m.work += charge
-	if operation == "evidence-link" && m.reserved && m.applicationCommitted {
+	endpoint := operation == "evidence-link" && !m.waitingForComparison
+	if operation == "output-compare" && m.waitingForComparison && transformOutputComparisonIsEndpoint(inputs) {
+		endpoint = true
+	}
+	if endpoint && m.reserved && m.applicationCommitted {
 		m.reserved = false
 		m.reservedPhase = ""
 		m.reservedStartWork = 0
 		m.reservedMaximumWork = 0
 		m.applicationCommitted = false
+		m.trainingPositive = false
+		m.waitingForComparison = false
 	}
 	return nil
 }
 
-func reserveTransformApplication(vm *VM, maximumWork int64) error {
+func transformOutputComparisonIsEndpoint(inputs [][]byte) bool {
+	if len(inputs) != 3 {
+		return false
+	}
+	forest, err := transformschema.ParseForest(inputs[1])
+	if err != nil || len(forest.Nodes) == 0 {
+		return false
+	}
+	var atom []any
+	if err := json.Unmarshal(inputs[2], &atom); err != nil || len(atom) != 3 || atom[0] != "transform-atom/v1" || atom[1] != "id" {
+		return false
+	}
+	idValue, ok := atom[2].(float64)
+	if !ok {
+		return false
+	}
+	maxID := forest.Nodes[0].ID
+	for _, node := range forest.Nodes[1:] {
+		if node.ID > maxID {
+			maxID = node.ID
+		}
+	}
+	return int(idValue) == maxID && idValue == float64(int(idValue))
+}
+
+func reserveTransformApplication(vm *VM, maximumWork int64, trainingPositive bool) error {
 	if vm.CurrentTask == nil || vm.Store == nil {
 		return nil
 	}
@@ -370,6 +436,8 @@ func reserveTransformApplication(vm *VM, maximumWork int64) error {
 	m.reservedStartWork = m.work
 	m.reservedMaximumWork = maximumWork
 	m.applicationCommitted = false
+	m.trainingPositive = trainingPositive
+	m.waitingForComparison = false
 	return nil
 }
 
@@ -440,8 +508,8 @@ func bTSCloseStage(vm *VM) error {
 		evidence := vm.Store.Get(candidate.GetString("evidenceUnit"))
 		matched := evidence != nil && evidence.GetBool("matched")
 		status := "counterexample"
-		if candidate.GetString("disposition") == "ablated-ineligible" {
-			status = "ablated-ineligible"
+		if oneOfTransformString(candidate.GetString("disposition"), "ablated-ineligible", "redundant-noncanonical") {
+			status = candidate.GetString("disposition")
 			matched = false
 		} else if candidate.GetString("status") == "survivor" && matched {
 			status = "survivor"
@@ -473,6 +541,10 @@ func bTSCloseStage(vm *VM) error {
 	experiment.Set(closureSlot+".done", true)
 	vm.push(BoolVal(valid))
 	return nil
+}
+
+func oneOfTransformString(value string, options ...string) bool {
+	return slices.Contains(options, value)
 }
 
 func bTSFreezeSchema(vm *VM) error {
@@ -534,8 +606,13 @@ func bTSForestValid(vm *VM) error {
 }
 
 func bTSSchemaApply(vm *VM) error {
-	schemaValue, forestValue := vm.pop(), vm.pop()
-	if schemaValue.Kind() != VString || forestValue.Kind() != VString {
+	kindValue, schemaValue, forestValue := vm.pop(), vm.pop(), vm.pop()
+	if kindValue.Kind() != VString || schemaValue.Kind() != VString || forestValue.Kind() != VString {
+		vm.push(Nil())
+		return nil
+	}
+	kind := kindValue.AsString()
+	if kind != "positive" && kind != "abstain" {
 		vm.push(Nil())
 		return nil
 	}
@@ -549,7 +626,11 @@ func bTSSchemaApply(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	if err := reserveTransformApplication(vm, 80); err != nil {
+	maximumWork := int64(68)
+	if kind == "positive" {
+		maximumWork = 80
+	}
+	if err := reserveTransformApplication(vm, maximumWork, kind == "positive"); err != nil {
 		if errors.Is(err, ErrTransformBudgetExhausted) {
 			vm.push(ListVal([]Value{StringVal("budget-exhausted"), StringVal("")}))
 			return nil
@@ -578,7 +659,7 @@ func ExecuteTransformSchemaApplication(vm *VM, forestBytes, schemaBytes []byte) 
 	if err != nil {
 		return "invalid-input", nil, err
 	}
-	if err := reserveTransformApplication(vm, 80); err != nil {
+	if err := reserveTransformApplication(vm, 68, false); err != nil {
 		if errors.Is(err, ErrTransformBudgetExhausted) {
 			return "budget-exhausted", nil, nil
 		}
@@ -798,7 +879,7 @@ func bTSOutputCompare(vm *VM) error {
 	left, leftErr := transformschema.ParseForest(leftBytes)
 	right, rightErr := transformschema.ParseForest(rightBytes)
 	if leftErr != nil || rightErr != nil || len(left.Nodes) != len(right.Nodes) {
-		if err := recordTransform(vm, "output-compare", "invalid-input", 9, [][]byte{leftBytes, rightBytes}, nil); err != nil {
+		if err := recordTransform(vm, "output-compare", "invalid-input", 9, [][]byte{leftBytes, rightBytes, transformAtom("id", -1)}, nil); err != nil {
 			return err
 		}
 		vm.push(BoolVal(false))
@@ -808,18 +889,15 @@ func bTSOutputCompare(vm *VM) error {
 	for i := range left.Nodes {
 		leftNode, _ := json.Marshal(left.Nodes[i])
 		rightNode, _ := json.Marshal(right.Nodes[i])
-		if !bytes.Equal(leftNode, rightNode) {
-			equal = false
-		}
-	}
-	for range left.Nodes {
+		nodeEqual := bytes.Equal(leftNode, rightNode)
 		outcome := "different"
-		if equal {
+		if nodeEqual {
 			outcome = "equal"
 		}
-		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", equal)}); err != nil {
+		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes, transformAtom("id", left.Nodes[i].ID)}, [][]byte{transformAtom("boolean", nodeEqual)}); err != nil {
 			return err
 		}
+		equal = equal && nodeEqual
 	}
 	vm.push(BoolVal(equal))
 	return nil
@@ -829,7 +907,7 @@ func CompareTransformOutputs(vm *VM, leftBytes, rightBytes []byte) (bool, error)
 	left, leftErr := transformschema.ParseForest(leftBytes)
 	right, rightErr := transformschema.ParseForest(rightBytes)
 	if leftErr != nil || rightErr != nil || len(left.Nodes) != len(right.Nodes) {
-		if err := recordTransform(vm, "output-compare", "invalid-input", 9, [][]byte{leftBytes, rightBytes}, nil); err != nil {
+		if err := recordTransform(vm, "output-compare", "invalid-input", 9, [][]byte{leftBytes, rightBytes, transformAtom("id", -1)}, nil); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -838,18 +916,15 @@ func CompareTransformOutputs(vm *VM, leftBytes, rightBytes []byte) (bool, error)
 	for i := range left.Nodes {
 		leftNode, _ := json.Marshal(left.Nodes[i])
 		rightNode, _ := json.Marshal(right.Nodes[i])
-		if !bytes.Equal(leftNode, rightNode) {
-			equal = false
-		}
-	}
-	for range left.Nodes {
+		nodeEqual := bytes.Equal(leftNode, rightNode)
 		outcome := "different"
-		if equal {
+		if nodeEqual {
 			outcome = "equal"
 		}
-		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes}, [][]byte{transformAtom("boolean", equal)}); err != nil {
+		if err := recordTransform(vm, "output-compare", outcome, 9, [][]byte{leftBytes, rightBytes, transformAtom("id", left.Nodes[i].ID)}, [][]byte{transformAtom("boolean", nodeEqual)}); err != nil {
 			return false, err
 		}
+		equal = equal && nodeEqual
 	}
 	return equal, nil
 }

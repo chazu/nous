@@ -3,7 +3,7 @@ package transformexp
 import "testing"
 
 func TestExhaustiveTransformationCompetence(t *testing.T) {
-	report, err := runTransformCompetence()
+	report, err := runTransformCompetence("../../domains")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,7 +36,7 @@ func (r protectedReport) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal([]any{"transform-schema-trials/v1", r.Classification, r.PayloadDigest, json.RawMessage(payload)})
+	return json.Marshal([]any{"transform-schema-trials/v2", r.Classification, r.PayloadDigest, json.RawMessage(payload)})
 }
 
 func (p protectedPayload) wire() ([]byte, error) {
@@ -94,7 +94,7 @@ func protectedGates(implementationCommit string, evidence panelEvidence) [12]boo
 	}
 	heldoutSealed := evidence.Report.HeldoutSealed && scorers == len(evidence.Report.Rows)/len(empiricalPolicies)
 	sourceAuthority := len(implementationCommit) == 40 && len(evidence.Files["review-authority.json"]) != 0
-	rebuiltGraph, graphErr := canonicalEvidenceRoot("transform-evidence-graph/v1", evidence.Report.Panel, evidence.Files)
+	rebuiltGraph, graphErr := canonicalEvidenceRoot("transform-evidence-graph/v2", evidence.Report.Panel, evidence.Files)
 	evidenceGraph := graphErr == nil && bytes.Equal(rebuiltGraph, evidence.EvidenceGraph) && digestBytes(rebuiltGraph) == evidence.Report.EvidenceGraphDigest
 	return [12]bool{manifest, evidence.Report.Competence.Passed, evidence.Report.DualExecutionEqual, transcripts, conservation, evidence.Report.OracleParity, programs, applications, artifacts, heldoutSealed, sourceAuthority, evidenceGraph}
 }
@@ -146,7 +146,7 @@ func decodeProtectedReport(data []byte) (protectedReport, error) {
 		return protectedReport{}, fmt.Errorf("invalid protected report envelope")
 	}
 	var version, classification, payloadDigest string
-	if json.Unmarshal(outer[0], &version) != nil || version != "transform-schema-trials/v1" || json.Unmarshal(outer[1], &classification) != nil || json.Unmarshal(outer[2], &payloadDigest) != nil {
+	if json.Unmarshal(outer[0], &version) != nil || version != "transform-schema-trials/v2" || json.Unmarshal(outer[1], &classification) != nil || json.Unmarshal(outer[2], &payloadDigest) != nil {
 		return protectedReport{}, fmt.Errorf("invalid protected report identity")
 	}
 	var values []json.RawMessage

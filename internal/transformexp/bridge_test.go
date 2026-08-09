@@ -30,7 +30,7 @@ func TestOrdinaryHeuristicsAcquireAndAllocate(t *testing.T) {
 	if got := []byte(run.Store.Get(run.Artifact).GetString("schema")); !bytes.Equal(got, c.Latent) {
 		t.Fatalf("artifact schema=%s latent=%s", got, c.Latent)
 	}
-	if len(run.MeterRecords) != 3459 {
+	if len(run.MeterRecords) != 3813 {
 		t.Fatalf("meter records=%d", len(run.MeterRecords))
 	}
 	closures, frozen := 0, 0
@@ -88,7 +88,10 @@ func TestReducerRejectsForgedStageClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := newTransformLifecycleState(string(NousRefine))
+	state, err := newTransformLifecycleState(string(NousRefine), c.Training)
+	if err != nil {
+		t.Fatal(err)
+	}
 	scanner := bufio.NewScanner(bytes.NewReader(bundle.Raw))
 	for scanner.Scan() {
 		event, _ := parseTransformEvent(scanner.Bytes())

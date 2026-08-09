@@ -20,8 +20,8 @@ units: [
 			each
 				it "example" !
 				"example" @ "TransformTrainingCase" !=
-				"example" @ "experiment" get-slot "experiment" @ = and
-				"example" @ "kind" get-slot "positive" = and
+				"example" @ "experiment" get-slot "experiment" @ ts-eq and
+				"example" @ "kind" get-slot "positive" ts-eq and
 				if
 					"positiveCount" @ 1 + "positiveCount" !
 					"example" @ "before" get-slot "before" !
@@ -31,23 +31,23 @@ units: [
 						it "nodeID" !
 						"before" @ "nodeID" @ ts-node-facts "beforeFacts" !
 						"after" @ "nodeID" @ ts-node-facts "afterFacts" !
-						"beforeFacts" @ nil != "afterFacts" @ nil != and
+						"beforeFacts" @ nil ts-eq not "afterFacts" @ nil ts-eq not and
 						if
 							"beforeFacts" @ 0 list-get "kind" !
-							"afterFacts" @ 0 list-get "kind" @ =
-							"kind" @ "definition" = "kind" @ "reference" = or and
-							"before" @ "nodeID" @ ts-parent-facts "after" @ "nodeID" @ ts-parent-facts = and
-							"before" @ "nodeID" @ ts-target "after" @ "nodeID" @ ts-target = and
-							"beforeFacts" @ 1 list-get "afterFacts" @ 1 list-get != and
+							"afterFacts" @ 0 list-get "kind" @ ts-eq
+							"kind" @ "definition" ts-eq "kind" @ "reference" ts-eq or and
+							"before" @ "nodeID" @ ts-parent-facts "after" @ "nodeID" @ ts-parent-facts ts-eq and
+							"before" @ "nodeID" @ ts-target "after" @ "nodeID" @ ts-target ts-eq and
+							"beforeFacts" @ 1 list-get "afterFacts" @ 1 list-get ts-eq not and
 							if
 								"nodeID" @ "afterFacts" @ 1 list-get ts-make-edit "edit" !
-								"edit" @ nil !=
+								"edit" @ nil ts-eq not
 								if "edits" @ "edit" @ list-append "edits" ! then
 							then
 						then
 					end
 					"edits" @ ts-make-program "program" !
-					"program" @ nil !=
+					"program" @ nil ts-eq not
 					if
 						"before" @ "program" @ ts-program-apply "actual" !
 					"actual" @ "after" @ ts-output-compare
@@ -64,7 +64,7 @@ units: [
 				then
 			end
 			"programs" @ "experiment" @ "programUnits" set-slot
-			"programs" @ list-length 4 = "positiveCount" @ 4 = and
+			"programs" @ list-length 4 ts-eq "positiveCount" @ 4 ts-eq and
 			if
 				"H-TransformAcquireConcretePrograms" "acquisitionOnly" get-slot true =
 				if true "experiment" @ "tsAcquisitionClosed" set-slot
@@ -254,6 +254,7 @@ units: [
 						"selectedTarget" @ "definition" ts-eq
 						if
 							"value" @ "local" ts-eq "exact" !
+							"exact" @ not if "redundant-noncanonical" "candidate" @ "disposition" set-slot then
 						else
 							0 "equalsMatches" ! 0 "anyMatches" !
 							"experiment" @ "programUnits" get-slot each
@@ -281,8 +282,8 @@ units: [
 										then
 									then then
 								end
-								"equalsPredicted" @ "editedReferences" @ list-equal? if "equalsMatches" @ 1 + "equalsMatches" ! then
-								"anyPredicted" @ "editedReferences" @ list-equal? if "anyMatches" @ 1 + "anyMatches" ! then
+								"equalsPredicted" @ "editedReferences" @ ts-eq if "equalsMatches" @ 1 + "equalsMatches" ! then
+								"anyPredicted" @ "editedReferences" @ ts-eq if "anyMatches" @ 1 + "anyMatches" ! then
 							end
 							"equalsMatches" @ 4 ts-eq "anyMatches" @ 4 ts-eq or "exact" !
 						then
@@ -300,6 +301,7 @@ units: [
 							"selectedTarget" @ "definition" ts-eq
 							if
 								"value" @ "any" ts-eq "exact" !
+								"exact" @ not if "redundant-noncanonical" "candidate" @ "disposition" set-slot then
 							else
 								0 "matches" !
 								"experiment" @ "programUnits" get-slot each
@@ -325,7 +327,7 @@ units: [
 											if "predicted" @ "nodeID" @ list-append "predicted" ! then
 										then then
 									end
-									"predicted" @ "editedReferences" @ list-equal? if "matches" @ 1 + "matches" ! then
+									"predicted" @ "editedReferences" @ ts-eq if "matches" @ 1 + "matches" ! then
 								end
 								"matches" @ 4 ts-eq "exact" !
 							then
@@ -441,15 +443,18 @@ units: [
 			if
 				"anchor" @ "target" @ "scope" @ "guard" @ "locality" @ ts-make-schema ts-freeze-schema "schema" !
 				true "valid" !
+				false "budgetExhausted" !
 				"TransformTrainingCase" examples each
 					it "example" !
 					"example" @ "TransformTrainingCase" != "example" @ "experiment" get-slot "experiment" @ = and
 					if
-						"example" @ "before" get-slot "schema" @ ts-schema-apply "result" !
+						"example" @ "before" get-slot "schema" @ "example" @ "kind" get-slot ts-schema-apply "result" !
 						"result" @ nil =
 						if false "valid" !
-						else
+					else
 							"result" @ 0 list-get "terminal" ! "result" @ 1 list-get "output" !
+							"terminal" @ "budget-exhausted" =
+							if true "budgetExhausted" ! false "valid" ! then
 							"example" @ "kind" get-slot "positive" =
 							if "terminal" @ "applied" = "output" @ "example" @ "after" get-slot ts-output-compare and not if false "valid" ! then
 							else
@@ -459,6 +464,10 @@ units: [
 						then
 					then
 				end
+				"budgetExhausted" @
+				if
+					"budget-exhausted" "experiment" @ "terminal" set-slot
+				else
 				"valid" @
 				if
 					0 list-of "barriers" !
@@ -481,6 +490,7 @@ units: [
 					"completed" "experiment" @ "terminal" set-slot
 				else
 					"no-discovery" "experiment" @ "terminal" set-slot
+				then
 				then
 				true "experiment" @ "tsClosed" set-slot
 			then

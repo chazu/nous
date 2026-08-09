@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/chazu/nous/internal/transformoracle"
@@ -95,8 +96,33 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	if len(curricula) == 0 {
 		return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("empty panel")
 	}
-	report := SafePanelReport{Version: "transform-schema-trials/safe-v1", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true, Conservation: true, OracleParity: true, ProgramsExact: true, ApplicationsExact: true, ArtifactFrozen: true, HeldoutSealed: true, GeneratorAcceptance: AcceptanceDiagnostics{Exact: true}, OracleAcceptance: AcceptanceDiagnostics{Exact: true}}
+	curricula = cloneCurriculaForExecution(curricula)
+	report := SafePanelReport{Version: "transform-schema-trials/safe-v2", Panel: panel, PlanCommit: PlanCommit, Manifest: json.RawMessage(PreregisteredManifestJSON), DualExecutionEqual: true, TranscriptHashesEqual: true, Conservation: true, OracleParity: true, ProgramsExact: true, ApplicationsExact: true, ArtifactFrozen: true, HeldoutSealed: true, GeneratorAcceptance: AcceptanceDiagnostics{Exact: true}, OracleAcceptance: AcceptanceDiagnostics{Exact: true}}
 	artifacts := panelArtifacts{Primary: map[string]TransformTranscriptBundle{}, Audit: map[string]TransformTranscriptBundle{}, PrimaryStores: map[string][]byte{}, AuditStores: map[string][]byte{}, PrimaryPrograms: map[string][]byte{}, AuditPrograms: map[string][]byte{}}
+	sealedScorers := make([][]byte, len(curricula))
+	for index := range curricula {
+		scorer, err := scorerFixtureBytes(curricula[index])
+		if err != nil {
+			return SafePanelReport{}, panelArtifacts{}, err
+		}
+		sealedScorers[index] = scorer
+		eraseBytes(curricula[index].Scorer)
+		eraseBytes(curricula[index].Latent)
+		for expectedIndex := range curricula[index].Expected {
+			eraseBytes(curricula[index].Expected[expectedIndex].Output)
+		}
+		curricula[index].Scorer = nil
+		curricula[index].Latent = nil
+		curricula[index].Expected = nil
+		curricula[index].SeedCommitment = ""
+		curricula[index].AcceptedAttempt = 0
+	}
+	defer func() {
+		for index := range sealedScorers {
+			eraseBytes(sealedScorers[index])
+			sealedScorers[index] = nil
+		}
+	}()
 	var generatorRows, oracleRows []any
 	for index, c := range curricula {
 		if c.Ordinal != index {
@@ -125,7 +151,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
-			primaryScorer, err := decodeScorerView(c)
+			primaryScorer, err := decodeSealedScorer(sealedScorers[index])
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
@@ -133,10 +159,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
-			primaryScorerBytes, err := scorerFixtureBytes(c)
-			if err != nil {
-				return SafePanelReport{}, panelArtifacts{}, err
-			}
+			primaryScorerBytes := bytes.Clone(sealedScorers[index])
 			outcome, err = auditPolicyOutcome(primaryView, primaryHeldout, primaryScorerBytes, outcome)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
@@ -159,7 +182,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
-			auditScorer, err := decodeScorerView(c)
+			auditScorer, err := decodeSealedScorer(sealedScorers[index])
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
@@ -167,10 +190,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
 			}
-			auditScorerBytes, err := scorerFixtureBytes(c)
-			if err != nil {
-				return SafePanelReport{}, panelArtifacts{}, err
-			}
+			auditScorerBytes := bytes.Clone(sealedScorers[index])
 			audit, err = auditPolicyOutcome(auditView, auditHeldout, auditScorerBytes, audit)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, err
@@ -184,11 +204,11 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 				report.TranscriptHashesEqual = false
 			}
 			manifestDigest := policyManifestDigest(primaryView, policy)
-			primaryReduced, err := reduceTransformTranscript(outcome.Transcript.Raw, outcome.Transcript.Objects, manifestDigest)
+			primaryReduced, err := reduceTransformTranscriptWithTraining(outcome.Transcript.Raw, outcome.Transcript.Objects, manifestDigest, c.Training)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("primary transcript reduction curriculum %d policy %s: %w", c.Ordinal, policy, err)
 			}
-			auditReduced, err := reduceTransformTranscript(audit.Transcript.Raw, audit.Transcript.Objects, manifestDigest)
+			auditReduced, err := reduceTransformTranscriptWithTraining(audit.Transcript.Raw, audit.Transcript.Objects, manifestDigest, c.Training)
 			if err != nil {
 				return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("audit transcript reduction curriculum %d policy %s: %w", c.Ordinal, policy, err)
 			}
@@ -225,11 +245,9 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 			bits := outcome.HeldoutCorrectBits
 			report.Rows = append(report.Rows, PolicyReportRow{c.Ordinal, c.Family, policy, outcome.Terminal, work, outcome.Applications, schemaDigest, outcome.HeldoutCorrect, hex.EncodeToString([]byte{bits}), outcome.FalseApplications, nonmatchingWork, transcriptDigest})
 		}
-		scorerBytes, err := scorerFixtureBytes(c)
-		if err != nil {
-			return SafePanelReport{}, panelArtifacts{}, err
-		}
+		scorerBytes := bytes.Clone(sealedScorers[index])
 		oracleLedger, err := transformoracle.AuditAcceptance(c.Training, c.Heldout, scorerBytes)
+		eraseBytes(scorerBytes)
 		if err != nil {
 			return SafePanelReport{}, panelArtifacts{}, fmt.Errorf("curriculum %d acceptance audit: %w", c.Ordinal, err)
 		}
@@ -250,7 +268,7 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	if err != nil {
 		return SafePanelReport{}, panelArtifacts{}, err
 	}
-	report.Competence, err = runTransformCompetence()
+	report.Competence, err = runTransformCompetence(domainsDir)
 	if err != nil {
 		return SafePanelReport{}, panelArtifacts{}, err
 	}
@@ -258,6 +276,32 @@ func runPanelDetailedWithPairs(domainsDir, panel string, curricula []curriculum,
 	slices.Sort(report.Limitations)
 	report.MechanicallyValid = report.DualExecutionEqual && report.TranscriptHashesEqual && report.Conservation && report.OracleParity && report.ProgramsExact && report.ApplicationsExact && report.ArtifactFrozen && report.HeldoutSealed && report.GeneratorAcceptance.Exact && report.OracleAcceptance.Exact
 	return report, artifacts, nil
+}
+
+func cloneCurriculaForExecution(source []curriculum) []curriculum {
+	out := make([]curriculum, len(source))
+	for i := range source {
+		out[i] = source[i]
+		out[i].Training = bytes.Clone(source[i].Training)
+		out[i].Heldout = bytes.Clone(source[i].Heldout)
+		out[i].Latent = bytes.Clone(source[i].Latent)
+		out[i].Queue = bytes.Clone(source[i].Queue)
+		out[i].Scorer = bytes.Clone(source[i].Scorer)
+		out[i].Expected = make([]expectedCase, len(source[i].Expected))
+		for j := range source[i].Expected {
+			out[i].Expected[j] = source[i].Expected[j]
+			out[i].Expected[j].Output = bytes.Clone(source[i].Expected[j].Output)
+		}
+		out[i].PolicyTokens = maps.Clone(source[i].PolicyTokens)
+		out[i].PolicyRandomness = maps.Clone(source[i].PolicyRandomness)
+	}
+	return out
+}
+
+func decodeSealedScorer(sealed []byte) (scorerCurriculum, error) {
+	clone := bytes.Clone(sealed)
+	defer eraseBytes(clone)
+	return decodeScorerBytes(clone)
 }
 
 func eraseScorerView(view *scorerCurriculum) {

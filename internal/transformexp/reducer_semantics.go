@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/chazu/nous/internal/transformbaseline"
 	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
@@ -24,6 +23,12 @@ func validateTransformSemantics(operation TransformOperation, objects map[string
 		right, _, err := decodeTransformAtom(inputs[1])
 		if err != nil {
 			return err
+		}
+		if left != right {
+			if operation.Outcome != "invalid-input" || len(outputs) != 0 {
+				return errors.New("different-kind atoms were compared: " + left + " vs " + right)
+			}
+			return nil
 		}
 		equal := bytes.Equal(inputs[0], inputs[1])
 		return validateBooleanResult(operation, outputs, equal, map[bool]string{true: "true", false: "false"}, left, right)
@@ -93,14 +98,31 @@ func validateTransformSemantics(operation TransformOperation, objects map[string
 	case "output-compare":
 		left, leftErr := transformschema.ParseForest(inputs[0])
 		right, rightErr := transformschema.ParseForest(inputs[1])
-		if leftErr != nil || rightErr != nil {
+		kind, value, atomErr := decodeTransformAtom(inputs[2])
+		id, idOK := jsonInteger(value)
+		if leftErr != nil || rightErr != nil || atomErr != nil || kind != "id" || !idOK || len(left.Nodes) != len(right.Nodes) || id < 0 || id >= len(left.Nodes) {
 			if operation.Outcome != "invalid-input" {
-				return errors.New("invalid forest comparison was accepted")
+				return errors.New("invalid node comparison was accepted")
 			}
 			return nil
 		}
-		leftBytes, _ := left.CanonicalJSON()
-		rightBytes, _ := right.CanonicalJSON()
+		var leftNode, rightNode *transformschema.Node
+		for index := range left.Nodes {
+			if left.Nodes[index].ID == id {
+				leftNode = &left.Nodes[index]
+			}
+			if right.Nodes[index].ID == id {
+				rightNode = &right.Nodes[index]
+			}
+		}
+		if leftNode == nil || rightNode == nil {
+			if operation.Outcome != "invalid-input" {
+				return errors.New("missing node comparison was accepted")
+			}
+			return nil
+		}
+		leftBytes, _ := json.Marshal(leftNode)
+		rightBytes, _ := json.Marshal(rightNode)
 		return validateBooleanResult(operation, outputs, bytes.Equal(leftBytes, rightBytes), map[bool]string{true: "equal", false: "different"}, nil, nil)
 	case "schema-application":
 		return validateSchemaApplication(operation, inputs, outputs)
@@ -199,16 +221,16 @@ func validateFactSemantics(operation TransformOperation, inputs, outputs [][]byt
 func validateSchemaPredicate(operation TransformOperation, inputs, outputs [][]byte) error {
 	forest, err := transformschema.ParseForest(inputs[0])
 	if err != nil {
-		return err
+		return validateInvalidPredicate(operation, outputs)
 	}
 	schema, err := transformschema.ParseSchema(inputs[1])
 	if err != nil {
-		return err
+		return validateInvalidPredicate(operation, outputs)
 	}
 	selectorKind, selectorValue, err := decodeTransformAtom(inputs[2])
 	selector, ok := selectorValue.(string)
 	if err != nil || selectorKind != "selector" || !ok {
-		return errors.New("invalid schema predicate selector")
+		return validateInvalidPredicate(operation, outputs)
 	}
 	subjectKind, subjectValue, subjectErr := decodeTransformAtom(inputs[3])
 	var requests, definitions []transformschema.Node
@@ -271,9 +293,19 @@ func validateSchemaPredicate(operation TransformOperation, inputs, outputs [][]b
 		node := byID[edit.Target]
 		result = editErr == nil && (node.Kind == "definition" || node.Kind == "reference") && node.Value != edit.Value
 	default:
-		return fmt.Errorf("unknown schema predicate %q", selector)
+		return validateInvalidPredicate(operation, outputs)
+	}
+	if subjectErr != nil && selector != "edit-no-op" {
+		return validateInvalidPredicate(operation, outputs)
 	}
 	return validateBooleanResult(operation, outputs, result, map[bool]string{true: "true", false: "false"}, nil, nil)
+}
+
+func validateInvalidPredicate(operation TransformOperation, outputs [][]byte) error {
+	if operation.Outcome != "invalid-input" || len(outputs) != 0 {
+		return errors.New("invalid schema predicate was accepted")
+	}
+	return nil
 }
 
 func validateSchemaApplication(operation TransformOperation, inputs, outputs [][]byte) error {
@@ -347,7 +379,64 @@ func decodeTransformAtom(data []byte) (string, any, error) {
 	if !ok {
 		return "", nil, errors.New("atom kind")
 	}
+	if err := validateTransformAtom(kind, row[2]); err != nil {
+		return "", nil, err
+	}
 	return kind, row[2], nil
+}
+
+func validateTransformAtom(kind string, value any) error {
+	switch kind {
+	case "id", "count":
+		n, ok := jsonInteger(value)
+		if !ok || kind == "id" && (n < -1 || n >= transformschema.MaxNodes) || kind == "count" && (n < 0 || n > transformschema.MaxNodes) {
+			return errors.New("bounded integer atom")
+		}
+	case "id-set":
+		rows, ok := value.([]any)
+		last := -1
+		if !ok || len(rows) > 6 {
+			return errors.New("id-set atom")
+		}
+		for _, row := range rows {
+			id, ok := jsonInteger(row)
+			if !ok || id < 0 || id >= transformschema.MaxNodes || id <= last {
+				return errors.New("noncanonical id-set atom")
+			}
+			last = id
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return errors.New("boolean atom")
+		}
+	case "digest":
+		text, ok := value.(string)
+		if !ok || !digestString(text) {
+			return errors.New("digest atom")
+		}
+	case "selector":
+		text, ok := value.(string)
+		if !ok || !oneOfString(text, "request-count", "anchor-candidate", "anchor-locality", "reference-target", "reference-scope", "reference-old-guard", "expansion-bound", "edit-no-op") {
+			return errors.New("selector atom")
+		}
+	case "kind", "key":
+		if _, ok := value.(string); !ok {
+			return errors.New("string atom")
+		}
+	case "enum":
+		if _, ok := value.(string); !ok && value != nil {
+			return errors.New("enum atom")
+		}
+	case "scalar":
+		if _, stringOK := value.(string); !stringOK {
+			if _, listOK := value.([]any); !listOK {
+				return errors.New("scalar atom")
+			}
+		}
+	default:
+		return errors.New("unknown atom kind")
+	}
+	return nil
 }
 
 func decodeTransformEdit(data []byte) (transformschema.Edit, error) {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/chazu/nous/internal/transformbaseline"
+	"github.com/chazu/nous/internal/transformfixturecore"
 	transformschema "github.com/chazu/nous/internal/vocab/transformschema"
 )
 
@@ -20,29 +22,348 @@ type transformLifecycleState struct {
 	frozenArtifact  string
 	history         []TransformOperation
 	pendingAttach   int
+	pendingEvidence *TransformOperation
 	activeCandidate string
+	factorStart     int
 	factorResults   map[string]bool
+	acquireBefore   string
+	acquireEdits    []transformschema.Edit
+	programs        []reconstructedProgram
+	trainingCases   map[string]transformfixturecore.TrainingCase
+	afterEvidence   []TransformOperation
+	pendingCompare  []TransformOperation
 }
 
-func newTransformLifecycleState(policy string) *transformLifecycleState {
-	return &transformLifecycleState{policy: policy, partials: map[string]transformschema.Partial{}, allocPhase: map[string]string{}, parents: map[string]string{}, pendingAttach: -1, factorResults: map[string]bool{}}
+type reconstructedProgram struct {
+	before transformschema.Forest
+	after  transformschema.Forest
+	edits  []transformschema.Edit
+}
+
+func newTransformLifecycleState(policy string, training []byte) (*transformLifecycleState, error) {
+	state := &transformLifecycleState{policy: policy, partials: map[string]transformschema.Partial{}, allocPhase: map[string]string{}, parents: map[string]string{}, pendingAttach: -1, factorStart: -1, factorResults: map[string]bool{}, trainingCases: map[string]transformfixturecore.TrainingCase{}}
+	if len(training) == 0 {
+		return state, nil
+	}
+	fixture, err := transformfixturecore.ParseTraining(training)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range fixture.Cases {
+		state.trainingCases[digestBytes(item.Before)] = item
+	}
+	return state, nil
+}
+
+func decodeLifecycleEdit(data []byte) (transformschema.Edit, error) {
+	programBytes, err := json.Marshal([]any{"concrete-program/v1", []json.RawMessage{data}})
+	if err != nil {
+		return transformschema.Edit{}, err
+	}
+	program, err := transformschema.ParseProgram(programBytes)
+	if err != nil || len(program.Edits) != 1 {
+		return transformschema.Edit{}, errors.New("invalid acquired edit")
+	}
+	return program.Edits[0], nil
+}
+
+func (s *transformLifecycleState) reconstructFactor(partial transformschema.Partial, phase string, trace []TransformOperation, objects map[string][]byte) (bool, error) {
+	wantStage := map[string]int{"target": 1, "anchor": 2, "scope": 3, "old-guard": 4, "locality": 5}[phase]
+	if wantStage == 0 || partial.Stage != wantStage || len(s.programs) != 4 {
+		return false, errors.New("factor evidence has wrong stage or incomplete acquired programs")
+	}
+	var scans []transformschema.Forest
+	var err error
+	if phase == "target" {
+		if err := requireTargetObservations(trace, s.programs, objects); err != nil {
+			return false, err
+		}
+	} else {
+		scans, err = completeFactorScans(trace, objects)
+		if err != nil {
+			return false, err
+		}
+	}
+	if phase == "locality" {
+		if len(scans) != 4 {
+			return false, fmt.Errorf("locality factor observed %d complete training forests, want 4", len(scans))
+		}
+		sawWrongContext := false
+		for _, forest := range scans {
+			requests := lifecycleNodesOfKind(forest, "request")
+			if len(requests) == 1 {
+				request := requests[0]
+				definition, ok := lifecycleNodeByID(forest, request.Target)
+				if ok && definition.Kind == "definition" && request.Parent != definition.Parent {
+					sawWrongContext = true
+				}
+			}
+		}
+		return partial.Locality == "required" && sawWrongContext, nil
+	}
+	requiresProgramScans := phase != "target" && !(phase == "scope" && partial.Targets == "definition") && !(phase == "old-guard" && partial.Targets == "definition")
+	if requiresProgramScans {
+		covered := map[string]bool{}
+		for _, forest := range scans {
+			encoded, _ := forest.CanonicalJSON()
+			covered[digestBytes(encoded)] = true
+		}
+		for _, program := range s.programs {
+			encoded, _ := program.before.CanonicalJSON()
+			if !covered[digestBytes(encoded)] {
+				return false, fmt.Errorf("factor omitted concrete program forest %s in %s; observed %d complete scans", digestBytes(encoded), phase, len(scans))
+			}
+		}
+	}
+	exact := true
+	for _, program := range s.programs {
+		matched, matchErr := factorMatchesProgram(partial, phase, program)
+		if matchErr != nil {
+			return false, matchErr
+		}
+		exact = exact && matched
+	}
+	if s.policy == string(NoEqualityGuard) && phase == "old-guard" && partial.OldGuard == "equals-from" {
+		exact = false
+	}
+	return exact, nil
+}
+
+func requireTargetObservations(trace []TransformOperation, programs []reconstructedProgram, objects map[string][]byte) error {
+	observed := map[string]bool{}
+	for _, operation := range trace {
+		if operation.Operation != "node" || operation.Outcome != "ok" || len(operation.Inputs) != 2 {
+			continue
+		}
+		_, value, err := decodeTransformAtom(objects[operation.Inputs[1]])
+		id, ok := jsonInteger(value)
+		if err == nil && ok {
+			observed[operation.Inputs[0]+fmt.Sprintf("/%d", id)] = true
+		}
+	}
+	for _, program := range programs {
+		forestBytes, _ := program.before.CanonicalJSON()
+		forestDigest := digestBytes(forestBytes)
+		for _, edit := range program.edits {
+			if !observed[forestDigest+fmt.Sprintf("/%d", edit.Target)] {
+				return errors.New("target factor omitted an edited-node observation")
+			}
+		}
+	}
+	return nil
+}
+
+func factorMatchesProgram(partial transformschema.Partial, phase string, program reconstructedProgram) (bool, error) {
+	byID := map[int]transformschema.Node{}
+	var request *transformschema.Node
+	for index := range program.before.Nodes {
+		node := program.before.Nodes[index]
+		byID[node.ID] = node
+		if node.Kind == "request" {
+			copy := node
+			request = &copy
+		}
+	}
+	if request == nil {
+		return false, errors.New("acquired program forest lacks request")
+	}
+	editedKinds := map[string]bool{}
+	definitionID := -1
+	var editedReferences []int
+	for _, edit := range program.edits {
+		node, ok := byID[edit.Target]
+		if !ok || edit.Value != request.To {
+			return false, errors.New("acquired program edit is not local to its request")
+		}
+		editedKinds[node.Kind] = true
+		switch node.Kind {
+		case "definition":
+			if definitionID >= 0 && definitionID != node.ID {
+				return false, errors.New("acquired program has multiple definition anchors")
+			}
+			definitionID = node.ID
+		case "reference":
+			if definitionID >= 0 && definitionID != node.Target {
+				return false, errors.New("acquired program has inconsistent reference anchors")
+			}
+			definitionID = node.Target
+			editedReferences = append(editedReferences, node.ID)
+		default:
+			return false, errors.New("acquired program edits a non-transform node")
+		}
+	}
+	slices.Sort(editedReferences)
+	switch phase {
+	case "target":
+		return partial.Targets == "definition" && editedKinds["definition"] && !editedKinds["reference"] || partial.Targets == "references" && editedKinds["reference"] && !editedKinds["definition"] || partial.Targets == "definition+references" && editedKinds["definition"] && editedKinds["reference"], nil
+	case "anchor":
+		return resolveLifecycleAnchor(program.before, *request, partial.Anchor) == definitionID, nil
+	case "scope":
+		if partial.Targets == "definition" {
+			return partial.ReferenceScope == "local", nil
+		}
+		for _, guard := range []string{"equals-from", "any"} {
+			if slices.Equal(projectLifecycleReferences(program.before, *request, definitionID, partial.ReferenceScope, guard), editedReferences) {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "old-guard":
+		if partial.Targets == "definition" {
+			return partial.OldGuard == "any", nil
+		}
+		return slices.Equal(projectLifecycleReferences(program.before, *request, definitionID, partial.ReferenceScope, partial.OldGuard), editedReferences), nil
+	default:
+		return false, errors.New("unsupported factor phase")
+	}
+}
+
+func resolveLifecycleAnchor(forest transformschema.Forest, request transformschema.Node, anchor string) int {
+	switch anchor {
+	case "request-target":
+		return request.Target
+	case "from-value":
+		selected := -1
+		for _, node := range forest.Nodes {
+			if node.Kind == "definition" && node.Value == request.From {
+				if selected >= 0 {
+					return -2
+				}
+				selected = node.ID
+			}
+		}
+		return selected
+	case "first-local":
+		selected := -1
+		for _, node := range forest.Nodes {
+			if node.Kind == "definition" && node.Parent == request.Parent && (selected < 0 || node.ID < selected) {
+				selected = node.ID
+			}
+		}
+		return selected
+	default:
+		return -3
+	}
+}
+
+func projectLifecycleReferences(forest transformschema.Forest, request transformschema.Node, definitionID int, scope, guard string) []int {
+	var result []int
+	for _, node := range forest.Nodes {
+		if node.Kind == "reference" && node.Target == definitionID && (scope == "global" || node.Parent == request.Parent) && (guard == "any" || node.Value == request.From) {
+			result = append(result, node.ID)
+		}
+	}
+	slices.Sort(result)
+	return result
+}
+
+func lifecycleNodesOfKind(forest transformschema.Forest, kind string) []transformschema.Node {
+	var result []transformschema.Node
+	for _, node := range forest.Nodes {
+		if node.Kind == kind {
+			result = append(result, node)
+		}
+	}
+	return result
+}
+
+func lifecycleNodeByID(forest transformschema.Forest, id int) (transformschema.Node, bool) {
+	for _, node := range forest.Nodes {
+		if node.ID == id {
+			return node, true
+		}
+	}
+	return transformschema.Node{}, false
+}
+
+func completeFactorScans(trace []TransformOperation, objects map[string][]byte) ([]transformschema.Forest, error) {
+	var result []transformschema.Forest
+	forestDigest := ""
+	nextID := 0
+	for _, operation := range trace {
+		if operation.Operation != "node" || len(operation.Inputs) != 2 {
+			continue
+		}
+		_, value, err := decodeTransformAtom(objects[operation.Inputs[1]])
+		id, ok := jsonInteger(value)
+		if err != nil || !ok || id < 0 || id >= transformschema.MaxNodes {
+			return nil, errors.New("factor node observation has invalid id")
+		}
+		if forestDigest == "" {
+			if id != 0 {
+				continue
+			}
+			forestDigest = operation.Inputs[0]
+			nextID = 0
+		}
+		if forestDigest != operation.Inputs[0] || id != nextID {
+			forestDigest = ""
+			nextID = 0
+			if id == 0 {
+				forestDigest = operation.Inputs[0]
+				nextID = 1
+			}
+			continue
+		}
+		nextID++
+		if nextID == transformschema.MaxNodes {
+			forest, err := transformschema.ParseForest(objects[forestDigest])
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, forest)
+			forestDigest = ""
+			nextID = 0
+		}
+	}
+	return result, nil
 }
 
 func (s *transformLifecycleState) observe(operation TransformOperation, objects map[string][]byte) (returnErr error) {
 	sequence := len(s.history)
 	defer func() { s.history = append(s.history, operation) }()
+	if len(s.pendingCompare) != 0 {
+		want := s.pendingCompare[0]
+		if !equalLifecycleOperation(operation, want) {
+			return errors.New("applied positive training output comparisons differ from committed fixture")
+		}
+		s.pendingCompare = s.pendingCompare[1:]
+		return nil
+	}
 	if s.pendingAttach >= 0 {
 		if operation.Operation != "evidence-link" || sequence != s.pendingAttach {
 			return errors.New("schema application certificate lacks final evidence attachment")
 		}
+		if s.pendingEvidence == nil || !equalApplicationEvidence(operation, *s.pendingEvidence) {
+			return errors.New("schema application evidence differs from exact reconstructed trace")
+		}
 		s.pendingAttach = -1
+		s.pendingEvidence = nil
+		s.pendingCompare = s.afterEvidence
+		s.afterEvidence = nil
 	}
 	switch operation.Operation {
 	case "candidate-allocate":
-		if operation.Outcome != "allocated" {
+		digest := operation.Inputs[0]
+		_, alreadyAllocated := s.partials[digest]
+		if operation.Outcome == "duplicate" {
+			if !alreadyAllocated {
+				return errors.New("candidate duplicate has no prior allocation")
+			}
 			return nil
 		}
-		digest := operation.Outputs[0]
+		if operation.Outcome != "allocated" {
+			_, partialErr := transformschema.ParsePartial(objects[digest])
+			_, schemaErr := transformschema.ParseSchema(objects[digest])
+			if partialErr == nil || schemaErr == nil {
+				return errors.New("valid candidate was rejected")
+			}
+			return nil
+		}
+		if alreadyAllocated {
+			return errors.New("candidate was allocated twice")
+		}
+		digest = operation.Outputs[0]
 		if partial, err := transformschema.ParsePartial(objects[digest]); err == nil {
 			s.partials[digest] = partial
 			s.allocPhase[digest] = operation.Phase
@@ -56,6 +377,32 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 			}
 			s.parents[operation.Outputs[0]] = operation.Inputs[0]
 			s.activeCandidate = operation.Outputs[0]
+			s.factorStart = sequence + 1
+		}
+	case "edit-validate":
+		if operation.Phase == "acquire" && operation.Outcome == "valid" {
+			if s.acquireBefore == "" {
+				s.acquireBefore = operation.Inputs[0]
+			}
+			edit, err := decodeLifecycleEdit(objects[operation.Inputs[1]])
+			if err != nil {
+				return err
+			}
+			s.acquireEdits = append(s.acquireEdits, edit)
+		}
+	case "output-compare":
+		if operation.Phase == "acquire" && len(s.acquireEdits) != 0 {
+			before, beforeErr := transformschema.ParseForest(objects[s.acquireBefore])
+			after, afterErr := transformschema.ParseForest(objects[operation.Inputs[1]])
+			program := transformschema.Program{Edits: slices.Clone(s.acquireEdits)}
+			actual, applyErr := program.Apply(before)
+			actualBytes, canonicalErr := actual.CanonicalJSON()
+			if beforeErr != nil || afterErr != nil || applyErr != nil || canonicalErr != nil || operation.Outcome != "equal" || !bytes.Equal(actualBytes, objects[operation.Inputs[0]]) || !bytes.Equal(actualBytes, objects[operation.Inputs[1]]) {
+				return errors.New("concrete program acquisition does not reconstruct")
+			}
+			s.programs = append(s.programs, reconstructedProgram{before, after, slices.Clone(s.acquireEdits)})
+			s.acquireBefore = ""
+			s.acquireEdits = nil
 		}
 	case "evidence-link":
 		if s.activeCandidate != "" && oneOfString(operation.Phase, "target", "anchor", "scope", "old-guard", "locality") {
@@ -70,15 +417,50 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 			if err != nil || atomKind != "boolean" || !ok {
 				return errors.New("factor result evidence is not boolean")
 			}
-			s.factorResults[s.activeCandidate] = boolean
+			partial, exists := s.partials[s.activeCandidate]
+			if !exists || s.factorStart < 0 || s.factorStart > len(s.history) {
+				return errors.New("factor result has no allocated active partial")
+			}
+			expected, err := s.reconstructFactor(partial, operation.Phase, s.history[s.factorStart:], objects)
+			if err != nil {
+				return err
+			}
+			if boolean != expected {
+				return errors.New("factor result differs from independently reconstructed observations")
+			}
+			s.factorResults[s.activeCandidate] = expected
 			s.activeCandidate = ""
+			s.factorStart = -1
 		}
 	case "schema-application":
-		last, err := s.validateApplicationCertificate(sequence, operation, objects)
+		evidence, err := s.validateApplicationCertificate(sequence, operation, objects)
 		if err != nil {
 			return err
 		}
-		s.pendingAttach = last
+		s.pendingAttach = sequence + 1
+		s.pendingEvidence = &evidence
+		if operation.Phase == "training-validate" && operation.Outcome == "applied" && len(s.trainingCases) != 0 {
+			item, exists := s.trainingCases[operation.Inputs[0]]
+			if !exists {
+				return errors.New("training application input is absent from committed fixture")
+			}
+			if item.Kind == "positive" {
+				var application []json.RawMessage
+				var resultWire []json.RawMessage
+				var outputDigest string
+				if json.Unmarshal(objects[operation.Outputs[0]], &application) != nil || len(application) != 3 || json.Unmarshal(application[1], &resultWire) != nil || len(resultWire) != 3 || json.Unmarshal(resultWire[2], &outputDigest) != nil {
+					return errors.New("training application result projection")
+				}
+				_, expected, compareErr := transformbaseline.CompareOutputsMetered(objects[outputDigest], item.After, "training-validate")
+				if compareErr != nil {
+					return compareErr
+				}
+				s.afterEvidence = make([]TransformOperation, len(expected))
+				for index := range expected {
+					s.afterEvidence[index] = lifecycleOperationFromBaseline(expected[index])
+				}
+			}
+		}
 	case "verify":
 		if len(operation.Inputs) != 1 {
 			return nil
@@ -95,7 +477,7 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 			s.frozenArtifact = operation.Inputs[0]
 		}
 	case "terminal":
-		if s.pendingAttach >= 0 {
+		if s.pendingAttach >= 0 || len(s.pendingCompare) != 0 || len(s.afterEvidence) != 0 {
 			return errors.New("terminal precedes application evidence attachment")
 		}
 		if len(operation.Inputs) != 1 || !oneOfString(objectWireVersion(objects[operation.Inputs[0]]), "transform-closure/v1", "transform-schema/v1", "transform-store-boundary/v1") {
@@ -107,8 +489,8 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 				if len(s.closures) != 5 {
 					return errors.New("completed production acquisition lacks five stage closures")
 				}
-				if s.frozenArtifact == "" || operation.Inputs[0] != s.frozenArtifact {
-					return errors.New("production terminal does not name frozen artifact")
+				if s.frozenArtifact == "" || objectWireVersion(objects[operation.Inputs[0]]) != "transform-store-boundary/v1" {
+					return errors.New("production terminal lacks frozen artifact and Store boundary")
 				}
 			case "no-discovery":
 				if len(s.closures) == 0 || s.survivor != "" || s.frozenArtifact != "" {
@@ -120,14 +502,14 @@ func (s *transformLifecycleState) observe(operation TransformOperation, objects 
 	return nil
 }
 
-func (s *transformLifecycleState) validateApplicationCertificate(sequence int, operation TransformOperation, objects map[string][]byte) (int, error) {
+func (s *transformLifecycleState) validateApplicationCertificate(sequence int, operation TransformOperation, objects map[string][]byte) (TransformOperation, error) {
 	var application []json.RawMessage
 	if json.Unmarshal(objects[operation.Outputs[0]], &application) != nil || len(application) != 3 {
-		return 0, errors.New("invalid application certificate container")
+		return TransformOperation{}, errors.New("invalid application certificate container")
 	}
 	var certificate []json.RawMessage
 	if json.Unmarshal(application[2], &certificate) != nil || len(certificate) != 12 {
-		return 0, errors.New("invalid application certificate")
+		return TransformOperation{}, errors.New("invalid application certificate")
 	}
 	var version, schemaDigest, inputDigest, outputDigest, terminal string
 	var requestID, definitionID int
@@ -138,34 +520,34 @@ func (s *transformLifecycleState) validateApplicationCertificate(sequence int, o
 	targets := []any{&version, &schemaDigest, &inputDigest, &requestID, &definitionID, &referenceIDs, &guards, &editDigests, &outputDigest, &terminal, &first, &last}
 	for index := range targets {
 		if json.Unmarshal(certificate[index], targets[index]) != nil {
-			return 0, errors.New("application certificate field")
+			return TransformOperation{}, errors.New("application certificate field")
 		}
 	}
 	if version != "transform-certificate/v1" || schemaDigest != operation.Inputs[1] || inputDigest != operation.Inputs[0] || first < 0 || last != sequence+1 || first > sequence {
-		return 0, errors.New("application certificate event range mismatch")
+		return TransformOperation{}, errors.New("application certificate event range mismatch")
 	}
 	forest, forestErr := transformschema.ParseForest(objects[operation.Inputs[0]])
 	schema, schemaErr := transformschema.ParseSchema(objects[operation.Inputs[1]])
 	result, applyErr := schema.Apply(forest)
 	if forestErr != nil || schemaErr != nil || applyErr != nil {
-		return 0, errors.New("application certificate inputs do not replay")
+		return TransformOperation{}, errors.New("application certificate inputs do not replay")
 	}
 	trace := append(slices.Clone(s.history[first:]), operation)
 	if len(trace) < len(forest.Nodes)+2 {
-		return 0, errors.New("application certificate trace is incomplete")
+		return TransformOperation{}, errors.New("application certificate trace is incomplete")
 	}
 	seenNodes := map[int]bool{}
 	var tracedGuards []bool
 	var tracedEdits []string
 	for index, actual := range trace {
 		if actual.Phase != operation.Phase || index < len(forest.Nodes) && actual.Operation != "node" || index == len(trace)-1 && actual.Operation != "schema-application" || index != len(trace)-1 && oneOfString(actual.Operation, "schema-application", "replay-application", "evidence-link", "terminal") {
-			return 0, errors.New("application certificate trace shape mismatch")
+			return TransformOperation{}, errors.New("application certificate trace shape mismatch")
 		}
 		if actual.Operation == "node" {
 			_, idValue, err := decodeTransformAtom(objects[actual.Inputs[1]])
 			id, ok := jsonInteger(idValue)
 			if err != nil || !ok || seenNodes[id] {
-				return 0, errors.New("application certificate node coverage mismatch")
+				return TransformOperation{}, errors.New("application certificate node coverage mismatch")
 			}
 			seenNodes[id] = true
 		}
@@ -173,7 +555,7 @@ func (s *transformLifecycleState) validateApplicationCertificate(sequence int, o
 			kind, value, err := decodeTransformAtom(objects[actual.Outputs[0]])
 			boolean, ok := value.(bool)
 			if err != nil || kind != "boolean" || !ok {
-				return 0, errors.New("application certificate guard mismatch")
+				return TransformOperation{}, errors.New("application certificate guard mismatch")
 			}
 			tracedGuards = append(tracedGuards, boolean)
 			selectorKind, selector, _ := decodeTransformAtom(objects[actual.Inputs[2]])
@@ -183,7 +565,7 @@ func (s *transformLifecycleState) validateApplicationCertificate(sequence int, o
 		}
 	}
 	if len(seenNodes) != len(forest.Nodes) || !slices.Equal(guards, tracedGuards) || !slices.Equal(editDigests, tracedEdits) {
-		return 0, errors.New("application certificate evidence summary mismatch")
+		return TransformOperation{}, errors.New("application certificate evidence summary mismatch")
 	}
 	wantRequest, wantDefinition, wantReferences, wantEdits := expectedCertificateBindings(forest, schema)
 	wantOutput := ""
@@ -192,9 +574,39 @@ func (s *transformLifecycleState) validateApplicationCertificate(sequence int, o
 		wantOutput = digestBytes(output)
 	}
 	if requestID != wantRequest || definitionID != wantDefinition || !slices.Equal(referenceIDs, wantReferences) || !slices.Equal(editDigests, wantEdits) || outputDigest != wantOutput || terminal != result.Terminal || operation.Outcome != result.Terminal {
-		return 0, fmt.Errorf("application certificate semantic fields mismatch: binding=%d/%d refs=%v edits=%v output=%s terminal=%s want=%d/%d refs=%v edits=%v output=%s terminal=%s", requestID, definitionID, referenceIDs, editDigests, outputDigest, terminal, wantRequest, wantDefinition, wantReferences, wantEdits, wantOutput, result.Terminal)
+		return TransformOperation{}, fmt.Errorf("application certificate semantic fields mismatch: binding=%d/%d refs=%v edits=%v output=%s terminal=%s want=%d/%d refs=%v edits=%v output=%s terminal=%s", requestID, definitionID, referenceIDs, editDigests, outputDigest, terminal, wantRequest, wantDefinition, wantReferences, wantEdits, wantOutput, result.Terminal)
 	}
-	return last, nil
+	_, expectedEvents, err := transformbaseline.ApplySchemaMeteredAt(objects[operation.Inputs[0]], objects[operation.Inputs[1]], operation.Phase, first)
+	if err != nil || len(expectedEvents) != len(trace)+1 {
+		return TransformOperation{}, errors.New("application certificate does not cover the exact reconstructed trace")
+	}
+	for index, actual := range trace {
+		expected := lifecycleOperationFromBaseline(expectedEvents[index])
+		if !equalLifecycleOperation(actual, expected) {
+			return TransformOperation{}, fmt.Errorf("application certificate trace differs at event %d: got %s/%s want %s/%s", index, actual.Operation, actual.Outcome, expected.Operation, expected.Outcome)
+		}
+	}
+	return lifecycleOperationFromBaseline(expectedEvents[len(expectedEvents)-1]), nil
+}
+
+func lifecycleOperationFromBaseline(event transformbaseline.Event) TransformOperation {
+	inputs := make([]string, len(event.Inputs))
+	for index, value := range event.Inputs {
+		inputs[index] = digestBytes(value)
+	}
+	outputs := make([]string, len(event.Outputs))
+	for index, value := range event.Outputs {
+		outputs[index] = digestBytes(value)
+	}
+	return TransformOperation{event.Operation, event.Phase, inputs, outputs, event.Outcome, event.Category}
+}
+
+func equalLifecycleOperation(left, right TransformOperation) bool {
+	return left.Operation == right.Operation && left.Phase == right.Phase && left.Outcome == right.Outcome && left.Category == right.Category && slices.Equal(left.Inputs, right.Inputs) && slices.Equal(left.Outputs, right.Outputs)
+}
+
+func equalApplicationEvidence(actual, baseline TransformOperation) bool {
+	return actual.Operation == "evidence-link" && baseline.Operation == "evidence-link" && actual.Phase == baseline.Phase && actual.Outcome == baseline.Outcome && actual.Category == baseline.Category && len(actual.Inputs) == 3 && len(baseline.Inputs) == 1 && actual.Inputs[0] == baseline.Inputs[0] && len(actual.Outputs) == 1
 }
 
 func expectedCertificateBindings(forest transformschema.Forest, schema transformschema.Schema) (int, int, []int, []string) {
@@ -320,6 +732,18 @@ func (s *transformLifecycleState) observeClosure(operation TransformOperation, o
 		matched, authenticated := s.factorResults[alternative]
 		if !authenticated || matched != (status == "survivor") {
 			return errors.New("closure status is not derived from attached factor evidence")
+		}
+		partial := s.partials[alternative]
+		wantStatus := "counterexample"
+		if matched {
+			wantStatus = "survivor"
+		} else if s.policy == string(NoEqualityGuard) && stage == "old-guard" && partial.OldGuard == "equals-from" {
+			wantStatus = "ablated-ineligible"
+		} else if stage == "scope" && partial.Targets == "definition" && partial.ReferenceScope == "global" || stage == "old-guard" && partial.Targets == "definition" && partial.OldGuard == "equals-from" {
+			wantStatus = "redundant-noncanonical"
+		}
+		if status != wantStatus {
+			return fmt.Errorf("closure alternative status %q, want %q", status, wantStatus)
 		}
 		boolean, _ := json.Marshal([]any{"transform-atom/v1", "boolean", matched})
 		if digestBytes(boolean) != result {

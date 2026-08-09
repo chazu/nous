@@ -17,10 +17,13 @@ func TestFrozenLockedDerivationGoldenVectors(t *testing.T) {
 		Preimage []any
 		Want     string
 	}{
-		{[]any{"part3/transform-schema/v1", "family-permutation", "locked"}, "d6de2f17cd2c339d64319b33f4ab6d114ffc27af6fe5de639d8644b02ae82555"},
-		{[]any{"part3/transform-schema/v1", "locked-curriculum", 0}, "bde0c0fd318cfb28a628dc98525e641a222b8de1f923f4f127b4475f7003e8d3"},
-		{[]any{"statistics", "locked", 0, "bootstrap/nous-vs-pbe"}, "80c6071cbe6dc9fcbba5f6a8ad0133c43ae581f76633f7d1539ea92c8cfc3d95"},
+		{[]any{"part3/transform-schema/v2", "family-permutation", "locked"}, "23fac563f45ebb1ac1242762dc0714f0d1d1aab3f5a35898b192b213fdd16619"},
+		{[]any{"part3/transform-schema/v2", "locked-curriculum", 0}, "4c222114d212ca13dc7f27d2eabb4f6b64047ed41966d17b0e47994db9f38db8"},
 		{[]any{"transform-panel/v1", "locked"}, "a89bcc5abedf45759afdb0dbf6bddf7e8c60b588cdbf40d12780065e2970da77"},
+	}
+	pairs, err := lockedStatisticsPairs(digestBytes(root))
+	if err != nil || pairs[0] != [2]uint64{0xcc2105fc441a86b0, 0xd0b8dd6bffe90cae} {
+		t.Fatalf("locked public statistics pair=%x err=%v", pairs[0], err)
 	}
 	for _, vector := range vectors {
 		if got := hex.EncodeToString(lockedHMAC(root, vector.Preimage)); got != vector.Want {
@@ -33,15 +36,15 @@ func TestPublicPermutationAndPurposeStreamGoldenVectors(t *testing.T) {
 	panelCommitment := digestBytes(mustJSON([]any{"transform-panel/v1", "development", 841001}))
 	seedCommitment := digestBytes(mustJSON([]any{"transform-seed/v1", "development", uint64(841001)}))
 	wantStreams := map[string][2]uint64{
-		"structure":        {0x2051e0743fb114f7, 0xb9cc40b83d51fc1b},
-		"aliases":          {0xee2f635ebed39fa3, 0xb8ec9eb16f841789},
-		"scalars":          {0xeba47e7f1fad87b7, 0x253373ccf8d86669},
-		"child-order":      {0xb7c2bf7d1b655a44, 0xb623a457136f0096},
-		"case-tokens":      {0xc3ee98e89448c9a4, 0x553f364d9a07414c},
-		"case-order":       {0x826576001885aa80, 0xf49312eba699baa5},
-		"production-queue": {0x544baaf39bfd7c40, 0xc1615a8541006f07},
-		"random-policy":    {0x975fb9b5ed9eca09, 0x63abf3ab9c1949b4},
-		"baseline-ties":    {0x8f0f0c40154aaa53, 0x7fa3de7348c0a341},
+		"structure":        {0x694b1b8f9a450694, 0x2f6b4f5c76cfc00d},
+		"aliases":          {0x38f419a5ab92a7fd, 0x885ad2b60af482e8},
+		"scalars":          {0xa61253e93eb85866, 0xb26676a2c46f9111},
+		"child-order":      {0xa0e849281ceaa48f, 0x530ab82beac4a823},
+		"case-tokens":      {0x0559ebafea716e76, 0x6c92340b81e5f568},
+		"case-order":       {0xcad1b1adf1ead774, 0x15cd9a92fafaed4e},
+		"production-queue": {0xf82ba2d2230a82e1, 0xd987b43b08271f2f},
+		"random-policy":    {0x6029a6a81c832f08, 0x8c1467f89a093789},
+		"baseline-ties":    {0xaa366cbe9a3fe639, 0xe278d57d06abc64b},
 	}
 	for purpose, want := range wantStreams {
 		rng := fixtureStream(panelCommitment, seedCommitment, 0, purpose)
@@ -49,27 +52,13 @@ func TestPublicPermutationAndPurposeStreamGoldenVectors(t *testing.T) {
 			t.Fatalf("%s stream=%016x want=%016x", purpose, got, want)
 		}
 	}
-	panel, err := developmentPanel()
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotDevelopment := make([]int, len(panel))
-	for index := range panel {
-		gotDevelopment[index] = panel[index].Family
-	}
-	wantDevelopment := []int{1, 8, 7, 2, 2, 5, 4, 8, 0, 5, 5, 3, 0, 1, 7, 2, 0, 8, 2, 4, 1, 0, 6, 0, 0, 6, 3, 5, 4, 2, 6, 8, 3, 7, 2, 7, 6, 4, 1, 1, 6, 3, 1, 4, 7, 3, 8, 5}
+	gotDevelopment := publicFamilyPermutation("development", 841001, []int{6, 6, 6, 5, 5, 5, 5, 5, 5})
+	wantDevelopment := []int{2, 5, 8, 3, 4, 2, 3, 6, 6, 5, 4, 8, 1, 0, 2, 1, 2, 7, 8, 0, 3, 8, 0, 7, 6, 5, 2, 1, 5, 1, 0, 7, 7, 4, 0, 6, 1, 0, 4, 3, 6, 7, 8, 4, 1, 2, 3, 5}
 	if !slices.Equal(gotDevelopment, wantDevelopment) {
 		t.Fatalf("development family permutation=%v", gotDevelopment)
 	}
-	validation, err := validationPanel()
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotValidation := make([]int, len(validation))
-	for index := range validation {
-		gotValidation[index] = validation[index].Family
-	}
-	wantValidation := []int{4, 0, 0, 6, 3, 8, 2, 2, 5, 8, 3, 4, 7, 3, 1, 0, 2, 1, 1, 2, 8, 5, 3, 3, 0, 8, 8, 0, 5, 0, 5, 7, 1, 4, 4, 4, 2, 0, 4, 8, 1, 5, 4, 5, 3, 7, 4, 5, 6, 1, 3, 7, 1, 0, 0, 8, 3, 6, 6, 1, 6, 3, 7, 1, 4, 2, 7, 7, 2, 6, 7, 6, 5, 2, 7, 3, 6, 8, 8, 7, 4, 2, 2, 5, 5, 2, 5, 4, 0, 1, 0, 3, 6, 6, 1, 8}
+	gotValidation := publicFamilyPermutation("validation", 842001, []int{11, 11, 11, 11, 11, 11, 10, 10, 10})
+	wantValidation := []int{2, 5, 0, 1, 8, 7, 4, 3, 4, 0, 4, 3, 6, 4, 8, 7, 3, 0, 6, 3, 7, 8, 3, 4, 7, 8, 5, 1, 3, 2, 4, 5, 5, 5, 1, 6, 5, 7, 5, 0, 3, 8, 2, 4, 5, 8, 6, 6, 5, 1, 0, 2, 1, 0, 0, 0, 3, 1, 2, 6, 6, 1, 5, 8, 1, 4, 8, 8, 4, 1, 7, 7, 2, 5, 2, 4, 1, 2, 2, 7, 0, 0, 7, 1, 3, 2, 3, 6, 4, 3, 2, 0, 7, 6, 6, 8}
 	if !slices.Equal(gotValidation, wantValidation) {
 		t.Fatalf("validation family permutation=%v", gotValidation)
 	}
@@ -166,17 +155,17 @@ func TestGeneratedPositiveStructuralVariantsAreValidAndHeldoutNovel(t *testing.T
 	}
 }
 
-func TestDevelopmentPanelCountsAndTruth(t *testing.T) {
-	panel, err := developmentPanel()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(panel) != 48 {
-		t.Fatalf("count=%d", len(panel))
-	}
+func TestPublicFamilyCountsAndSafeCurriculumTruth(t *testing.T) {
+	panel := publicFamilyPermutation("development", 841001, []int{6, 6, 6, 5, 5, 5, 5, 5, 5})
 	counts := make([]int, 9)
-	for _, c := range panel {
-		counts[c.Family]++
+	for _, family := range panel {
+		counts[family]++
+	}
+	for family := range familySchemas {
+		c, err := makeCurriculum(family, family, 990000+uint64(family))
+		if err != nil {
+			t.Fatal(err)
+		}
 		training, err := transformfixturecore.ParseTraining(c.Training)
 		if err != nil {
 			t.Fatal(err)
@@ -194,10 +183,10 @@ func TestDevelopmentPanelCountsAndTruth(t *testing.T) {
 			if example.Kind == "positive" {
 				out, _ := r.Output.CanonicalJSON()
 				if r.Terminal != "applied" || !bytes.Equal(out, example.After) {
-					t.Fatalf("family %d positive mismatch", c.Family)
+					t.Fatalf("family %d positive mismatch", family)
 				}
 			} else if len(r.Terminal) < 8 || r.Terminal[:8] != "abstain/" {
-				t.Fatalf("family %d negative=%s", c.Family, r.Terminal)
+				t.Fatalf("family %d negative=%s", family, r.Terminal)
 			}
 		}
 	}
@@ -213,17 +202,17 @@ func TestManifestAndGeneratorDeterminism(t *testing.T) {
 	if err := validateManifest(); err != nil {
 		t.Fatal(err)
 	}
-	a, err := developmentPanel()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := developmentPanel()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range a {
-		if a[i].Family != b[i].Family || !bytes.Equal(a[i].Training, b[i].Training) || !bytes.Equal(a[i].Heldout, b[i].Heldout) {
-			t.Fatalf("curriculum %d drifted", i)
+	for family := range familySchemas {
+		a, err := makeCurriculum(family, family, 991000+uint64(family))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := makeCurriculum(family, family, 991000+uint64(family))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.Family != b.Family || !bytes.Equal(a.Training, b.Training) || !bytes.Equal(a.Heldout, b.Heldout) {
+			t.Fatalf("curriculum %d drifted", family)
 		}
 	}
 }

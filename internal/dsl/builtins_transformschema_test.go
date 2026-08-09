@@ -38,7 +38,7 @@ func TestTransformSchemaApplyWord(t *testing.T) {
 	}}
 	fb, _ := f.CanonicalJSON()
 	sb, _ := (transformschema.Schema{"request-target", "definition", "local", "any", "required"}).CanonicalJSON()
-	vm := &VM{stack: []Value{StringVal(string(fb)), StringVal(string(sb))}}
+	vm := &VM{stack: []Value{StringVal(string(fb)), StringVal(string(sb)), StringVal("positive")}}
 	if err := bTSSchemaApply(vm); err != nil {
 		t.Fatal(err)
 	}

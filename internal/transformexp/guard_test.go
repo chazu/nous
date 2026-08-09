@@ -126,14 +126,15 @@ func TestProtectedPanelConstructorsHaveExactlyOneProductionCaller(t *testing.T) 
 	files := map[string]*ast.File{}
 	fset := token.NewFileSet()
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			continue
 		}
 		data, err := os.ReadFile(entry.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(data), "//go:linkname") {
+		linknameDirective := "//go:" + "linkname"
+		if strings.Contains(string(data), linknameDirective) {
 			t.Fatalf("linkname can bypass constructor authority in %s", entry.Name())
 		}
 		parsed, err := parser.ParseFile(fset, entry.Name(), data, 0)

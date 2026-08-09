@@ -106,21 +106,18 @@ func CompareOutputsMetered(left, right []byte, phase string) (bool, []Event, err
 	leftForest, leftErr := parseForest(left)
 	rightForest, rightErr := parseForest(right)
 	if leftErr != nil || rightErr != nil || len(leftForest.nodes) != len(rightForest.nodes) {
-		return false, []Event{{9, "output-compare", phase, "invalid-input", [][]byte{left, right}, nil}}, nil
+		return false, []Event{{9, "output-compare", phase, "invalid-input", [][]byte{left, right, baselineAtom("id", -1)}, nil}}, nil
 	}
 	equal := true
-	for i := range leftForest.nodes {
-		if leftForest.nodes[i] != rightForest.nodes[i] {
-			equal = false
-		}
-	}
 	events := make([]Event, len(leftForest.nodes))
 	for i := range leftForest.nodes {
+		nodeEqual := leftForest.nodes[i] == rightForest.nodes[i]
 		outcome := "different"
-		if equal {
+		if nodeEqual {
 			outcome = "equal"
 		}
-		events[i] = Event{9, "output-compare", phase, outcome, [][]byte{left, right}, [][]byte{baselineAtom("boolean", equal)}}
+		events[i] = Event{9, "output-compare", phase, outcome, [][]byte{left, right, baselineAtom("id", leftForest.nodes[i].id)}, [][]byte{baselineAtom("boolean", nodeEqual)}}
+		equal = equal && nodeEqual
 	}
 	return equal, events, nil
 }
