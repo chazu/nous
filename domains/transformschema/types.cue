@@ -9,6 +9,7 @@ units: [
 		english: "Bounded typed forests, concrete edits, and role-parameterized transformation schemas"
 	},
 	{name: "TransformTrainingCase", worth: 650, isA: ["Anything"]},
+	{name: "TransformLearningExperiment", worth: 700, isA: ["Anything"]},
 	{name: "TransformConcreteProgram", worth: 650, isA: ["Anything"]},
 	{name: "TransformPartialCandidate", worth: 550, isA: ["Anything"]},
 	{name: "TransformCounterexample", worth: 550, isA: ["Anything"]},
