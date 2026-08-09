@@ -9,10 +9,10 @@ import (
 )
 
 type CompetenceReport struct {
-	Forests             int
-	SchemaApplications  int
-	ProgramApplications int
-	Passed              bool
+	Forests             int  `json:"forests"`
+	SchemaApplications  int  `json:"schema_applications"`
+	ProgramApplications int  `json:"program_applications"`
+	Passed              bool `json:"passed"`
 }
 
 func runTransformCompetence() (CompetenceReport, error) {

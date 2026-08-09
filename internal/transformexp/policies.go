@@ -36,6 +36,7 @@ type PolicyOutcome struct {
 	HeldoutCorrect        int
 	HeldoutTotal          int
 	FalseApplications     int
+	NonmatchingWork       int64
 	TrainingWork          int
 	TasksPopped           int
 	Transcript            TransformTranscriptBundle
@@ -104,6 +105,16 @@ func executePolicy(domainsDir string, c curriculum, policy Policy) (PolicyOutcom
 		return out, fmt.Errorf("unknown policy %q", policy)
 	}
 	if out.Terminal != "completed" || len(out.Schema) == 0 {
+		if out.acquisition != nil {
+			run := *out.acquisition
+			out.acquisition = nil
+			transcript, transcriptErr := transcriptFromAcquisition(run, c.Ordinal, policy, caseToken(c.Seed, "policy-"+string(policy), 0), policyManifestDigest(c, policy))
+			if transcriptErr != nil {
+				return out, transcriptErr
+			}
+			out.Transcript = transcript
+			out.TrainingWork = int(out.Transcript.Work)
+		}
 		return out, nil
 	}
 	return scoreSchema(c, out)
@@ -167,6 +178,10 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 	vm.CurrentTask = &agenda.Task{UnitName: experiment, SlotName: "tsHeldout"}
 	expected := expectedByToken(c)
 	for _, test := range heldout.Cases {
+		beforeRecords, snapshotErr := dsl.TransformMeterSnapshot(meterToken)
+		if snapshotErr != nil {
+			return out, snapshotErr
+		}
 		terminal, output, executeErr := dsl.ExecuteTransformSchemaApplication(vm, test.Before, out.Schema)
 		if executeErr != nil {
 			return out, fmt.Errorf("heldout adapter execution: %v", executeErr)
@@ -186,6 +201,21 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 		if truth.Terminal == "abstain" && application.Terminal == "applied" {
 			out.FalseApplications++
 		}
+		if truth.Terminal == "abstain" {
+			afterRecords, snapshotErr := dsl.TransformMeterSnapshot(meterToken)
+			if snapshotErr != nil {
+				return out, snapshotErr
+			}
+			beforeWork, _, workErr := transformMeterWork(beforeRecords)
+			if workErr != nil {
+				return out, workErr
+			}
+			afterWork, _, workErr := transformMeterWork(afterRecords)
+			if workErr != nil {
+				return out, workErr
+			}
+			out.NonmatchingWork += afterWork - beforeWork
+		}
 	}
 	records, err := dsl.TransformMeterSnapshot(meterToken)
 	if err != nil {
@@ -200,6 +230,7 @@ func scoreProductionSchema(c curriculum, out PolicyOutcome) (PolicyOutcome, erro
 		return out, storeErr
 	}
 	out.HeldoutStoreUnchanged = bytes.Equal(storeBefore, storeAfter)
+	out.TrainingWork = int(out.Transcript.Work)
 	return out, err
 }
 

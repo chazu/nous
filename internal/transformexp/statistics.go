@@ -39,6 +39,26 @@ type transformInference struct {
 	NonmatchingPBE       int64
 }
 
+func (i transformInference) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		PointNumerator       int64 `json:"point_numerator"`
+		PointDenominator     int64 `json:"point_denominator"`
+		LowerNumerator       int64 `json:"lower_numerator"`
+		LowerDenominator     int64 `json:"lower_denominator"`
+		UpperNumerator       int64 `json:"upper_numerator"`
+		UpperDenominator     int64 `json:"upper_denominator"`
+		RandomizationExtreme int   `json:"randomization_extreme"`
+		PNumerator           int64 `json:"p_numerator"`
+		PDenominator         int64 `json:"p_denominator"`
+		NousSuccesses        int   `json:"nous_successes"`
+		PBESuccesses         int   `json:"pbe_successes"`
+		FalseApplications    int   `json:"false_applications"`
+		NonmatchingNous      int64 `json:"nonmatching_nous"`
+		NonmatchingPBE       int64 `json:"nonmatching_pbe"`
+	}
+	return json.Marshal(wire{i.Point.Numerator, i.Point.Denominator, i.Lower.Numerator, i.Lower.Denominator, i.Upper.Numerator, i.Upper.Denominator, i.RandomizationExtreme, i.PValue.Numerator, i.PValue.Denominator, i.NousSuccesses, i.PBESuccesses, i.FalseApplications, i.NonmatchingNous, i.NonmatchingPBE})
+}
+
 type indexedPoint struct {
 	Point   rationalPoint
 	Ordinal int
