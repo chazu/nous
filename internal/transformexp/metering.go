@@ -25,6 +25,29 @@ func transcriptFromAcquisition(run acquisitionRun, ordinal int, policy Policy, t
 		return TransformTranscriptBundle{}, err
 	}
 	for index, record := range run.MeterRecords {
+		if record.Operation == "evidence-link" {
+			if len(record.Inputs) != 1 || !sink.lastAttach || sink.lastOutput == "" || sink.lastObject == "" {
+				return TransformTranscriptBundle{}, fmt.Errorf("meter %d invalid evidence boundary", index)
+			}
+			attemptedDigest, admitErr := sink.Admit(record.Inputs[0])
+			if admitErr != nil {
+				return TransformTranscriptBundle{}, fmt.Errorf("meter %d evidence value: %w", index, admitErr)
+			}
+			var attempted any
+			if json.Unmarshal(record.Inputs[0], &attempted) != nil {
+				return TransformTranscriptBundle{}, fmt.Errorf("meter %d evidence value is not JSON", index)
+			}
+			attemptBytes, _ := json.Marshal([]any{"transform-evidence-attempt/v1", "attached", "result", attempted, attemptedDigest, sink.lastOutput, sink.lastObject})
+			attemptDigest, admitErr := sink.Admit(attemptBytes)
+			if admitErr != nil {
+				return TransformTranscriptBundle{}, fmt.Errorf("meter %d evidence attempt: %w", index, admitErr)
+			}
+			operation := TransformOperation{"evidence-link", record.Phase, []string{attemptedDigest, sink.lastOutput, sink.lastObject}, []string{attemptDigest}, "attached", 10}
+			if emitErr := sink.Emit(operation); emitErr != nil {
+				return TransformTranscriptBundle{}, fmt.Errorf("meter %d: %w", index, emitErr)
+			}
+			continue
+		}
 		inputs := make([]string, len(record.Inputs))
 		for i, value := range record.Inputs {
 			inputs[i], err = sink.Admit(value)

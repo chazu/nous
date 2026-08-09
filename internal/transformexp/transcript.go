@@ -238,7 +238,7 @@ func (s *TransformTranscriptSink) validateOperation(o TransformOperation) error 
 		if !s.lastAttach || len(o.Inputs) != 3 || o.Inputs[1] != s.lastOutput || o.Inputs[2] != s.lastObject || len(o.Outputs) != 1 || !oneOfString(o.Outcome, "attached", "rejected") {
 			return errors.New("invalid immediate evidence attachment")
 		}
-		if o.Inputs[0] != s.lastOutput && s.lastOutput != "" {
+		if o.Inputs[0] != s.lastOutput && s.lastOutput != "" && !s.applicationResultProjection(o.Inputs[0]) {
 			return errors.New("evidence attempted digest mismatch")
 		}
 	}
@@ -264,6 +264,19 @@ func (s *TransformTranscriptSink) validateOperation(o TransformOperation) error 
 		}
 	}
 	return nil
+}
+
+func (s *TransformTranscriptSink) applicationResultProjection(attempted string) bool {
+	data := s.Objects.Objects[s.lastOutput]
+	if len(data) == 0 {
+		return false
+	}
+	var row []any
+	if json.Unmarshal(data, &row) != nil || len(row) != 3 || row[0] != "transform-schema-application/v1" {
+		return false
+	}
+	result, err := json.Marshal(row[1])
+	return err == nil && digestBytes(result) == attempted
 }
 
 type TransformTranscriptBundle struct {
