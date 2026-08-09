@@ -88,7 +88,11 @@ func PositiveLGGMetered(trainingBytes, programBatchBytes []byte) (Result, []Even
 }
 
 func PositiveLGGMeteredAt(trainingBytes, programBatchBytes []byte, sequenceOffset int) (Result, []Event, error) {
-	return positiveLGG(trainingBytes, programBatchBytes, sequenceOffset)
+	return positiveLGG(trainingBytes, programBatchBytes, sequenceOffset, 0, 0)
+}
+
+func PositiveLGGMeteredAtWithBudget(trainingBytes, programBatchBytes []byte, sequenceOffset int, initialWork int64, initialApplications int) (Result, []Event, error) {
+	return positiveLGG(trainingBytes, programBatchBytes, sequenceOffset, initialWork, initialApplications)
 }
 
 func ApplySchema(forestBytes, schemaBytes []byte) (Application, error) {
@@ -122,6 +126,7 @@ func Replay(programBatchBytes []byte, _ string, forestBytes []byte) (Application
 func enumerate(training transformfixturecore.Training, candidates []schema, retainTier, metered bool) (Result, []Event, error) {
 	result := Result{}
 	var events []Event
+	budget := newMeterBudget(0, 0)
 	foundCost := -1
 	for _, candidate := range candidates {
 		if foundCost >= 0 && (!retainTier || description(candidate) != foundCost) {
@@ -129,21 +134,28 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 		}
 		candidateBytes := encodeSchema(candidate)
 		if metered {
-			events = append(events, Event{4, "candidate-allocate", "freeze", "allocated", [][]byte{candidateBytes}, [][]byte{candidateBytes}})
+			if !budget.append(&events, Event{4, "candidate-allocate", "freeze", "allocated", [][]byte{candidateBytes}, [][]byte{candidateBytes}}) {
+				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+			}
 		}
 		exact := true
 		for _, c := range training.Cases {
-			if result.Applications >= 40 {
-				return Result{Terminal: "budget-exhausted", Applications: result.Applications}, events, nil
+			if !budget.reserveApplication("training-validate", 80) {
+				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
 			}
-			result.Applications++
 			terminal, output, err := apply(c.Before, candidate)
 			if err != nil {
 				return Result{}, nil, err
 			}
 			if metered {
-				events = append(events, applicationEvents(c.Before, candidateBytes, candidate, terminal, output, "training-validate", len(events))...)
+				applicationTrace := applicationEvents(c.Before, candidateBytes, candidate, terminal, output, "training-validate", len(events))
+				if !budget.commitApplication(&events, "training-validate", 80, applicationTrace...) {
+					return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+				}
+			} else {
+				budget.applications++
 			}
+			result.Applications = budget.applications
 			match := c.Kind == "positive" && terminal == "applied" && bytes.Equal(output, c.After) ||
 				c.Kind == "abstain" && len(output) == 0 && len(terminal) > 8 && terminal[:8] == "abstain/"
 			if !match {
@@ -151,7 +163,9 @@ func enumerate(training transformfixturecore.Training, candidates []schema, reta
 				break
 			}
 			if metered && c.Kind == "positive" && terminal == "applied" {
-				events = append(events, outputComparisonEvents(output, c.After, "training-validate")...)
+				if !budget.append(&events, outputComparisonEvents(output, c.After, "training-validate")...) {
+					return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+				}
 			}
 		}
 		if exact {

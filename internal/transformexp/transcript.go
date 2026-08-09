@@ -148,21 +148,28 @@ func transformObjectCap(data []byte) (int, error) {
 }
 
 type TransformTranscriptSink struct {
-	Ordinal      int
-	Policy       string
-	Token        string
-	Manifest     string
-	Previous     string
-	Events       []TransformEvent
-	Objects      TransformObjectTable
-	Vector       [12]int64
-	Work         int64
-	Applications int
-	terminal     bool
-	lastObject   string
-	lastOutput   string
-	lastAttach   bool
+	Ordinal              int
+	Policy               string
+	Token                string
+	Manifest             string
+	Previous             string
+	Events               []TransformEvent
+	Objects              TransformObjectTable
+	Vector               [12]int64
+	Work                 int64
+	Applications         int
+	terminal             bool
+	lastObject           string
+	lastOutput           string
+	lastAttach           bool
+	reserved             bool
+	reservedPhase        string
+	reservedStartWork    int64
+	reservedMaximumWork  int64
+	applicationCommitted bool
 }
+
+var errTransformApplicationBudget = errors.New("transformation application budget exhausted")
 
 func newTransformTranscriptSink(ordinal int, policy, token, manifestDigest string) (*TransformTranscriptSink, error) {
 	if !digestString(manifestDigest) {
@@ -173,6 +180,25 @@ func newTransformTranscriptSink(ordinal int, policy, token, manifestDigest strin
 }
 
 func (s *TransformTranscriptSink) Admit(data []byte) (string, error) { return s.Objects.admit(data) }
+
+func (s *TransformTranscriptSink) BeginApplication(phase string, maximumWork int64) error {
+	applicationCap := ApplicationsPerPolicy
+	if phase != "heldout" {
+		applicationCap -= 8
+	}
+	if s.reserved {
+		return errors.New("nested transformation application reservation")
+	}
+	if maximumWork <= 0 || s.Applications >= applicationCap || s.Work+maximumWork >= LifecycleWorkCap {
+		return errTransformApplicationBudget
+	}
+	s.reserved = true
+	s.reservedPhase = phase
+	s.reservedStartWork = s.Work
+	s.reservedMaximumWork = maximumWork
+	s.applicationCommitted = false
+	return nil
+}
 
 func (s *TransformTranscriptSink) EmitValues(operation, phase, outcome string, category int, inputs, outputs [][]byte) error {
 	before := make(map[string]struct{}, len(s.Objects.Objects))
@@ -285,6 +311,14 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	if len(s.Events) >= EventCountCap || s.Work+charge > LifecycleWorkCap || o.Phase != "terminal" && s.Work+charge >= LifecycleWorkCap {
 		return errors.New("transformation lifecycle cap")
 	}
+	if s.reserved && s.Work+charge > s.reservedStartWork+s.reservedMaximumWork {
+		return errors.New("transformation application exceeded reserved work")
+	}
+	if o.Operation == "schema-application" || o.Operation == "replay-application" {
+		if !s.reserved || s.reservedPhase != o.Phase || s.applicationCommitted {
+			return errors.New("unreserved transformation application")
+		}
+	}
 	subject := digestBytes([]byte("transform-empty-subject/v1"))
 	if len(o.Inputs) > 0 && o.Inputs[0] != "" {
 		subject = o.Inputs[0]
@@ -301,9 +335,16 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	s.Previous = digestBytes(step)
 	if o.Operation == "schema-application" || o.Operation == "replay-application" {
 		s.Applications++
+		s.applicationCommitted = true
+		if o.Operation == "replay-application" {
+			s.finishApplicationReservation()
+		}
 	}
 	if o.Operation == "evidence-link" {
 		s.lastAttach = false
+		if s.reserved && s.applicationCommitted {
+			s.finishApplicationReservation()
+		}
 	} else {
 		s.lastObject = operationDigest
 		s.lastOutput = ""
@@ -317,6 +358,14 @@ func (s *TransformTranscriptSink) Emit(o TransformOperation) error {
 	}
 	committed = true
 	return nil
+}
+
+func (s *TransformTranscriptSink) finishApplicationReservation() {
+	s.reserved = false
+	s.reservedPhase = ""
+	s.reservedStartWork = 0
+	s.reservedMaximumWork = 0
+	s.applicationCommitted = false
 }
 
 func (s *TransformTranscriptSink) validateOperation(o TransformOperation) error {
@@ -394,6 +443,9 @@ func (s *TransformTranscriptSink) Bundle() (TransformTranscriptBundle, error) {
 	if !s.terminal {
 		return TransformTranscriptBundle{}, errors.New("missing terminal event")
 	}
+	if s.reserved {
+		return TransformTranscriptBundle{}, errors.New("unfinished transformation application reservation")
+	}
 	var raw bytes.Buffer
 	for _, event := range s.Events {
 		encoded, err := event.canonicalJSON()
@@ -426,9 +478,74 @@ func (s *TransformTranscriptSink) Bundle() (TransformTranscriptBundle, error) {
 	return TransformTranscriptBundle{Raw: raw.Bytes(), Gzip: compressed.Bytes(), Vector: s.Vector, Work: s.Work, Objects: objects, Terminal: s.Events[len(s.Events)-1].Outcome, Applications: s.Applications}, nil
 }
 
+type transformApplicationSpan struct {
+	first, application, last int
+	phase                    string
+	maximumWork              int64
+	operation                string
+}
+
+func transformApplicationSpans(raw []byte, objects map[string][]byte) (map[int]transformApplicationSpan, error) {
+	spans := map[int]transformApplicationSpan{}
+	covered := map[int]bool{}
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	sequence := 0
+	for scanner.Scan() {
+		event, err := parseTransformEvent(scanner.Bytes())
+		if err != nil || event.Sequence != sequence {
+			return nil, errors.New("cannot reconstruct application reservations")
+		}
+		operation, err := parseTransformOperation(objects[event.Object])
+		if err != nil {
+			return nil, errors.New("cannot reconstruct application operation")
+		}
+		span := transformApplicationSpan{}
+		switch operation.Operation {
+		case "replay-application":
+			span = transformApplicationSpan{sequence, sequence, sequence, operation.Phase, 1, operation.Operation}
+		case "schema-application":
+			if len(operation.Outputs) != 1 {
+				return nil, errors.New("schema application reservation lacks output")
+			}
+			var application []json.RawMessage
+			var certificate []json.RawMessage
+			if json.Unmarshal(objects[operation.Outputs[0]], &application) != nil || len(application) != 3 || json.Unmarshal(application[2], &certificate) != nil || len(certificate) != 12 {
+				return nil, errors.New("schema application reservation certificate wire")
+			}
+			var first, last int
+			if json.Unmarshal(certificate[10], &first) != nil || json.Unmarshal(certificate[11], &last) != nil || first < 0 || first > sequence || last != sequence+1 {
+				return nil, errors.New("schema application reservation range")
+			}
+			span = transformApplicationSpan{first, sequence, last, operation.Phase, 80, operation.Operation}
+		default:
+			sequence++
+			continue
+		}
+		if _, exists := spans[span.first]; exists {
+			return nil, errors.New("duplicate application reservation start")
+		}
+		for index := span.first; index <= span.last; index++ {
+			if covered[index] {
+				return nil, errors.New("overlapping application reservation")
+			}
+			covered[index] = true
+		}
+		spans[span.first] = span
+		sequence++
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return spans, nil
+}
+
 func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDigest string) (TransformTranscriptBundle, error) {
 	if len(raw) == 0 || len(raw) > RawChunkByteCap || raw[len(raw)-1] != '\n' || !digestString(manifestDigest) {
 		return TransformTranscriptBundle{}, errors.New("invalid transcript framing")
+	}
+	reservationSpans, err := transformApplicationSpans(raw, objects)
+	if err != nil {
+		return TransformTranscriptBundle{}, err
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, EventByteCap+1), EventByteCap+1)
@@ -444,6 +561,8 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 	lastAttach := false
 	panelOrdinal, policy, taskToken := -1, "", ""
 	var lifecycle *transformLifecycleState
+	var activeReservation *transformApplicationSpan
+	reservationStartWork := int64(0)
 	for scanner.Scan() {
 		line := bytes.Clone(scanner.Bytes())
 		event, err := parseTransformEvent(line)
@@ -475,6 +594,24 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 		}
 		if event.Subject != subject {
 			return TransformTranscriptBundle{}, errors.New("event subject mismatch")
+		}
+		if span, starts := reservationSpans[event.Sequence]; starts {
+			applicationCap := ApplicationsPerPolicy
+			if span.phase != "heldout" {
+				applicationCap -= 8
+			}
+			if activeReservation != nil || applications >= applicationCap || work+span.maximumWork >= LifecycleWorkCap {
+				return TransformTranscriptBundle{}, errors.New("application reservation exceeds live budget")
+			}
+			spanCopy := span
+			activeReservation = &spanCopy
+			reservationStartWork = work
+		}
+		if activeReservation != nil && (event.Sequence < activeReservation.first || event.Sequence > activeReservation.last || operation.Phase != activeReservation.phase) {
+			return TransformTranscriptBundle{}, errors.New("operation escaped application reservation")
+		}
+		if oneOfString(operation.Operation, "schema-application", "replay-application") && (activeReservation == nil || event.Sequence != activeReservation.application || operation.Operation != activeReservation.operation) {
+			return TransformTranscriptBundle{}, errors.New("unreserved application operation")
 		}
 		for index, digest := range append(slices.Clone(operation.Inputs), operation.Outputs...) {
 			if digest == "" {
@@ -519,6 +656,15 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 		previous = digestBytes(step)
 		vector[event.Category]++
 		work += lifecycleCharges[event.Category]
+		if activeReservation != nil && work-reservationStartWork > activeReservation.maximumWork {
+			return TransformTranscriptBundle{}, errors.New("application exceeded reserved work")
+		}
+		if activeReservation != nil && event.Sequence == activeReservation.last {
+			if activeReservation.operation == "schema-application" && operation.Operation != "evidence-link" || activeReservation.operation == "replay-application" && operation.Operation != "replay-application" {
+				return TransformTranscriptBundle{}, errors.New("application reservation has invalid final event")
+			}
+			activeReservation = nil
+		}
 		if work > LifecycleWorkCap || len(events) >= EventCountCap || event.Phase != "terminal" && work >= LifecycleWorkCap {
 			return TransformTranscriptBundle{}, errors.New("transcript cap")
 		}
@@ -533,6 +679,9 @@ func reduceTransformTranscript(raw []byte, objects map[string][]byte, manifestDi
 	}
 	if err := scanner.Err(); err != nil || !terminal {
 		return TransformTranscriptBundle{}, errors.New("invalid transcript termination")
+	}
+	if activeReservation != nil {
+		return TransformTranscriptBundle{}, errors.New("unfinished application reservation")
 	}
 	if len(usedObjects) != len(objects) {
 		return TransformTranscriptBundle{}, errors.New("object table contains unreferenced values")

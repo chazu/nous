@@ -16,6 +16,63 @@ type Event struct {
 	Outputs   [][]byte
 }
 
+const lifecycleWorkCap int64 = 12000
+
+var lifecycleCharges = [12]int64{1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1}
+
+type meterBudget struct {
+	work         int64
+	applications int
+}
+
+func newMeterBudget(work int64, applications int) meterBudget {
+	return meterBudget{work: work, applications: applications}
+}
+
+func (b *meterBudget) append(events *[]Event, additions ...Event) bool {
+	work := b.work
+	for _, event := range additions {
+		if event.Category < 0 || event.Category >= len(lifecycleCharges) {
+			return false
+		}
+		work += lifecycleCharges[event.Category]
+	}
+	if work >= lifecycleWorkCap {
+		return false
+	}
+	*events = append(*events, additions...)
+	b.work = work
+	return true
+}
+
+func (b *meterBudget) reserveApplication(phase string, maximumWork int64) bool {
+	applicationCap := 48
+	if phase != "heldout" {
+		applicationCap = 40
+	}
+	return maximumWork > 0 && b.applications < applicationCap && b.work+maximumWork < lifecycleWorkCap
+}
+
+func (b *meterBudget) commitApplication(events *[]Event, phase string, maximumWork int64, additions ...Event) bool {
+	if !b.reserveApplication(phase, maximumWork) {
+		return false
+	}
+	actualWork := int64(0)
+	for _, event := range additions {
+		if event.Category < 0 || event.Category >= len(lifecycleCharges) {
+			return false
+		}
+		actualWork += lifecycleCharges[event.Category]
+	}
+	if actualWork > maximumWork || b.work+actualWork >= lifecycleWorkCap {
+		return false
+	}
+	*events = append(*events, additions...)
+	b.work += actualWork
+	b.applications++
+	return true
+}
+
 func ReplayMetered(programBatchBytes []byte, token string, forestBytes []byte, phase string) (Application, []Event, error) {
 	application, err := Replay(programBatchBytes, token, forestBytes)
 	if err != nil {

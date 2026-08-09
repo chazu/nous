@@ -144,8 +144,21 @@ type TransformMeterRecord struct {
 
 type transformMeter struct {
 	sync.Mutex
-	records []TransformMeterRecord
+	records              []TransformMeterRecord
+	work                 int64
+	applications         int
+	reserved             bool
+	reservedPhase        string
+	reservedStartWork    int64
+	reservedMaximumWork  int64
+	applicationCommitted bool
 }
+
+var ErrTransformBudgetExhausted = errors.New("transformation application budget exhausted")
+
+const transformLifecycleWorkCap int64 = 12000
+
+var transformLifecycleCharges = [12]int64{1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1}
 
 var transformMeters = struct {
 	sync.Mutex
@@ -171,7 +184,20 @@ func RegisterTransformMeterWithRecords(token string, records []TransformMeterRec
 		cloned[i].Inputs = cloneTransformBytes(record.Inputs)
 		cloned[i].Outputs = cloneTransformBytes(record.Outputs)
 	}
-	transformMeters.items[token] = &transformMeter{records: cloned}
+	meter := &transformMeter{records: cloned}
+	for _, record := range cloned {
+		if record.Category >= uint8(len(transformLifecycleCharges)) {
+			return errors.New("invalid transformation meter category")
+		}
+		meter.work += transformLifecycleCharges[record.Category]
+		if record.Operation == "schema-application" || record.Operation == "replay-application" {
+			meter.applications++
+		}
+	}
+	if meter.work >= transformLifecycleWorkCap || meter.applications > 48 {
+		return errors.New("preloaded transformation meter exceeds lifecycle budget")
+	}
+	transformMeters.items[token] = meter
 	return nil
 }
 
@@ -272,8 +298,78 @@ func recordTransformAtPhase(vm *VM, phase, operation, outcome string, category i
 		object = transformDigest(outputs[0])
 	}
 	m.Lock()
+	defer m.Unlock()
+	if category < 0 || category >= len(transformLifecycleCharges) {
+		return errors.New("invalid transformation meter category")
+	}
+	charge := transformLifecycleCharges[category]
+	if m.work+charge >= transformLifecycleWorkCap {
+		return ErrTransformBudgetExhausted
+	}
+	if m.reserved && m.work+charge > m.reservedStartWork+m.reservedMaximumWork {
+		return errors.New("transformation application exceeded reserved work")
+	}
+	if operation == "schema-application" || operation == "replay-application" {
+		if !m.reserved || m.reservedPhase != phase || m.applicationCommitted {
+			return errors.New("unreserved transformation application")
+		}
+		m.applicationCommitted = true
+		m.applications++
+	}
 	m.records = append(m.records, TransformMeterRecord{uint8(category), operation, subject, object, outcome, phase, cloneTransformBytes(inputs), cloneTransformBytes(outputs)})
-	m.Unlock()
+	m.work += charge
+	if operation == "evidence-link" && m.reserved && m.applicationCommitted {
+		m.reserved = false
+		m.reservedPhase = ""
+		m.reservedStartWork = 0
+		m.reservedMaximumWork = 0
+		m.applicationCommitted = false
+	}
+	return nil
+}
+
+func reserveTransformApplication(vm *VM, maximumWork int64) error {
+	if vm.CurrentTask == nil || vm.Store == nil {
+		return nil
+	}
+	current := vm.Store.Get(vm.CurrentTask.UnitName)
+	if current == nil {
+		return nil
+	}
+	experiment := current
+	if name := current.GetString("experiment"); name != "" {
+		experiment = vm.Store.Get(name)
+	}
+	if experiment == nil || experiment.GetString("meterToken") == "" {
+		return nil
+	}
+	phase := map[string]string{"tsAcquire": "acquire", "tsRefine": "target", "tsClose": "training-validate", "tsHeldout": "heldout"}[vm.CurrentTask.SlotName]
+	if phase == "" {
+		return errors.New("unknown transformation application phase")
+	}
+	transformMeters.Lock()
+	m := transformMeters.items[experiment.GetString("meterToken")]
+	transformMeters.Unlock()
+	if m == nil {
+		return errors.New("unknown transformation meter")
+	}
+	m.Lock()
+	defer m.Unlock()
+	applicationCap := 48
+	if phase != "heldout" {
+		applicationCap = 40
+	}
+	if m.reserved {
+		return errors.New("nested transformation application reservation")
+	}
+	if maximumWork <= 0 || m.applications >= applicationCap || m.work+maximumWork >= transformLifecycleWorkCap {
+		return ErrTransformBudgetExhausted
+	}
+	m.reserved = true
+	m.reservedPhase = phase
+	m.reservedStartWork = m.work
+	m.reservedMaximumWork = maximumWork
+	m.applicationCommitted = false
 	return nil
 }
 
@@ -453,6 +549,13 @@ func bTSSchemaApply(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	if err := reserveTransformApplication(vm, 80); err != nil {
+		if errors.Is(err, ErrTransformBudgetExhausted) {
+			vm.push(ListVal([]Value{StringVal("budget-exhausted"), StringVal("")}))
+			return nil
+		}
+		return err
+	}
 	r, _ := s.Apply(f)
 	output := ""
 	if r.Output != nil {
@@ -473,6 +576,12 @@ func ExecuteTransformSchemaApplication(vm *VM, forestBytes, schemaBytes []byte) 
 	}
 	s, err := transformschema.ParseSchema(schemaBytes)
 	if err != nil {
+		return "invalid-input", nil, err
+	}
+	if err := reserveTransformApplication(vm, 80); err != nil {
+		if errors.Is(err, ErrTransformBudgetExhausted) {
+			return "budget-exhausted", nil, nil
+		}
 		return "invalid-input", nil, err
 	}
 	r, err := s.Apply(f)

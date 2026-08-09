@@ -2,6 +2,7 @@ package transformexp
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -105,6 +106,32 @@ func TestTransformEvidenceAttachmentIsImmediateAndSingleUse(t *testing.T) {
 	attach.Inputs = []string{atom, atom, prior}
 	if err := sink.Emit(attach); err == nil {
 		t.Fatal("accepted attachment after intervening operation")
+	}
+}
+
+func TestTransformTranscriptRequiresLiveApplicationReservation(t *testing.T) {
+	sink, err := newTransformTranscriptSink(0, string(ConcreteReplay), "0123456789abcdef", digestBytes([]byte("reservation manifest")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forest, _ := sink.Admit([]byte(`["typed-reference-forest/v1",[]]`))
+	batch, _ := sink.Admit([]byte(`["transform-program-batch/v1",[]]`))
+	result, _ := sink.Admit([]byte(`["transform-result/v1","abstain/replay-miss",""]`))
+	operation := TransformOperation{"replay-application", "training-validate", []string{forest, batch}, []string{result}, "abstain/replay-miss", 11}
+	if err := sink.Emit(operation); err == nil || len(sink.Events) != 0 {
+		t.Fatalf("unreserved application err=%v events=%d", err, len(sink.Events))
+	}
+	for i := 0; i < 40; i++ {
+		if err := sink.BeginApplication("training-validate", 1); err != nil {
+			t.Fatalf("reserve %d: %v", i, err)
+		}
+		if err := sink.Emit(operation); err != nil {
+			t.Fatalf("application %d: %v", i, err)
+		}
+	}
+	before := len(sink.Events)
+	if err := sink.BeginApplication("training-validate", 1); !errors.Is(err, errTransformApplicationBudget) || len(sink.Events) != before {
+		t.Fatalf("exhausted reserve err=%v events=%d/%d", err, len(sink.Events), before)
 	}
 }
 

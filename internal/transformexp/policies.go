@@ -95,12 +95,12 @@ func executePolicy(domainsDir string, c policyCurriculum, ordinal int, policy Po
 		out.frozenPrograms = bytes.Clone(batch)
 		if policy == PositiveLGG {
 			prefix := baselineEventsFromTransformMeter(run.MeterRecords)
-			learned, events, err := transformbaseline.PositiveLGGMeteredAt(c.Training, batch, len(prefix))
+			learned, events, err := transformbaseline.PositiveLGGMeteredAtWithBudget(c.Training, batch, len(prefix), baselineEventWork(prefix), countBaselineApplications(prefix))
 			if err != nil {
 				return out, err
 			}
 			out.baselineEvents = append(prefix, events...)
-			out.Terminal, out.Schema, out.Applications = learned.Terminal, learned.Schema, 4
+			out.Terminal, out.Schema, out.Applications = learned.Terminal, learned.Schema, learned.Applications
 			if out.Terminal == "completed" {
 				out, err = scoreTrainingNegatives(c, out)
 				if err != nil {
@@ -178,6 +178,10 @@ func scoreSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOutcome) (Po
 		return out, err
 	}
 	for _, test := range heldout.Cases {
+		if !reserveBaselineApplication(out.baselineEvents, "heldout", 80) {
+			out.Terminal = "budget-exhausted"
+			break
+		}
 		beforeEventCount := len(out.baselineEvents)
 		application, events, applyErr := transformbaseline.ApplySchemaMeteredAt(test.Before, out.Schema, "heldout", len(out.baselineEvents))
 		err = applyErr
@@ -238,6 +242,11 @@ func scoreProductionSchema(c policyCurriculum, heldoutBytes []byte, out PolicyOu
 		if executeErr != nil {
 			return out, fmt.Errorf("heldout adapter execution: %v", executeErr)
 		}
+		if terminal == "budget-exhausted" {
+			out.Terminal = terminal
+			run.Terminal = terminal
+			break
+		}
 		application := transformbaseline.Application{Terminal: terminal, Output: output}
 		out.Applications++
 		afterRecords, snapshotErr := dsl.TransformMeterSnapshot(meterToken)
@@ -281,6 +290,10 @@ func validateReplayTraining(c policyCurriculum, batch []byte, out PolicyOutcome)
 		if test.Kind != "abstain" {
 			continue
 		}
+		if !reserveBaselineApplication(out.baselineEvents, "training-validate", 1) {
+			out.Terminal = "budget-exhausted"
+			break
+		}
 		application, events, replayErr := transformbaseline.ReplayMetered(batch, test.Token, test.Before, "training-validate")
 		if replayErr != nil {
 			return out, replayErr
@@ -304,6 +317,10 @@ func scoreReplayHeldout(c policyCurriculum, heldoutBytes []byte, out PolicyOutco
 		return out, err
 	}
 	for _, test := range heldout.Cases {
+		if !reserveBaselineApplication(out.baselineEvents, "heldout", 1) {
+			out.Terminal = "budget-exhausted"
+			break
+		}
 		beforeEventCount := len(out.baselineEvents)
 		application, events, err := transformbaseline.ReplayMetered(out.frozenReplayBatch, test.Token, test.Before, "heldout")
 		if err != nil {
@@ -331,6 +348,10 @@ func scoreTrainingNegatives(c policyCurriculum, out PolicyOutcome) (PolicyOutcom
 	for _, test := range training.Cases {
 		if test.Kind != "abstain" {
 			continue
+		}
+		if !reserveBaselineApplication(out.baselineEvents, "training-validate", 80) {
+			out.Terminal = "budget-exhausted"
+			break
 		}
 		application, events, err := transformbaseline.ApplySchemaMeteredAt(test.Before, out.Schema, "training-validate", len(out.baselineEvents))
 		if err != nil {

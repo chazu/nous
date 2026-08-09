@@ -15,7 +15,7 @@ type lggObservation struct {
 	editedReference []int
 }
 
-func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int) (Result, []Event, error) {
+func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int, initialWork int64, initialApplications int) (Result, []Event, error) {
 	training, err := transformfixturecore.ParseTraining(trainingBytes)
 	if err != nil {
 		return Result{}, nil, err
@@ -70,13 +70,16 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int) (R
 		observations = append(observations, observation)
 	}
 	var events []Event
+	budget := newMeterBudget(initialWork, initialApplications)
 	targetChoices := []string{"definition", "references", "definition+references"}
 	var targetExact []string
 	for _, choice := range targetChoices {
 		exact := true
 		for _, observation := range observations {
 			match := choice == "definition" && observation.editedKinds["definition"] && !observation.editedKinds["reference"] || choice == "references" && observation.editedKinds["reference"] && !observation.editedKinds["definition"] || choice == "definition+references" && observation.editedKinds["definition"] && observation.editedKinds["reference"]
-			events = append(events, lggComparison("target", choice, match))
+			if !budget.append(&events, lggComparison("target", choice, match)) {
+				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+			}
 			exact = exact && match
 		}
 		if exact {
@@ -115,7 +118,9 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int) (R
 				}
 			}
 			match := selected == observation.definition.id
-			events = append(events, lggComparison("anchor", choice, match))
+			if !budget.append(&events, lggComparison("anchor", choice, match)) {
+				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+			}
 			exact = exact && match
 		}
 		if exact {
@@ -133,7 +138,10 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int) (R
 		for _, scopeChoice := range scopeChoices {
 			scopeMatches := false
 			for _, guardChoice := range guardChoices {
-				exact := lggReferenceProjectionExact(observations, scopeChoice, guardChoice, &events, "scope")
+				exact, exhausted := lggReferenceProjectionExact(observations, scopeChoice, guardChoice, &events, &budget, "scope")
+				if exhausted {
+					return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+				}
 				scopeMatches = scopeMatches || exact
 			}
 			if scopeMatches {
@@ -146,7 +154,11 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int) (R
 		scope = cheapest(scopeExact, map[string]int{"local": 1, "global": 2}, scopeChoices)
 		var guardExact []string
 		for _, guardChoice := range guardChoices {
-			if lggReferenceProjectionExact(observations, scope, guardChoice, &events, "old-guard") {
+			exact, exhausted := lggReferenceProjectionExact(observations, scope, guardChoice, &events, &budget, "old-guard")
+			if exhausted {
+				return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+			}
+			if exact {
 				guardExact = append(guardExact, guardChoice)
 			}
 		}
@@ -157,26 +169,34 @@ func positiveLGG(trainingBytes, programBatchBytes []byte, sequenceOffset int) (R
 	}
 	learned := schema{anchor, target, scope, guard, "none"}
 	schemaBytes := encodeSchema(learned)
-	result := Result{Terminal: "completed", Schema: schemaBytes, Applications: 4, Ties: [][]byte{schemaBytes}}
+	result := Result{Terminal: "completed", Schema: schemaBytes, Ties: [][]byte{schemaBytes}}
 	for _, c := range training.Cases {
 		if c.Kind != "positive" {
 			continue
+		}
+		if !budget.reserveApplication("training-validate", 80) {
+			return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
 		}
 		application, applicationEvents, err := ApplySchemaMeteredAt(c.Before, schemaBytes, "training-validate", sequenceOffset+len(events))
 		if err != nil || application.Terminal != "applied" {
 			return Result{}, nil, errInvalid
 		}
-		events = append(events, applicationEvents...)
+		if !budget.commitApplication(&events, "training-validate", 80, applicationEvents...) {
+			return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+		}
 		_, comparisonEvents, err := CompareOutputsMetered(application.Output, c.After, "training-validate")
 		if err != nil || !bytes.Equal(application.Output, c.After) {
 			return Result{}, nil, errInvalid
 		}
-		events = append(events, comparisonEvents...)
+		if !budget.append(&events, comparisonEvents...) {
+			return Result{Terminal: "budget-exhausted", Applications: budget.applications}, events, nil
+		}
 	}
+	result.Applications = budget.applications
 	return result, events, nil
 }
 
-func lggReferenceProjectionExact(observations []lggObservation, scope, guard string, events *[]Event, phase string) bool {
+func lggReferenceProjectionExact(observations []lggObservation, scope, guard string, events *[]Event, budget *meterBudget, phase string) (bool, bool) {
 	exact := true
 	for _, observation := range observations {
 		var predicted []int
@@ -187,10 +207,12 @@ func lggReferenceProjectionExact(observations []lggObservation, scope, guard str
 		}
 		slices.Sort(predicted)
 		match := slices.Equal(predicted, observation.editedReference)
-		*events = append(*events, lggComparison(phase, scope+"/"+guard, match))
+		if !budget.append(events, lggComparison(phase, scope+"/"+guard, match)) {
+			return false, true
+		}
 		exact = exact && match
 	}
-	return exact
+	return exact, false
 }
 
 func lggComparison(phase, value string, result bool) Event {
