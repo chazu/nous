@@ -160,6 +160,19 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 		call.Payload = []any{"search-node-lookup", string(record.Inputs[0]), string(record.Inputs[1]), string(record.Inputs[2])}
 		value, _ := output(0)
 		call.OutputDigests = []string{value}
+	case 17:
+		if len(record.Inputs) != 3 || len(record.Outputs) > 1 {
+			return call, fmt.Errorf("invalid proof-map lookup")
+		}
+		call.Payload = []any{"proof-map-lookup", string(record.Inputs[0]), string(record.Inputs[1]), string(record.Inputs[2])}
+		if len(record.Outputs) == 1 {
+			row, err := canonicalRow(record.Outputs[0], 9)
+			if err != nil || stringAt(row, 0) != "sleep-propagation-core/v1" {
+				return call, fmt.Errorf("invalid proof-map lookup output")
+			}
+			value, _ := output(0)
+			call.OutputDigests = []string{value}
+		}
 	case 18:
 		if len(record.Inputs) != 5 || len(record.Outputs) > 1 || record.Status == 3 && len(record.Outputs) != 1 || record.Status == 1 && len(record.Outputs) != 0 {
 			return call, fmt.Errorf("invalid certificate cache lookup")

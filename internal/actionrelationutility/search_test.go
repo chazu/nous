@@ -10,13 +10,7 @@ import (
 )
 
 func TestCompleteUtilityDFSUsesOnlyReservedCUESemantics(t *testing.T) {
-	world := actionrelations.World{
-		State: actionrelations.State{Cells: []actionrelations.Cell{{Name: "x", Value: 0}, {Name: "y", Value: 0}}},
-		Actions: []actionrelations.Action{
-			{Name: "left", Kind: "add", X: "x", N: 1},
-			{Name: "right", Kind: "add", X: "y", N: 1},
-		},
-	}
+	world := independentUtilityWorld()
 	run, err := ExecuteComplete("../../domains", world, "development", "authority", 3, 0, 4096, "complete")
 	if err != nil {
 		t.Fatal(err)
@@ -50,5 +44,58 @@ func TestCompleteUtilityDFSUsesOnlyReservedCUESemantics(t *testing.T) {
 	}
 	if !hit {
 		t.Fatal("complete utility DFS did not retain its exact node-dedup hit")
+	}
+}
+
+func TestCertifiedUtilityPoliciesRetainFreshOrientedSleepProofs(t *testing.T) {
+	world := independentUtilityWorld()
+	complete, err := actionrelationsearch.Search(world, actionrelationsearch.Complete, actionrelationsearch.Artifact{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, policy := range []actionrelationsearch.Policy{actionrelationsearch.DynamicSleep, actionrelationsearch.StaticSleep} {
+		t.Run(string(policy), func(t *testing.T) {
+			run, err := ExecutePolicy("../../domains", world, policy, "development", "authority", 4, 0, 8192, string(policy))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(run.Search.TerminalDigests, complete.TerminalDigests) || !run.Search.CertificateEvidenceBound || len(run.Search.Propagations) == 0 {
+				t.Fatalf("certified result=%+v complete=%v", run.Search, complete.TerminalDigests)
+			}
+			if err := actionrelationsearch.VerifyResultEvidence(run.Search); err != nil {
+				t.Fatal(err)
+			}
+			seen := map[uint16]bool{}
+			priorSleepLookup := false
+			for _, record := range run.Records {
+				seen[record.Code] = true
+				priorSleepLookup = priorSleepLookup || record.Code == 17 && len(record.Outputs) == 1
+				if record.SourceTaskDigest == "" {
+					t.Fatal("certified utility call lacks reservation")
+				}
+			}
+			for _, code := range []uint16{12, 13, 14, 17, 18, 25} {
+				if !seen[code] {
+					t.Fatalf("certified policy omitted operation %d", code)
+				}
+			}
+			if policy == actionrelationsearch.StaticSleep && !seen[24] {
+				t.Fatal("static policy omitted its exact footprint predicate")
+			}
+			if !priorSleepLookup {
+				t.Fatal("certified policy omitted prior-sleep proof-map authority")
+			}
+		})
+	}
+}
+
+func independentUtilityWorld() actionrelations.World {
+	return actionrelations.World{
+		State: actionrelations.State{Cells: []actionrelations.Cell{{Name: "x", Value: 0}, {Name: "y", Value: 0}, {Name: "z", Value: 0}}},
+		Actions: []actionrelations.Action{
+			{Name: "left", Kind: "add", X: "x", N: 1},
+			{Name: "right", Kind: "add", X: "y", N: 1},
+			{Name: "middle", Kind: "add", X: "z", N: 1},
+		},
 	}
 }
