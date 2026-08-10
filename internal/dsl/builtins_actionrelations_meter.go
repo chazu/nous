@@ -10,6 +10,7 @@ import (
 type ActionRelationMeterRecord struct {
 	Code             uint16
 	Counter          uint8
+	Status           uint8
 	Operation        string
 	SourceTaskDigest string
 	Inputs           [][]byte
@@ -99,8 +100,15 @@ func ActionRelationMeterSnapshot(token string) ([]ActionRelationMeterRecord, err
 }
 
 func ChargeActionRelationMeter(token string, code uint16, counter uint8, operation string, inputs, outputs [][]byte) error {
+	return ChargeActionRelationMeterStatus(token, code, counter, 1, operation, inputs, outputs)
+}
+
+func ChargeActionRelationMeterStatus(token string, code uint16, counter, status uint8, operation string, inputs, outputs [][]byte) error {
 	if code < 1 || code > 25 || counter < 1 || counter > 12 || operation == "" {
 		return errors.New("invalid action-relation meter event")
+	}
+	if status != 1 && (status != 3 || code != 16 && code != 18) {
+		return errors.New("invalid action-relation meter status")
 	}
 	actionRelationMeters.Lock()
 	defer actionRelationMeters.Unlock()
@@ -116,7 +124,7 @@ func ChargeActionRelationMeter(token string, code uint16, counter uint8, operati
 		}
 		source = meter.plan[sequence].SourceTaskDigest
 	}
-	meter.records = append(meter.records, ActionRelationMeterRecord{Code: code, Counter: counter, Operation: operation, SourceTaskDigest: source, Inputs: cloneByteRows(inputs), Outputs: cloneByteRows(outputs)})
+	meter.records = append(meter.records, ActionRelationMeterRecord{Code: code, Counter: counter, Status: status, Operation: operation, SourceTaskDigest: source, Inputs: cloneByteRows(inputs), Outputs: cloneByteRows(outputs)})
 	return nil
 }
 

@@ -88,7 +88,10 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 	if code < 9 || code > 25 || record.SourceTaskDigest == "" {
 		return actionrelationexp.ChargedCall{}, fmt.Errorf("invalid utility meter record")
 	}
-	call := actionrelationexp.ChargedCall{Phase: 2, Operation: code, Status: 1, SourceTaskDigest: record.SourceTaskDigest}
+	if record.Status != 1 && (record.Status != 3 || code != 16 && code != 18) {
+		return actionrelationexp.ChargedCall{}, fmt.Errorf("invalid utility meter status")
+	}
+	call := actionrelationexp.ChargedCall{Phase: 2, Operation: code, Status: record.Status, SourceTaskDigest: record.SourceTaskDigest}
 	digest := func(data []byte) string {
 		sum := sha256.Sum256(data)
 		return hex.EncodeToString(sum[:])
@@ -142,6 +145,19 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 		call.Payload = []any{"certificate-equality", stringAt(row, 1), stringAt(row, 2)}
 		value, _ := output(0)
 		call.OutputDigests = []string{value}
+	case 18:
+		if len(record.Inputs) != 5 || len(record.Outputs) > 1 || record.Status == 3 && len(record.Outputs) != 1 || record.Status == 1 && len(record.Outputs) != 0 {
+			return call, fmt.Errorf("invalid certificate cache lookup")
+		}
+		call.Payload = []any{"certificate-cache-lookup", string(record.Inputs[0]), string(record.Inputs[1]), string(record.Inputs[2]), string(record.Inputs[3]), string(record.Inputs[4])}
+		if len(record.Outputs) == 1 {
+			row, err := canonicalRow(record.Outputs[0], 12)
+			if err != nil || stringAt(row, 0) != "certificate-cache-row/v3" {
+				return call, fmt.Errorf("invalid certificate cache hit row")
+			}
+			value, _ := output(0)
+			call.OutputDigests = []string{value}
+		}
 	case 23:
 		if len(record.Inputs) != 5 {
 			return call, fmt.Errorf("invalid search applicability context")
@@ -159,6 +175,14 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 			return call, fmt.Errorf("invalid static footprint")
 		}
 		call.Payload = []any{"static-footprint", stringAt(row, 1), stringAt(row, 2), stringAt(row, 3), stringAt(row, 4), stringAt(row, 5), stringAt(row, 6), stringAt(row, 7)}
+		value, _ := output(0)
+		call.OutputDigests = []string{value}
+	case 25:
+		row, err := canonicalRow(firstOutput(record), 12)
+		if err != nil || stringAt(row, 0) != "certificate-cache-row/v3" {
+			return call, fmt.Errorf("invalid certificate cache finalization")
+		}
+		call.Payload = []any{"certificate-cache-finalize", stringAt(row, 1), stringAt(row, 2), stringAt(row, 3), stringAt(row, 4), stringAt(row, 5), stringAt(row, 6), stringAt(row, 7), stringAt(row, 8)}
 		value, _ := output(0)
 		call.OutputDigests = []string{value}
 	default:

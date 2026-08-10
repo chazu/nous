@@ -84,3 +84,20 @@ func TestActionRelationMeterExtendsOnlyAtCompoundBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestActionRelationMeterRestrictsCacheHitStatus(t *testing.T) {
+	if err := RegisterActionRelationMeterPlan("ar-meter-status", []ActionRelationMeterPlanEntry{{Code: 18, SourceTaskDigest: strings.Repeat("c", 64)}}); err != nil {
+		t.Fatal(err)
+	}
+	defer UnregisterActionRelationMeter("ar-meter-status")
+	if err := ChargeActionRelationMeterStatus("ar-meter-status", 18, 11, 3, "certificate-cache-lookup", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterActionRelationMeterPlan("ar-meter-status-invalid", []ActionRelationMeterPlanEntry{{Code: 13, SourceTaskDigest: strings.Repeat("d", 64)}}); err != nil {
+		t.Fatal(err)
+	}
+	defer UnregisterActionRelationMeter("ar-meter-status-invalid")
+	if err := ChargeActionRelationMeterStatus("ar-meter-status-invalid", 13, 10, 3, "not-a-cache", nil, nil); err == nil {
+		t.Fatal("non-lookup operation accepted cache-hit status")
+	}
+}

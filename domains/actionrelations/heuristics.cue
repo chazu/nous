@@ -548,4 +548,33 @@ units: [
 			else "failed" "request" @ "terminal" set-slot then
 			"""#
 	},
+	{
+		name: "AR-H-CertificateCacheFinalize"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Finalize one supplied certificate-cache miss after its proof range closes"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arCacheFinalize" =
+			"CurUnit" @ "ActionCertificateCacheRequest" isa? and
+			"CurUnit" @ "terminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "worldDigest" get-slot
+			"request" @ "policy" get-slot
+			"request" @ "state" get-slot
+			"request" @ "aOccurrence" get-slot
+			"request" @ "bOccurrence" get-slot
+			"request" @ "missLookupCallID" get-slot
+			"request" @ "attemptUnit" get-slot
+			"request" @ "operationRoot" get-slot
+			"AR.CertificateCache." "request" @ concat ar-cache-finalize "row" !
+			"row" @ nil !=
+			if
+				"row" @ "request" @ "resultRow" set-slot
+				"completed" "request" @ "terminal" set-slot
+			else "failed" "request" @ "terminal" set-slot then
+			"""#
+	},
 ]

@@ -48,6 +48,9 @@ func BuildAcquisitionTranscript(run actionrelationacquire.Run, tables map[uint16
 	}
 	for sequence, meter := range run.MeterRecords {
 		code := uint8(meter.Code)
+		if meter.Status != 1 {
+			return AcquisitionTranscript{}, fmt.Errorf("acquisition call %d has invalid status", sequence)
+		}
 		name := fmt.Sprintf("AR.Reservation.%s.%05d", runID, sequence)
 		if reservationNames[sequence] != name {
 			return AcquisitionTranscript{}, fmt.Errorf("acquisition reservation %d has noncanonical name", sequence)

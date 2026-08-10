@@ -38,6 +38,7 @@ func init() {
 		"ar-close-relation-use":   bARCloseRelationUse,
 		"ar-search-applicable?":   bARSearchApplicable,
 		"ar-static-footprint?":    bARStaticFootprint,
+		"ar-cache-finalize":       bARCacheFinalize,
 		"ar-meter":                bARMeter,
 	})
 }
