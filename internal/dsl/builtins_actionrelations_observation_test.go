@@ -1,6 +1,9 @@
 package dsl
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"testing"
 
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
@@ -110,6 +113,46 @@ func TestGuardRowsNameFactsAndFoldInLiteralOrder(t *testing.T) {
 	resultName := vm.pop().AsString()
 	if !store.Get(resultName).GetBool("result") {
 		t.Fatal("expected true conjunction")
+	}
+}
+
+func TestCertificateAssemblerRequiresCompleteExplicitDiamond(t *testing.T) {
+	store := actionRelationTestStore()
+	vm := &VM{Store: store}
+	state := actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: 0}, {Name: "c1", Value: 0}}}
+	a := actionrelations.Occurrence{Action: actionrelations.SemanticAction{Kind: "set", XRole: "c0", N: 1}}
+	b := actionrelations.Occurrence{Action: actionrelations.SemanticAction{Kind: "set", XRole: "c1", N: 1}}
+	stateJSON, _ := state.CanonicalJSON()
+	aJSON, _ := a.CanonicalJSON()
+	bJSON, _ := b.CanonicalJSON()
+	aInitial, afterA := recordARTransition(t, vm, stateJSON, aJSON, "Cert.A.Initial")
+	bInitial, afterB := recordARTransition(t, vm, stateJSON, bJSON, "Cert.B.Initial")
+	bAfterA, ab := recordARTransition(t, vm, afterA, bJSON, "Cert.B.AfterA")
+	aAfterB, ba := recordARTransition(t, vm, afterB, aJSON, "Cert.A.AfterB")
+	equality := recordAREquality(t, vm, ab, ba, "Cert.Equality")
+	witnessDigest := sha256.Sum256([]byte("dynamic-candidate"))
+	witnessJSON, _ := json.Marshal([]any{"dynamic-witness/v1", "all-pairs", hex.EncodeToString(witnessDigest[:])})
+	operationDigest := sha256.Sum256([]byte("certificate-operations"))
+	operationRoot := hex.EncodeToString(operationDigest[:])
+	vm.stack = []Value{
+		StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal(string(bJSON)), StringVal(string(witnessJSON)),
+		StringVal(aInitial), StringVal(bInitial), StringVal(bAfterA), StringVal(aAfterB), StringVal(equality),
+		StringVal(string(aJSON)), StringVal(operationRoot), StringVal("AR.Certificate"),
+	}
+	if err := bARCertificateAssemble(vm); err != nil {
+		t.Fatal(err)
+	}
+	certificateName := vm.pop().AsString()
+	if certificate := store.Get(certificateName); certificate == nil || certificate.GetString("representativeDigest") == "" {
+		t.Fatalf("certificate=%#v", certificate)
+	}
+	vm.stack = []Value{
+		StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal(string(bJSON)), StringVal(string(witnessJSON)),
+		StringVal(aInitial), StringVal(bInitial), StringVal(""), StringVal(aAfterB), StringVal(equality),
+		StringVal(string(aJSON)), StringVal(operationRoot), StringVal("AR.Certificate.Forged"),
+	}
+	if err := bARCertificateAssemble(vm); err != nil || !vm.pop().IsNil() || store.Has("AR.Certificate.Forged") {
+		t.Fatal("certificate accepted omitted crossed transition")
 	}
 }
 

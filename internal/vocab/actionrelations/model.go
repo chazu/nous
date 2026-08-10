@@ -26,6 +26,7 @@ const (
 	GuardVersion          = "action-guard/v1"
 	RelationVersion       = "guarded-action-relation/v1"
 	ArtifactVersion       = "guarded-action-artifact/v1"
+	CertificateVersion    = "local-diamond-certificate/v1"
 	MaxCells              = 3
 	MaxCellValue          = 3
 	MaxEvents             = 8

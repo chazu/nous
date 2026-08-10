@@ -31,6 +31,7 @@ func init() {
 		"ar-candidate-result":     bARCandidateResult,
 		"ar-close-guard-search":   bARCloseGuardSearch,
 		"ar-freeze-relation":      bARFreezeRelation,
+		"ar-certificate-assemble": bARCertificateAssemble,
 	})
 }
 
