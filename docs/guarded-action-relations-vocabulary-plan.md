@@ -2223,33 +2223,99 @@ all invalid-authority documents and the terminal receipt. Such a document is
 legal only as a reference from an `invalid` terminal receipt and is forbidden
 from a publication.
 
-Execution preflight is one ordered non-mutating phase: exact invocation and
-environment; clean `main == origin/main`; accepted plan, implementation,
-build, competence, and prior-panel progression; absent output and final start
-marker; scratch/evidence capacity; and, for protected execution, exact
-claim/running/secret authority. A failure in that phase is retryable and emits
-no terminal. The executor then prepares and fsyncs a mode-0600 temporary marker
-in the resolved Git-common `nous-actionrelations-v1/starts` directory. Its
-bytes are exactly
-`["actionrelation-start-marker/v1",panel,HEAD,runningDigestOrSourceRoot]`,
-using the running receipt digest for protected panels and build source root for
-development. The single successful no-replace link of that inode to
-`<panel>-<identity>.start` is the persistent post-preflight transition and
-precedes fixture construction or any evidence write. Before that link, a
-failure removes the temporary file and remains retryable. The link and every
-later failure, including marker cleanup/fsync, namespace creation,
-construction, isolated execution, comparison, publication, and receipt I/O,
-must converge on exactly one append-only invalid receipt.
+Entry begins with a non-mutating prerequisite phase that is common to fresh
+execution and recovery: exact invocation and environment; clean `main ==
+origin/main`; accepted plan, implementation, build, competence, and prior-panel
+progression; scratch/evidence capacity; and, for protected execution, exact
+claim/running authority. It derives one immutable `identity`: the
+64-lowercase-hex SHA-256 digest of the canonical running receipt for a protected
+panel, and the accepted build `sourceRoot` for development. `HEAD`, the build
+authority, and every claim/running field must agree with that derivation.
 
-Terminalization is idempotent but never corrective. At each fixture, payload,
-or report path, existing bytes must decode either as that path's successful
-authority type or as the exact same invalid-authority tuple; every other byte
-sequence is rejected without overwrite. An existing terminal receipt must be
-byte-identical to the receipt being reconstructed. Missing placeholders and
-the receipt are created exclusively; existing successful authority bytes are
-referenced directly. Receipt `sourceRoot`, protected running reference and
-attempt commitment, and development zero commitment are rechecked against the
-accepted prerequisites. Publication verification resolves its terminal
+The executor then inspects exactly
+`<git-common>/nous-actionrelations-v1/starts/<panel>-<identity>.start` through
+no-follow directory descriptors. If it is absent, fresh preflight additionally
+requires absent output, terminal receipt, publication, and final marker and,
+for locked execution, the exact committed secret preimage. A failure before
+the final marker transition is retryable and emits no terminal.
+The executor prepares and fsyncs a unique mode-0600 temporary marker in that
+same directory. Its bytes are exactly
+`["actionrelation-start-marker/v1",panel,HEAD,identity]`. One descriptor-relative
+no-replace link of that inode to the final basename is the persistent attempt
+transition and precedes fixture construction or any evidence write. Before
+that link, failure removes the temporary file and remains retryable. After the
+link, the in-memory protected capability is destroyed and any locked preimage
+is descriptor-relatively erased before construction. Recovery likewise erases
+an exact still-present preimage; it neither requires nor recreates one already
+erased. Cleanup/fsync, capability destruction, namespace, construction,
+isolated-execution, comparison, and pre-success-publication failures enter
+idempotent terminalization.
+
+An existing final marker is handled before the fresh-output absence checks; it
+is not a preflight rejection. Its filename identity, payload identity, panel,
+`HEAD`, and the accepted prerequisite authorities must agree byte-for-byte. A
+matching marker with no terminal receipt is an interrupted post-transition
+attempt. Recovery either resumes the exact staged success described below or
+converges on one invalid receipt; it never starts a second attempt. A matching
+marker with a terminal receipt resumes that receipt's exact terminal state.
+Malformed or mismatched marker bytes, a noncanonical marker name, conflicting
+terminal bytes, or a marker that cannot be reconciled with the committed
+prerequisites fails closed without overwriting authority.
+
+Invalid terminalization is idempotent but never corrective. At each fixture,
+payload, or report path, existing bytes must decode either as that path's
+successful authority type with the exact expected panel and authority, or as
+the exact same invalid-authority tuple; every other byte sequence is rejected
+without overwrite. Missing placeholders and the invalid receipt are created
+by writing, fsyncing, and reopening a unique same-directory mode-0644 temporary
+file, then installing it at the final path with one descriptor-relative
+no-replace link and fsyncing the parent. No final authority path is ever opened
+for an in-place write, so an interrupted write can leave only a non-authority
+temporary file. Existing successful authority bytes are referenced directly.
+An existing invalid receipt must be byte-identical to the reconstructed receipt.
+Receipt `sourceRoot`, protected running reference and attempt commitment, and
+development zero commitment are rechecked against the accepted prerequisites.
+If any valid invalid placeholder or receipt already exists, recovery adopts
+its exact reason and requires every other existing invalid document to carry
+the same tuple. If none exists, interrupted-attempt recovery uses the literal
+printable-ASCII reason `interrupted post-start attempt`. Thus the matching
+marker makes the next invocation resume one exact invalid tuple; no partial
+write licenses a changed reason or outcome.
+
+Success publication has a separate recoverable commit protocol. After all
+successful authority bytes verify, the executor computes the exact canonical
+`published` receipt and publication (whose receipt ref is that receipt's
+already-known digest). Complete bytes are first written and reopened through
+unique same-directory temporary files, then linked no-replace to the
+deterministic mode-0644 staging paths
+`<terminal-receipt-path>.pending-<identity>` and
+`<publication-path>.pending-<identity>` and each parent is fsynced. The single
+descriptor-relative no-replace link of the staged receipt inode to the final
+terminal-receipt path, followed by fsync of its parent, is the success
+linearization point. Before that link, any error removes success staging and
+converges on invalid terminalization. At or after that link, the outcome is
+irrevocably `published`: recovery must validate the existing receipt
+byte-for-byte and exclusively link or validate the exact staged publication at
+its final path, then fsync its parent. If its staging link is absent after the
+success transition, recovery may reconstruct it only from the fully verified
+immutable successful authorities and must obtain identical canonical bytes.
+It then removes both pending links and fsyncs their parents; cleanup failure
+remains a published recovery state, never an invalid transition. It must never
+attempt to replace the published receipt with an invalid one.
+
+Recovery therefore accepts only these authority states: marker with no receipt
+and no committed success, which terminalizes invalid; marker with no receipt
+and both deterministic, byte-exact, fully verified success staging files,
+which may resume the receipt commit; marker with an exact invalid receipt and
+no publication, which returns invalid;
+or marker with the exact published receipt and an absent or byte-identical
+publication, which completes or returns success. A final publication without
+the exact published receipt, a publication resolving an invalid receipt,
+non-identical receipt/publication bytes, or any other combination fails closed.
+Temporary and pending files are not authority. They may be removed when the
+final receipt is absent and recovery has selected invalid terminalization, or
+after their byte-identical final authority has been installed; no other
+cleanup is corrective. Publication verification always resolves its terminal
 receipt and requires state exactly `published`; an `invalid` receipt
 categorically forbids publication even when fixture, payload, and report are
 otherwise successful.
@@ -2277,10 +2343,12 @@ committed/pushed before any fixture constructor can derive or receive a seed.
 For locked, the 32-byte preimage is stored mode `0600` under the resolved Git
 common directory and its location string is committed only as a digest.
 `-stage execute` requires clean HEAD equal to `origin/main`, the exact running
-receipt, a matching preimage where applicable, no terminal receipt, and no
-local append-only start marker; it writes that marker before construction.
-Every exit produces `published` or `invalid` terminal evidence and never
-overwrites it.
+receipt, and, for a fresh locked execution, a matching preimage. An absent
+marker enters the fresh preflight above; the exact existing marker enters its
+recovery branch without requiring an already-erased preimage. No invocation
+creates a second marker or overwrites terminal authority. Every post-marker
+attempt converges on `published` or `invalid`; a process or I/O interruption
+may leave only one of the explicitly recoverable intermediate states above.
 
 This is deliberately a cooperative, root-precommitted, replay-detecting
 protocol. It prevents result/seed shopping and ordinary overwrite under
