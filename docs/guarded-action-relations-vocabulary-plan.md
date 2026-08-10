@@ -2215,13 +2215,44 @@ own digest; its frozen path and final Git commit bind it without a self-cycle.
 If execution fails after its preflight boundary but before the fixture, report,
 or evidence payload exists, the missing path is filled once with the compact
 `invalid-authority` wire above. `kind` is exactly `fixture-root`,
-`evidence-payload`, or `report`; source root and attempt commitment equal the
-terminal receipt, and reason is the same bounded ASCII failure reason. Such a
-document is legal only as a reference from an `invalid` terminal receipt and
-is forbidden from a publication. Existing complete authority bytes are named
-directly instead of being overwritten. Development uses the zero attempt
-commitment and, like protected execution, terminalizes every failure after
-preflight.
+`evidence-payload`, or `report`. `sourceRoot` equals the accepted build
+authority. For protected execution `attemptCommitment` equals the committed
+running authority; development uses the raw zero digest. `reason` is 1..1,024
+bytes, every byte is printable ASCII `0x20..0x7e`, and is byte-identical across
+all invalid-authority documents and the terminal receipt. Such a document is
+legal only as a reference from an `invalid` terminal receipt and is forbidden
+from a publication.
+
+Execution preflight is one ordered non-mutating phase: exact invocation and
+environment; clean `main == origin/main`; accepted plan, implementation,
+build, competence, and prior-panel progression; absent output and final start
+marker; scratch/evidence capacity; and, for protected execution, exact
+claim/running/secret authority. A failure in that phase is retryable and emits
+no terminal. The executor then prepares and fsyncs a mode-0600 temporary marker
+in the resolved Git-common `nous-actionrelations-v1/starts` directory. Its
+bytes are exactly
+`["actionrelation-start-marker/v1",panel,HEAD,runningDigestOrSourceRoot]`,
+using the running receipt digest for protected panels and build source root for
+development. The single successful no-replace link of that inode to
+`<panel>-<identity>.start` is the persistent post-preflight transition and
+precedes fixture construction or any evidence write. Before that link, a
+failure removes the temporary file and remains retryable. The link and every
+later failure, including marker cleanup/fsync, namespace creation,
+construction, isolated execution, comparison, publication, and receipt I/O,
+must converge on exactly one append-only invalid receipt.
+
+Terminalization is idempotent but never corrective. At each fixture, payload,
+or report path, existing bytes must decode either as that path's successful
+authority type or as the exact same invalid-authority tuple; every other byte
+sequence is rejected without overwrite. An existing terminal receipt must be
+byte-identical to the receipt being reconstructed. Missing placeholders and
+the receipt are created exclusively; existing successful authority bytes are
+referenced directly. Receipt `sourceRoot`, protected running reference and
+attempt commitment, and development zero commitment are rechecked against the
+accepted prerequisites. Publication verification resolves its terminal
+receipt and requires state exactly `published`; an `invalid` receipt
+categorically forbids publication even when fixture, payload, and report are
+otherwise successful.
 
 For every curriculum-policy pair, `searchWorkVector` is the componentwise sum
 of the six utility vectors and `lifecycleWorkVector = acquisitionWorkVector +
