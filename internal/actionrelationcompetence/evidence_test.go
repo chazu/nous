@@ -26,6 +26,29 @@ func TestCompetenceEvidencePacksRetainExactCaseResultPreimages(t *testing.T) {
 	if err != nil || root.Digest == "" || VerifyRoot(root) != nil {
 		t.Fatal(err)
 	}
+	files := map[string][]byte{}
+	for _, file := range append(append([]EvidenceFile{}, evidence.CaseFiles...), evidence.ResultFiles...) {
+		files[file.Path] = file.Data
+	}
+	parsedEvidence, err := ParseEvidence(evidence.CaseManifest.Canonical, evidence.ResultManifest.Canonical, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedRoot, err := ParseRoot(root.Canonical, parsedEvidence)
+	if err != nil || parsedRoot.Digest != root.Digest {
+		t.Fatalf("parse root: %v", err)
+	}
+	if _, err := ParseRoot(append(append([]byte{}, root.Canonical...), '\n'), parsedEvidence); err == nil {
+		t.Fatal("accepted trailing competence root bytes")
+	}
+	corruptFiles := map[string][]byte{}
+	for path, data := range files {
+		corruptFiles[path] = append([]byte{}, data...)
+	}
+	corruptFiles[evidence.CaseFiles[0].Path] = append(corruptFiles[evidence.CaseFiles[0].Path], 0)
+	if _, err := ParseEvidence(evidence.CaseManifest.Canonical, evidence.ResultManifest.Canonical, corruptFiles); err == nil {
+		t.Fatal("accepted trailing competence pack bytes")
+	}
 	corrupt := evidence
 	corrupt.ResultFiles[0].Data[10] ^= 1
 	if VerifyEvidence(corrupt) == nil {

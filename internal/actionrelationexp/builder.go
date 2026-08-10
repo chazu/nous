@@ -70,11 +70,24 @@ func PrepareBuildAuthority(ctx context.Context, repoRoot string) (BuildAuthority
 	if err != nil {
 		return BuildAuthority{}, err
 	}
-	temporary, err := os.MkdirTemp("", "nous-actionrelation-build-")
-	if err != nil {
+	if err := prepareBuildOutput(root); err != nil {
 		return BuildAuthority{}, err
 	}
-	defer os.RemoveAll(temporary)
+	temporary := filepath.Join(root, ".nous", ".actionrelations-v1-build-scratch")
+	if _, err := os.Lstat(temporary); err == nil {
+		return BuildAuthority{}, fmt.Errorf("build scratch namespace already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return BuildAuthority{}, err
+	}
+	if err := os.Mkdir(temporary, 0o700); err != nil {
+		return BuildAuthority{}, err
+	}
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			_ = os.RemoveAll(temporary)
+		}
+	}()
 	cache, temp := filepath.Join(temporary, "go-cache"), filepath.Join(temporary, "tmp")
 	for _, directory := range []string{cache, temp} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
@@ -103,9 +116,6 @@ func PrepareBuildAuthority(ctx context.Context, repoRoot string) (BuildAuthority
 		{Key: "TMPDIR", Value: temp},
 		{Key: "TZ", Value: "UTC"},
 	}
-	if err := prepareBuildOutput(root); err != nil {
-		return BuildAuthority{}, err
-	}
 	argv := []string{goPath, "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", PanelBinaryPath, "./cmd/nous"}
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	command.Dir, command.Env = root, environmentStrings(environment)
@@ -127,6 +137,10 @@ func PrepareBuildAuthority(ctx context.Context, repoRoot string) (BuildAuthority
 	if err != nil {
 		return BuildAuthority{}, fmt.Errorf("inspect panel binary: %w", err)
 	}
+	if err := os.RemoveAll(temporary); err != nil {
+		return BuildAuthority{}, fmt.Errorf("remove owned build scratch: %w", err)
+	}
+	cleaned = true
 	gitVersion, err := reviewGit(root, gitPath, true, "--version")
 	if err != nil {
 		return BuildAuthority{}, err

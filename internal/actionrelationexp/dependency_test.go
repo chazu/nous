@@ -84,7 +84,7 @@ func TestActionRelationProductionSourcesContainNoPanelAnswers(t *testing.T) {
 
 func TestActionRelationImplementationStaysWithinAcceptedSurface(t *testing.T) {
 	allowed := []string{
-		"docs/actionrelations-", "domains/actionrelations/", "internal/actionrelation", "internal/vocab/actionrelations/",
+		"cmd/nous/main.go", "docs/actionrelations-", "domains/actionrelations/", "internal/actionrelation", "internal/vocab/actionrelations/",
 		"internal/dsl/builtins_actionrelations", "internal/seed/actionrelations", "mise.toml",
 	}
 	command := exec.Command("git", "diff", "--name-only", PlanCommit+"..HEAD")

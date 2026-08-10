@@ -225,7 +225,7 @@ func reviewArchivePreflight(root, gitPath, gitDir, commonDir, commit string) err
 	for _, field := range bytes.Split(config, []byte{0}) {
 		name, _, _ := bytes.Cut(field, []byte{'\n'})
 		key := strings.ToLower(string(name))
-		if strings.HasPrefix(key, "tar.") || strings.HasPrefix(key, "include.") || strings.HasPrefix(key, "includeif.") || key == "core.attributesfile" || key == "core.alternaterefscommand" {
+		if strings.HasPrefix(key, "tar.") || strings.HasPrefix(key, "include.") || strings.HasPrefix(key, "includeif.") || strings.HasPrefix(key, "filter.") || key == "core.attributesfile" || key == "core.alternaterefscommand" || key == "core.fsmonitor" || key == "core.hookspath" || key == "core.untrackedcache" || key == "extensions.worktreeconfig" {
 			return fmt.Errorf("unsafe review git configuration: %s", key)
 		}
 	}

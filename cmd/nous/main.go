@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/chazu/nous/internal/actionrelationrun"
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/causaldpproof"
 	"github.com/chazu/nous/internal/causalexpv2"
@@ -58,12 +59,42 @@ func main() {
 		transformSchemaTrialsCmd(os.Args[2:])
 	case "causal-trials":
 		causalTrialsCmd(os.Args[2:])
+	case "actionrelation-trials":
+		actionRelationTrialsCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
 	}
+}
+
+func actionRelationTrialsCmd(args []string) {
+	fs := flag.NewFlagSet("actionrelation-trials", flag.ExitOnError)
+	repoRoot := fs.String("repo-root", ".", "canonical repository root")
+	stage := fs.String("stage", "prepare", "prepare or competence")
+	fs.Parse(args)
+	root, err := filepath.Abs(*repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	var canonical []byte
+	switch *stage {
+	case "prepare":
+		value, runErr := actionrelationrun.PreparePrerequisites(context.Background(), root)
+		err, canonical = runErr, value.Canonical
+	case "competence":
+		value, runErr := actionrelationrun.ExecuteCompetence(root, os.Args)
+		err, canonical = runErr, value.Canonical
+	default:
+		err = fmt.Errorf("unknown actionrelation stage %q", *stage)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(canonical))
 }
 
 func transformSchemaTrialsCmd(args []string) {
