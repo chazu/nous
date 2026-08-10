@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationfixture"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 )
@@ -42,6 +43,24 @@ func TestDevelopmentCurriculumExecutesExactAcquisitionAndSixWorldPolicyRows(t *t
 		if row.Policy == actionrelationsearch.NousSleep && row.MatchCounts.UtilityFalseMatches != 0 {
 			t.Fatalf("Nous false relation match in world %d", row.WorldOrdinal)
 		}
+	}
+	evidence, err := BuildCurriculumEvidence(generated, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for scope, bundle := range map[string]actionrelationexp.ObjectBundle{
+		"nous": evidence.NousPreboundary, "no-guard": evidence.NoGuardPreboundary,
+		"utility": evidence.Utility, "authority": evidence.Authority,
+	} {
+		if err := actionrelationexp.VerifyObjectBundle(bundle); err != nil {
+			t.Fatalf("%s object scope: %v", scope, err)
+		}
+	}
+	if err := actionrelationexp.VerifyStructuralOutputMap(evidence.StructuralMap); err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence.RunEvidence) != 44 || len(evidence.Transcripts) != 44 {
+		t.Fatalf("evidence cardinalities runs=%d transcripts=%d", len(evidence.RunEvidence), len(evidence.Transcripts))
 	}
 }
 

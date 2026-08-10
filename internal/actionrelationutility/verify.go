@@ -158,10 +158,10 @@ func verifyCertificateAuthority(run SearchRun) error {
 			certificates[digest] = object
 		}
 	}
-	// A learned acquisition Store is intentionally reused across all six
-	// worlds (and by learned-no-use). Verify only cache rows named by this
-	// run's journal; unrelated earlier-world evidence remains immutable Store
-	// authority but is not part of this run's operation range.
+	// Learned utility runs execute in isolated copies of the frozen acquisition
+	// Store. Verify only cache rows named by this run's journal so acquisition
+	// objects and any unrelated copied authority cannot enter this operation
+	// range.
 	for _, record := range run.Records {
 		if record.Code != 25 && !(record.Code == 18 && record.Status == 3) {
 			continue

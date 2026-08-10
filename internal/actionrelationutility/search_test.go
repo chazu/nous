@@ -102,6 +102,9 @@ func TestLearnedNousUtilityLoadsFrozenArtifactAndUsesCUEBarrierBeforeSleep(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := boundary.Verify(acquisition); err != nil {
+		t.Fatalf("learned utility mutated frozen acquisition Store: %v", err)
+	}
 	if !slices.Equal(run.Search.TerminalDigests, complete.TerminalDigests) || len(run.Search.Propagations) == 0 || !run.Search.CertificateEvidenceBound {
 		t.Fatalf("learned=%+v complete=%v", run.Search, complete.TerminalDigests)
 	}
@@ -139,6 +142,9 @@ func TestLearnedNousUtilityLoadsFrozenArtifactAndUsesCUEBarrierBeforeSleep(t *te
 	control, err := ExecuteLearnedPolicy(acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, world, actionrelationsearch.LearnedNoUse, "development", actionrelationexp.PlanCommit, 6, 1, initialWork, 2_000_000, "learned-no-use")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := boundary.Verify(acquisition); err != nil {
+		t.Fatalf("learned-no-use mutated frozen acquisition Store: %v", err)
 	}
 	if !slices.Equal(control.Search.TerminalDigests, complete.TerminalDigests) || control.Search.SleepPropagations != 0 || len(control.Records) == 0 || control.Records[0].Code != 10 {
 		t.Fatalf("learned-no-use did not load the artifact then explore completely: %+v", control.Search)

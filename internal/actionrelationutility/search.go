@@ -91,11 +91,15 @@ func ExecuteLearnedPolicyWithBudget(store *unit.Store, artifactName, boundaryNam
 	if artifact == nil || boundary == nil || !store.IsA(artifact.Name, "GuardedActionArtifact") || !store.IsA(boundary.Name, "ActionStoreBoundary") {
 		return SearchRun{}, fmt.Errorf("invalid learned utility authority")
 	}
+	// Acquisition is frozen at the boundary. Utility executes in an isolated
+	// copy so charged and structural search evidence cannot mutate the
+	// acquisition Store or enter its preboundary object set.
+	utilityStore := store.Clone()
 	normalized, err := world.Normalize()
 	if err != nil {
 		return SearchRun{}, err
 	}
-	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, initialWork, budget, token, artifactName, boundaryName)
+	return executePolicyOnStore(utilityStore, normalized, policy, panel, authority, curriculum, worldOrdinal, initialWork, budget, token, artifactName, boundaryName)
 }
 
 func executePolicyOnStore(store *unit.Store, normalized actionrelations.NormalizedWorld, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, budget WorkBudget, token, artifactName, boundaryName string) (SearchRun, error) {
