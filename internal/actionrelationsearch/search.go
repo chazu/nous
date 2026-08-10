@@ -38,6 +38,7 @@ type Result struct {
 	CertificateChecks        int
 	CertificateHits          int
 	SleepPropagations        int
+	HistoryCount             int
 	Edges                    int
 	RootNodeDigest           string
 	RootSubtree              EvidenceObject
@@ -110,6 +111,7 @@ func searchWithEvidenceAdapters(world actionrelations.World, policy Policy, arti
 	search.result.RootNodeDigest = summary.Node.Digest
 	search.result.RootSubtree = summary.Subtree
 	search.result.TerminalSet = summary.TerminalSet
+	search.result.HistoryCount = summary.HistoryCount
 	search.result.CertificateEvidenceBound = authoritative
 	return search.result, nil
 }
@@ -132,6 +134,7 @@ type visitSummary struct {
 	EdgePreorder    []string
 	Subtree         EvidenceObject
 	TerminalSet     EvidenceObject
+	HistoryCount    int
 }
 
 func (s *searcher) visit(state actionrelations.State, remaining []actionrelations.Occurrence, proofs []ProofEntry) (visitSummary, error) {
@@ -176,7 +179,7 @@ func (s *searcher) visit(state actionrelations.State, remaining []actionrelation
 		subtree, _ := BuildSubtreeRoot(node.Digest, nil)
 		s.record(&s.result.TerminalSets, terminalSet)
 		s.record(&s.result.SubtreeRoots, subtree)
-		summary := visitSummary{Node: node, TerminalDigests: []string{terminal.Digest}, Subtree: subtree, TerminalSet: terminalSet}
+		summary := visitSummary{Node: node, TerminalDigests: []string{terminal.Digest}, Subtree: subtree, TerminalSet: terminalSet, HistoryCount: 1}
 		s.memo[node.Digest] = summary
 		return summary, nil
 	}
@@ -189,6 +192,7 @@ func (s *searcher) visit(state actionrelations.State, remaining []actionrelation
 	earlierSubtrees := map[string]string{}
 	var terminals []string
 	var edgePreorder []string
+	historyCount := 0
 	for _, taken := range enabled {
 		takenDigest, _ := taken.Digest()
 		if sleeperSet[takenDigest] {
@@ -254,6 +258,7 @@ func (s *searcher) visit(state actionrelations.State, remaining []actionrelation
 		edgePreorder = append(edgePreorder, edge.Digest)
 		edgePreorder = append(edgePreorder, childSummary.EdgePreorder...)
 		terminals = append(terminals, childSummary.TerminalDigests...)
+		historyCount += childSummary.HistoryCount
 		s.result.Edges++
 		completed, err := BuildCompletedSubtree(node.Digest, takenDigest, childSummary.Subtree, childSummary.TerminalSet)
 		if err != nil {
@@ -275,7 +280,7 @@ func (s *searcher) visit(state actionrelations.State, remaining []actionrelation
 	}
 	s.record(&s.result.TerminalSets, terminalSet)
 	s.record(&s.result.SubtreeRoots, subtree)
-	summary := visitSummary{Node: node, TerminalDigests: slices.Clone(terminals), EdgePreorder: edgePreorder, Subtree: subtree, TerminalSet: terminalSet}
+	summary := visitSummary{Node: node, TerminalDigests: slices.Clone(terminals), EdgePreorder: edgePreorder, Subtree: subtree, TerminalSet: terminalSet, HistoryCount: historyCount}
 	s.memo[node.Digest] = summary
 	return summary, nil
 }

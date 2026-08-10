@@ -52,6 +52,14 @@ func ExecutePolicy(domainsDir string, world actionrelations.World, policy action
 }
 
 func ExecutePolicyWithBudget(domainsDir string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, budget WorkBudget, token string) (SearchRun, error) {
+	return ExecutePolicyContinuing(domainsDir, world, policy, panel, authority, curriculum, worldOrdinal, [12]int{}, budget, token)
+}
+
+// ExecutePolicyContinuing executes an artifact-free policy while carrying the
+// exact lifecycle work from earlier worlds in the same curriculum-policy run.
+// The returned Records and PhysicalWork cover only this world; WorkVector and
+// WorkTotal include initialWork.
+func ExecutePolicyContinuing(domainsDir string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, budget WorkBudget, token string) (SearchRun, error) {
 	if !slices.Contains([]actionrelationsearch.Policy{actionrelationsearch.Complete, actionrelationsearch.Lexical, actionrelationsearch.StaticSleep, actionrelationsearch.DynamicSleep, actionrelationsearch.LearnedNoUse}, policy) {
 		return SearchRun{}, fmt.Errorf("unsupported utility policy %q", policy)
 	}
@@ -67,7 +75,7 @@ func ExecutePolicyWithBudget(domainsDir string, world actionrelations.World, pol
 	if err != nil {
 		return SearchRun{}, err
 	}
-	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, [12]int{}, budget, token, "", "")
+	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, initialWork, budget, token, "", "")
 }
 
 func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, cap int, token string) (SearchRun, error) {
@@ -75,7 +83,7 @@ func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, 
 }
 
 func ExecuteLearnedPolicyWithBudget(store *unit.Store, artifactName, boundaryName string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, budget WorkBudget, token string) (SearchRun, error) {
-	if policy != actionrelationsearch.NousSleep && policy != actionrelationsearch.NoGuardSleep {
+	if policy != actionrelationsearch.NousSleep && policy != actionrelationsearch.NoGuardSleep && policy != actionrelationsearch.LearnedNoUse {
 		return SearchRun{}, fmt.Errorf("unsupported learned utility policy %q", policy)
 	}
 	artifact, boundary := store.Get(artifactName), store.Get(boundaryName)
@@ -144,6 +152,7 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 	runner.result.RootSubtree = summary.subtree
 	runner.result.TerminalSet = summary.terminalSet
 	runner.result.TerminalDigests = slices.Clone(summary.terminals)
+	runner.result.HistoryCount = summary.historyCount
 	if err := actionrelationsearch.VerifyResultEvidence(runner.result); err != nil {
 		session.Abort()
 		return SearchRun{}, err
@@ -196,6 +205,7 @@ type completeVisit struct {
 	edgePreorder []string
 	subtree      actionrelationsearch.EvidenceObject
 	terminalSet  actionrelationsearch.EvidenceObject
+	historyCount int
 }
 
 type completeRunner struct {
@@ -290,7 +300,7 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 		subtree, _ := actionrelationsearch.BuildSubtreeRoot(node.Digest, nil)
 		r.record(&r.result.TerminalSets, terminalSet)
 		r.record(&r.result.SubtreeRoots, subtree)
-		summary := completeVisit{node: node, terminals: []string{terminal.Digest}, subtree: subtree, terminalSet: terminalSet}
+		summary := completeVisit{node: node, terminals: []string{terminal.Digest}, subtree: subtree, terminalSet: terminalSet, historyCount: 1}
 		r.memo[node.Digest] = summary
 		return summary, nil
 	}
@@ -302,6 +312,7 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 	var earlier []actionrelations.Occurrence
 	earlierSubtrees := map[string]string{}
 	var terminals, edgePreorder []string
+	historyCount := 0
 	for _, taken := range enabled {
 		takenDigest, _ := taken.Digest()
 		if sleeperSet[takenDigest] {
@@ -381,6 +392,7 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 		edgePreorder = append(edgePreorder, edge.Digest)
 		edgePreorder = append(edgePreorder, child.edgePreorder...)
 		terminals = append(terminals, child.terminals...)
+		historyCount += child.historyCount
 		r.result.Edges++
 		completed, _ := actionrelationsearch.BuildCompletedSubtree(node.Digest, takenDigest, child.subtree, child.terminalSet)
 		r.record(&r.result.CompletedSubtrees, completed)
@@ -393,7 +405,7 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 	subtree, _ := actionrelationsearch.BuildSubtreeRoot(node.Digest, edgePreorder)
 	r.record(&r.result.TerminalSets, terminalSet)
 	r.record(&r.result.SubtreeRoots, subtree)
-	summary := completeVisit{node: node, terminals: terminals, edgePreorder: edgePreorder, subtree: subtree, terminalSet: terminalSet}
+	summary := completeVisit{node: node, terminals: terminals, edgePreorder: edgePreorder, subtree: subtree, terminalSet: terminalSet, historyCount: historyCount}
 	r.memo[node.Digest] = summary
 	return summary, nil
 }

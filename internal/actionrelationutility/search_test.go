@@ -52,6 +52,27 @@ func TestCompleteUtilityDFSUsesOnlyReservedCUESemantics(t *testing.T) {
 	}
 }
 
+func TestArtifactFreeUtilityCarriesPriorLifecycleAndPhysicalWork(t *testing.T) {
+	world := independentUtilityWorld()
+	initial := [12]int{3, 2}
+	run, err := ExecutePolicyContinuing("../../domains", world, actionrelationsearch.Complete, "development", "authority", 3, 1, initial, WorkBudget{LifecycleCap: 4096, PhysicalCap: 4096, PriorPhysical: 7}, "complete-continuing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := MeterWorkVector(run.Records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range current {
+		if run.WorkVector[index] != initial[index]+current[index] {
+			t.Fatalf("counter %d = %d want %d", index+1, run.WorkVector[index], initial[index]+current[index])
+		}
+	}
+	if run.InitialWork != initial || run.PriorPhysical != 7 || run.WorkTotal != 5+len(run.Records) {
+		t.Fatalf("continuation authority = %+v", run)
+	}
+}
+
 func TestLearnedNousUtilityLoadsFrozenArtifactAndUsesCUEBarrierBeforeSleep(t *testing.T) {
 	session, err := actionrelationacquire.BeginFor("../../domains", "learned-utility", 0, 6, "development", actionrelationexp.PlanCommit)
 	if err != nil {
@@ -96,6 +117,18 @@ func TestLearnedNousUtilityLoadsFrozenArtifactAndUsesCUEBarrierBeforeSleep(t *te
 	}
 	if len(run.Records) == 0 || run.Records[0].Code != 10 || firstPairApplicable < 0 || firstCacheLookup <= firstPairApplicable {
 		t.Fatalf("learned utility ordering applicable=%d cache=%d records=%#v", firstPairApplicable, firstCacheLookup, run.Records)
+	}
+	control, err := ExecuteLearnedPolicy(acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, world, actionrelationsearch.LearnedNoUse, "development", actionrelationexp.PlanCommit, 6, 1, initialWork, 2_000_000, "learned-no-use")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(control.Search.TerminalDigests, complete.TerminalDigests) || control.Search.SleepPropagations != 0 || len(control.Records) == 0 || control.Records[0].Code != 10 {
+		t.Fatalf("learned-no-use did not load the artifact then explore completely: %+v", control.Search)
+	}
+	for _, record := range control.Records[1:] {
+		if slices.Contains([]uint16{9, 15, 18, 21, 25}, record.Code) {
+			t.Fatalf("learned-no-use performed artifact eligibility work %d", record.Code)
+		}
 	}
 }
 

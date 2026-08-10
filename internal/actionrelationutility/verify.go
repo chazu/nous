@@ -115,11 +115,27 @@ func verifyCertificateAuthority(run SearchRun) error {
 	certificates := map[string]verifiedObject{}
 	for digest, object := range objects {
 		switch utilityRowTag(object.row) {
-		case "certificate-cache-row/v3":
-			cacheRows[digest] = object
 		case "local-diamond-certificate/v1":
 			certificates[digest] = object
 		}
+	}
+	// A learned acquisition Store is intentionally reused across all six
+	// worlds (and by learned-no-use). Verify only cache rows named by this
+	// run's journal; unrelated earlier-world evidence remains immutable Store
+	// authority but is not part of this run's operation range.
+	for _, record := range run.Records {
+		if record.Code != 25 && !(record.Code == 18 && record.Status == 3) {
+			continue
+		}
+		if len(record.Outputs) != 1 {
+			return fmt.Errorf("cache operation lacks one row output")
+		}
+		digest := digestBytesText(record.Outputs[0])
+		object, ok := objects[digest]
+		if !ok || utilityRowTag(object.row) != "certificate-cache-row/v3" {
+			return fmt.Errorf("cache operation has unresolved row")
+		}
+		cacheRows[digest] = object
 	}
 	for cacheDigest, cache := range cacheRows {
 		if len(cache.row) != 12 {
