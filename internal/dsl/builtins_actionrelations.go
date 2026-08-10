@@ -2,7 +2,12 @@ package dsl
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 
+	"github.com/chazu/nous/internal/unit"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
@@ -10,16 +15,17 @@ import (
 // none classifies a pair or executes both orders of a diamond.
 func init() {
 	registerVocabularyWords("actionrelations", map[string]builtinFn{
-		"ar-state-valid?":  bARStateValid,
-		"ar-action-valid?": bARActionValid,
-		"ar-action-facts":  bARActionFacts,
-		"ar-applicable?":   bARApplicable,
-		"ar-apply":         bARApply,
-		"ar-state-equal?":  bARStateEqual,
-		"ar-guard-root":    bARGuardRoot,
-		"ar-guard-extend":  bARGuardExtend,
-		"ar-guard-match":   bARGuardMatch,
-		"ar-guard-result":  bARGuardResult,
+		"ar-state-valid?":       bARStateValid,
+		"ar-action-valid?":      bARActionValid,
+		"ar-action-facts":       bARActionFacts,
+		"ar-applicable?":        bARApplicable,
+		"ar-apply":              bARApply,
+		"ar-state-equal?":       bARStateEqual,
+		"ar-guard-root":         bARGuardRoot,
+		"ar-guard-extend":       bARGuardExtend,
+		"ar-candidate-allocate": bARCandidateAllocate,
+		"ar-guard-match":        bARGuardMatch,
+		"ar-guard-result":       bARGuardResult,
 	})
 }
 
@@ -123,23 +129,30 @@ func bARStateEqual(vm *VM) error {
 }
 
 func bARGuardRoot(vm *VM) error {
-	patternValue := vm.pop()
-	if patternValue.Kind() != VString {
+	requestedValue, patternValue := vm.pop(), vm.pop()
+	if patternValue.Kind() != VString || requestedValue.Kind() != VString || vm.Store == nil {
 		vm.push(Nil())
 		return nil
 	}
-	if _, err := actionrelations.ParsePattern([]byte(patternValue.AsString())); err != nil {
+	pattern, err := actionrelations.ParsePattern([]byte(patternValue.AsString()))
+	if err != nil {
 		vm.push(Nil())
 		return nil
 	}
-	data, _ := (actionrelations.Guard{}).CanonicalJSON()
-	vm.push(StringVal(string(data)))
+	guard := actionrelations.Guard{}
+	data, _ := guard.CanonicalJSON()
+	name, err := arStoreCandidate(vm, requestedValue.AsString(), pattern, guard, "", 0)
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(ListVal([]Value{StringVal(string(data)), StringVal(name)}))
 	return nil
 }
 
 func bARGuardExtend(vm *VM) error {
-	polarityValue, atomValue, guardValue := vm.pop(), vm.pop(), vm.pop()
-	if guardValue.Kind() != VString || atomValue.Kind() != VString || polarityValue.Kind() != VBool {
+	requestedValue, ordinalValue, polarityValue, atomValue, guardValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
+	if guardValue.Kind() != VString || atomValue.Kind() != VString || polarityValue.Kind() != VBool || ordinalValue.Kind() != VInt || requestedValue.Kind() != VString || vm.Store == nil {
 		vm.push(Nil())
 		return nil
 	}
@@ -154,8 +167,102 @@ func bARGuardExtend(vm *VM) error {
 		return nil
 	}
 	data, _ := child.CanonicalJSON()
-	vm.push(StringVal(string(data)))
+	parentDigest, _ := guard.Digest()
+	childDigest, _ := child.Digest()
+	edgeWire, _ := json.Marshal([]any{"action-guard-refinement/v1", parentDigest, childDigest, atomValue.AsString(), polarityValue.AsBool(), ordinalValue.AsInt()})
+	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionGuardRefinement", edgeWire, map[string]any{
+		"parentGuard": string(mustCanonicalGuard(guard)), "childGuard": string(data), "atom": atomValue.AsString(), "polarity": polarityValue.AsBool(), "ordinal": ordinalValue.AsInt(),
+	})
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(ListVal([]Value{StringVal(string(data)), StringVal(name)}))
 	return nil
+}
+
+func bARCandidateAllocate(vm *VM) error {
+	requestedValue, ordinalValue, parentValue, guardValue, patternValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
+	if requestedValue.Kind() != VString || ordinalValue.Kind() != VInt || parentValue.Kind() != VString || guardValue.Kind() != VString || patternValue.Kind() != VString || vm.Store == nil {
+		vm.push(Nil())
+		return nil
+	}
+	pattern, patternErr := actionrelations.ParsePattern([]byte(patternValue.AsString()))
+	guard, guardErr := actionrelations.ParseGuard([]byte(guardValue.AsString()))
+	ordinal := ordinalValue.AsInt()
+	if patternErr != nil || guardErr != nil || ordinal < 1 || ordinal > 450 || len(guard.Literals) == 0 {
+		vm.push(Nil())
+		return nil
+	}
+	parent := vm.Store.Get(parentValue.AsString())
+	if parent == nil || !vm.Store.IsA(parent.Name, "ActionGuardCandidate") || parent.GetString("objectDigest") == "" {
+		vm.push(Nil())
+		return nil
+	}
+	name, err := arStoreCandidate(vm, requestedValue.AsString(), pattern, guard, parent.Name, ordinal)
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(name))
+	return nil
+}
+
+func arStoreCandidate(vm *VM, requested string, pattern actionrelations.Pattern, guard actionrelations.Guard, parent string, ordinal int) (string, error) {
+	patternDigest, _ := pattern.Digest()
+	guardDigest, _ := guard.Digest()
+	parentDigest := ""
+	if parent != "" {
+		unit := vm.Store.Get(parent)
+		if unit == nil {
+			return "", fmt.Errorf("missing parent candidate")
+		}
+		parentDigest = unit.GetString("objectDigest")
+	}
+	wire, _ := json.Marshal([]any{"action-guard-candidate/v1", guardDigest, parentDigest, patternDigest, ordinal, len(guard.Literals)})
+	return arStoreCanonical(vm, requested, "ActionGuardCandidate", wire, map[string]any{
+		"pattern": string(mustCanonicalPattern(pattern)), "guard": string(mustCanonicalGuard(guard)), "parentCandidate": parent, "ordinal": ordinal, "literalCount": len(guard.Literals),
+	})
+}
+
+func arStoreCanonical(vm *VM, requested, category string, canonical []byte, slots map[string]any) (string, error) {
+	if requested == "" {
+		return "", fmt.Errorf("empty requested name")
+	}
+	digestBytes := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(digestBytes[:])
+	name := requested
+	if occupied := vm.Store.Get(name); occupied != nil && (occupied.GetString("canonicalObject") != string(canonical) || !vm.Store.IsA(name, category)) {
+		name = requested + "." + digest[:16]
+		if collision := vm.Store.Get(name); collision != nil && (collision.GetString("canonicalObject") != string(canonical) || !vm.Store.IsA(name, category)) {
+			name = requested + "." + digest
+			if vm.Store.Has(name) {
+				return "", fmt.Errorf("content-derived name occupied")
+			}
+		}
+	}
+	if existing := vm.Store.Get(name); existing != nil {
+		return name, nil
+	}
+	u := unit.New(name)
+	u.Set("isA", []string{category, "Anything"})
+	u.Set("canonicalObject", string(canonical))
+	u.Set("objectDigest", digest)
+	for key, value := range slots {
+		u.Set(key, value)
+	}
+	vm.Store.Put(u)
+	vm.NewUnits = append(vm.NewUnits, name)
+	return name, nil
+}
+
+func mustCanonicalPattern(pattern actionrelations.Pattern) []byte {
+	data, _ := pattern.CanonicalJSON()
+	return data
+}
+func mustCanonicalGuard(guard actionrelations.Guard) []byte {
+	data, _ := guard.CanonicalJSON()
+	return data
 }
 
 func bARGuardMatch(vm *VM) error {

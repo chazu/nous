@@ -65,24 +65,52 @@ func TestActionRelationPrimitiveWordsExposeOnlySingleSteps(t *testing.T) {
 func TestActionRelationGuardWordsTraverseOneEdge(t *testing.T) {
 	pattern := actionrelations.Pattern{Kinds: []string{"add", "add"}, Roles: []int{0, -1, 1, -1}}
 	patternJSON, _ := pattern.CanonicalJSON()
-	vm := &VM{stack: []Value{StringVal(string(patternJSON))}}
+	vm := &VM{Store: actionRelationTestStore(), stack: []Value{StringVal(string(patternJSON)), StringVal("AR.Candidate.Root")}}
 	if err := bARGuardRoot(vm); err != nil {
 		t.Fatal(err)
 	}
-	root := vm.pop()
-	if root.Kind() != VString {
+	rootResult := vm.pop()
+	if rootResult.Kind() != VList || len(rootResult.AsList()) != 2 {
+		t.Fatalf("root result=%v", rootResult)
+	}
+	root := rootResult.AsList()[0]
+	rootName := rootResult.AsList()[1]
+	if root.Kind() != VString || rootName.Kind() != VString {
 		t.Fatalf("root=%v", root)
 	}
-	vm.stack = []Value{root, StringVal("read-write-disjoint"), BoolVal(true)}
+	vm.stack = []Value{root, StringVal("read-write-disjoint"), BoolVal(true), IntVal(0), StringVal("AR.Edge.0")}
 	if err := bARGuardExtend(vm); err != nil {
 		t.Fatal(err)
 	}
-	child := vm.pop()
-	if child.Kind() != VString {
-		t.Fatalf("child=%v", child)
+	childResult := vm.pop()
+	if childResult.Kind() != VList || len(childResult.AsList()) != 2 {
+		t.Fatalf("child result=%v", childResult)
 	}
+	child := childResult.AsList()[0]
 	guard, err := actionrelations.ParseGuard([]byte(child.AsString()))
 	if err != nil || len(guard.Literals) != 1 {
 		t.Fatalf("guard=%#v err=%v", guard, err)
+	}
+	vm.stack = []Value{StringVal(string(patternJSON)), child, rootName, IntVal(1), StringVal("AR.Candidate.1")}
+	if err := bARCandidateAllocate(vm); err != nil || vm.pop().Kind() != VString {
+		t.Fatalf("candidate allocate: %v", err)
+	}
+}
+
+func TestActionRelationStoreUsesContentSuffixOnOccupiedName(t *testing.T) {
+	pattern := actionrelations.Pattern{Kinds: []string{"add", "add"}, Roles: []int{0, -1, 1, -1}}
+	patternJSON, _ := pattern.CanonicalJSON()
+	store := actionRelationTestStore()
+	occupied := unit.New("AR.Candidate.Root")
+	occupied.Set("owner", "user")
+	store.Put(occupied)
+	vm := &VM{Store: store, stack: []Value{StringVal(string(patternJSON)), StringVal(occupied.Name)}}
+	if err := bARGuardRoot(vm); err != nil {
+		t.Fatal(err)
+	}
+	result := vm.pop()
+	actual := result.AsList()[1].AsString()
+	if actual == occupied.Name || store.Get(occupied.Name).GetString("owner") != "user" || store.Get(actual).GetString("objectDigest") == "" {
+		t.Fatalf("occupied=%q actual=%q", occupied.Name, actual)
 	}
 }
