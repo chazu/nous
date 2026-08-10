@@ -107,6 +107,42 @@ type LocalFacts struct {
 	TraceLength      int
 }
 
+func ParseLocalFacts(data []byte) (LocalFacts, error) {
+	v, err := decodeOne(data)
+	if err != nil {
+		return LocalFacts{}, err
+	}
+	row, ok := v.([]any)
+	if !ok || len(row) != 14 || row[0] != LocalFactsVersion {
+		return LocalFacts{}, ErrInvalid
+	}
+	stateDigest, a := row[1].(string)
+	occurrenceDigest, b := row[2].(string)
+	kind, c := row[3].(string)
+	primary, d := exactInt(row[4])
+	secondary, e := exactInt(row[5])
+	argumentPresent, f := row[6].(bool)
+	argumentValue, g := exactInt(row[7])
+	symbol, h := row[8].(string)
+	reads, i := intList(row[9])
+	writes, j := intList(row[10])
+	primaryValue, k := exactInt(row[11])
+	secondaryValue, l := exactInt(row[12])
+	traceLength, m := exactInt(row[13])
+	if !(a && b && c && d && e && f && g && h && i && j && k && l && m) {
+		return LocalFacts{}, ErrInvalid
+	}
+	facts := LocalFacts{stateDigest, occurrenceDigest, kind, primary, secondary, argumentPresent, argumentValue, symbol, reads, writes, primaryValue, secondaryValue, traceLength}
+	if err := facts.Validate(); err != nil {
+		return LocalFacts{}, err
+	}
+	canonical, _ := facts.CanonicalJSON()
+	if !bytes.Equal(canonical, data) {
+		return LocalFacts{}, ErrInvalid
+	}
+	return facts, nil
+}
+
 func Facts(state State, occurrence Occurrence) (LocalFacts, error) {
 	if err := state.Validate(); err != nil {
 		return LocalFacts{}, err
@@ -127,6 +163,7 @@ func Facts(state State, occurrence Occurrence) (LocalFacts, error) {
 		Kind: action.Kind, PrimaryRole: primary, SecondaryRole: secondary,
 		PrimaryValue: primaryValue, SecondaryValue: secondaryValue,
 		TraceLength: len(state.Events), Symbol: action.Symbol,
+		ReadRoles: []int{}, WriteRoles: []int{},
 	}
 	switch action.Kind {
 	case "add", "claim", "release":
@@ -157,7 +194,7 @@ func Facts(state State, occurrence Occurrence) (LocalFacts, error) {
 }
 
 func (f LocalFacts) Validate() error {
-	if len(f.StateDigest) != 64 || len(f.OccurrenceDigest) != 64 || !oneString(f.Kind, "add", "set", "transfer", "swap", "claim", "release", "check", "emit") ||
+	if !validDigest(f.StateDigest) || !validDigest(f.OccurrenceDigest) || !oneString(f.Kind, "add", "set", "transfer", "swap", "claim", "release", "check", "emit") ||
 		f.PrimaryRole < -1 || f.PrimaryRole > 2 || f.SecondaryRole < -1 || f.SecondaryRole > 2 ||
 		f.PrimaryValue < -1 || f.PrimaryValue > MaxCellValue || f.SecondaryValue < -1 || f.SecondaryValue > MaxCellValue ||
 		f.TraceLength < 0 || f.TraceLength > MaxEvents {
@@ -172,6 +209,31 @@ func (f LocalFacts) Validate() error {
 	if !validFootprint(f.ReadRoles) || !validFootprint(f.WriteRoles) {
 		return ErrInvalid
 	}
+	action := SemanticAction{Kind: f.Kind, XRole: roleName(f.PrimaryRole), YRole: roleName(f.SecondaryRole), Symbol: f.Symbol}
+	if f.ArgumentPresent {
+		action.N = f.ArgumentValue
+	}
+	if err := action.Validate(); err != nil {
+		return ErrInvalid
+	}
+	var reads, writes []int
+	switch f.Kind {
+	case "add", "claim", "release":
+		reads, writes = []int{f.PrimaryRole}, []int{f.PrimaryRole}
+	case "set":
+		writes = []int{f.PrimaryRole}
+	case "transfer", "swap":
+		reads = sortedUnique(f.PrimaryRole, f.SecondaryRole)
+		writes = slices.Clone(reads)
+	case "check":
+		reads = []int{f.PrimaryRole}
+	case "emit":
+		writes = []int{-2}
+	}
+	wantsArgument := oneString(f.Kind, "add", "set", "transfer", "check")
+	if f.ArgumentPresent != wantsArgument || !slices.Equal(f.ReadRoles, reads) || !slices.Equal(f.WriteRoles, writes) {
+		return ErrInvalid
+	}
 	return nil
 }
 
@@ -181,7 +243,7 @@ func (f LocalFacts) CanonicalJSON() ([]byte, error) {
 	}
 	return json.Marshal([]any{LocalFactsVersion, f.StateDigest, f.OccurrenceDigest, f.Kind,
 		f.PrimaryRole, f.SecondaryRole, f.ArgumentPresent, f.ArgumentValue, f.Symbol,
-		f.ReadRoles, f.WriteRoles, f.PrimaryValue, f.SecondaryValue, f.TraceLength})
+		nonNilInts(f.ReadRoles), nonNilInts(f.WriteRoles), f.PrimaryValue, f.SecondaryValue, f.TraceLength})
 }
 
 func (f LocalFacts) Digest() (string, error) { return digestCanonical(f.CanonicalJSON()) }
@@ -212,6 +274,29 @@ func validFootprint(values []int) bool {
 		}
 	}
 	return true
+}
+
+func intList(value any) ([]int, bool) {
+	raw, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	result := make([]int, len(raw))
+	for index, item := range raw {
+		integer, ok := exactInt(item)
+		if !ok {
+			return nil, false
+		}
+		result[index] = integer
+	}
+	return result, true
+}
+
+func nonNilInts(values []int) []int {
+	if values == nil {
+		return []int{}
+	}
+	return values
 }
 
 func oneString(value string, allowed ...string) bool { return slices.Contains(allowed, value) }

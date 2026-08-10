@@ -65,6 +65,25 @@ func TestEventOrderIsState(t *testing.T) {
 	}
 }
 
+func TestLocalFactsRoundTripUsesEmptyArrays(t *testing.T) {
+	state := twoCellState(0, 1)
+	facts, err := Facts(state, Occurrence{Action: SemanticAction{Kind: "set", XRole: "c0", N: 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := facts.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseLocalFacts(encoded)
+	if err != nil {
+		t.Fatalf("round trip %s: %v", encoded, err)
+	}
+	if parsed.ReadRoles == nil || len(parsed.ReadRoles) != 0 {
+		t.Fatalf("empty read footprint was not an array: %#v", parsed.ReadRoles)
+	}
+}
+
 func twoCellState(a, b int) State {
 	return State{Cells: []Cell{{Name: "c0", Value: a}, {Name: "c1", Value: b}}}
 }

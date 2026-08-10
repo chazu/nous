@@ -29,6 +29,41 @@ type Pattern struct {
 	Roles []int
 }
 
+func ParsePattern(data []byte) (Pattern, error) {
+	v, err := decodeOne(data)
+	if err != nil {
+		return Pattern{}, err
+	}
+	row, ok := v.([]any)
+	if !ok || len(row) != 3 || row[0] != PatternVersion {
+		return Pattern{}, ErrInvalid
+	}
+	rawKinds, ok := row[1].([]any)
+	if !ok {
+		return Pattern{}, ErrInvalid
+	}
+	kinds := make([]string, len(rawKinds))
+	for index, raw := range rawKinds {
+		kinds[index], ok = raw.(string)
+		if !ok {
+			return Pattern{}, ErrInvalid
+		}
+	}
+	roles, ok := intList(row[2])
+	if !ok {
+		return Pattern{}, ErrInvalid
+	}
+	pattern := Pattern{Kinds: kinds, Roles: roles}
+	if err := pattern.Validate(); err != nil {
+		return Pattern{}, err
+	}
+	canonical, _ := pattern.CanonicalJSON()
+	if !bytes.Equal(canonical, data) {
+		return Pattern{}, ErrInvalid
+	}
+	return pattern, nil
+}
+
 func PatternFor(left, right Occurrence) (Pattern, error) {
 	left, right, err := CanonicalPair(left, right)
 	if err != nil {
@@ -78,6 +113,12 @@ func (p Pattern) Validate() error {
 			return ErrInvalid
 		}
 	}
+	for actionIndex, kind := range p.Kinds {
+		primary, secondary := p.Roles[actionIndex*2], p.Roles[actionIndex*2+1]
+		if (kind == "emit") != (primary == -1) || oneString(kind, "transfer", "swap") != (secondary >= 0) || !oneString(kind, "transfer", "swap") && secondary != -1 {
+			return ErrInvalid
+		}
+	}
 	next := 0
 	seen := map[int]bool{}
 	for _, role := range p.Roles {
@@ -116,6 +157,42 @@ type Guard struct {
 	Literals []Literal
 }
 
+func ParseGuard(data []byte) (Guard, error) {
+	v, err := decodeOne(data)
+	if err != nil {
+		return Guard{}, err
+	}
+	row, ok := v.([]any)
+	if !ok || len(row) != 2 || row[0] != GuardVersion {
+		return Guard{}, ErrInvalid
+	}
+	rawLiterals, ok := row[1].([]any)
+	if !ok {
+		return Guard{}, ErrInvalid
+	}
+	guard := Guard{Literals: make([]Literal, len(rawLiterals))}
+	for index, raw := range rawLiterals {
+		pair, ok := raw.([]any)
+		if !ok || len(pair) != 2 {
+			return Guard{}, ErrInvalid
+		}
+		atom, a := pair[0].(string)
+		polarity, b := pair[1].(bool)
+		if !a || !b {
+			return Guard{}, ErrInvalid
+		}
+		guard.Literals[index] = Literal{Atom: atom, Polarity: polarity}
+	}
+	if err := guard.Validate(); err != nil {
+		return Guard{}, err
+	}
+	canonical, _ := guard.CanonicalJSON()
+	if !bytes.Equal(canonical, data) {
+		return Guard{}, ErrInvalid
+	}
+	return guard, nil
+}
+
 func (g Guard) Validate() error {
 	if len(g.Literals) > 2 {
 		return ErrInvalid
@@ -152,6 +229,18 @@ func (g Guard) Parent() (Guard, bool, error) {
 		return Guard{}, false, nil
 	}
 	return Guard{Literals: slices.Clone(g.Literals[:len(g.Literals)-1])}, true, nil
+}
+
+func (g Guard) Extend(literal Literal) (Guard, error) {
+	if err := g.Validate(); err != nil || len(g.Literals) >= 2 || atomRank(literal.Atom) < 0 {
+		return Guard{}, ErrInvalid
+	}
+	child := Guard{Literals: append(slices.Clone(g.Literals), literal)}
+	slices.SortFunc(child.Literals, func(a, b Literal) int { return atomRank(a.Atom) - atomRank(b.Atom) })
+	if err := child.Validate(); err != nil {
+		return Guard{}, err
+	}
+	return child, nil
 }
 
 func (g Guard) Evaluate(left, right LocalFacts) (bool, error) {

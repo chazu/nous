@@ -18,6 +18,10 @@ func TestGuardSpaceAndRefinementTreeAreFrozen(t *testing.T) {
 			t.Fatalf("duplicate guard %s", digest)
 		}
 		digests[digest] = true
+		encoded, _ := guard.CanonicalJSON()
+		if _, err := ParseGuard(encoded); err != nil {
+			t.Fatalf("guard round trip: %v", err)
+		}
 		parent, ok, err := guard.Parent()
 		if err != nil {
 			t.Fatal(err)
@@ -81,5 +85,9 @@ func TestPatternErasesRolesButPreservesAliasTopology(t *testing.T) {
 	}
 	if len(pattern.Roles) != 4 || pattern.Roles[0] != 0 || pattern.Roles[1] != 1 || pattern.Roles[2] != 2 || pattern.Roles[3] != 0 {
 		t.Fatalf("unexpected alias topology %#v", pattern)
+	}
+	encoded, _ := pattern.CanonicalJSON()
+	if _, err := ParsePattern(encoded); err != nil {
+		t.Fatalf("pattern round trip: %v", err)
 	}
 }

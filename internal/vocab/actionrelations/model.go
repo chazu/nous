@@ -562,3 +562,11 @@ func digestCanonical(data []byte, err error) (string, error) {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:]), nil
 }
+
+func validDigest(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && value == string(bytes.ToLower([]byte(value)))
+}
