@@ -401,7 +401,7 @@ func bARGuardMatch(vm *VM) error {
 	guardDigest, _ := guard.Digest()
 	wire, _ := json.Marshal([]any{"action-guard-literal-row/v1", guardDigest, observation.GetString("objectDigest"), leftUnit.GetString("objectDigest"), rightUnit.GetString("objectDigest"), literal.Atom, literal.Polarity, result})
 	name, storeErr := arStoreCanonical(vm, requestedValue.AsString(), "ActionGuardLiteralRow", wire, map[string]any{
-		"guardDigest": guardDigest, "observationDigest": observation.GetString("objectDigest"), "atom": literal.Atom, "polarity": literal.Polarity, "result": result,
+		"guardDigest": guardDigest, "observationDigest": observation.GetString("objectDigest"), "aFactsDigest": leftUnit.GetString("objectDigest"), "bFactsDigest": rightUnit.GetString("objectDigest"), "atom": literal.Atom, "polarity": literal.Polarity, "result": result,
 	})
 	if storeErr != nil {
 		vm.push(Nil())

@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 
@@ -57,10 +58,23 @@ func bARObservationAssemble(vm *VM) error {
 	wire := []any{"action-pair-observation/v1", stateDigest, aDigest, bDigest,
 		aInitial.objectDigest, bInitial.objectDigest, optionalDigest(bAfterA), optionalDigest(aAfterB), optionalString(abDigest), optionalString(baDigest), label}
 	canonical, _ := json.Marshal(wire)
+	operationRows := []string{aInitial.objectDigest, bInitial.objectDigest}
+	for _, row := range []*arTransitionEvidence{bAfterA, aAfterB} {
+		if row != nil {
+			operationRows = append(operationRows, row.objectDigest)
+		}
+	}
+	if equalityValue.AsString() != "" {
+		operationRows = append(operationRows, vm.Store.Get(equalityValue.AsString()).GetString("objectDigest"))
+	}
+	operationWire, _ := json.Marshal([]any{"action-observation-operation-root/v1", operationRows})
+	operationDigest := sha256.Sum256(operationWire)
+	operationRoot := hex.EncodeToString(operationDigest[:])
 	name, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationObservation", canonical, map[string]any{
 		"stateDigest": stateDigest, "aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "label": label,
 		"aInitialRow": aInitial.name, "bInitialRow": bInitial.name, "bAfterARow": optionalName(bAfterA), "aAfterBRow": optionalName(aAfterB), "equalityRow": equalityValue.AsString(),
 		"pattern": string(patternJSON), "patternDigest": patternDigest, "bothInitiallyApplicable": aInitial.outcome == "applied" && bInitial.outcome == "applied", "traceLength": len(state.Events),
+		"operationRoot": operationRoot,
 	})
 	if err != nil {
 		vm.push(Nil())

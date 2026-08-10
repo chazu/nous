@@ -61,8 +61,6 @@ func Execute(domainsDir, token string) (Run, error) {
 	trainingBytes, _ := json.Marshal(training)
 	trainingDigest := sha256.Sum256(trainingBytes)
 	experiment.Set("semanticTrainingRoot", hex.EncodeToString(trainingDigest[:]))
-	viewDigest := sha256.Sum256(append([]byte("actionrelation-view-evidence/v1\x00"), trainingBytes...))
-	experiment.Set("viewEvidenceRoot", hex.EncodeToString(viewDigest[:]))
 	store.Put(experiment)
 	for _, testCase := range training {
 		name := fmt.Sprintf("AR.Training.%s.%02d", token, testCase.Ordinal)
@@ -83,11 +81,18 @@ func Execute(domainsDir, token string) (Run, error) {
 	if err := eng.VM.InitError(); err != nil {
 		return Run{}, err
 	}
-	for _, slot := range []string{"arObserve", "arAllocate", "arEvaluate", "arFinalize"} {
+	for _, slot := range []string{"arObserve", "arAllocate", "arEvaluate"} {
 		eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: experiment.Name, SlotName: slot})
 		if eng.LastError != nil {
 			return Run{}, fmt.Errorf("%s: %w", slot, eng.LastError)
 		}
+	}
+	if err := installPresentationViews(store, experiment, training); err != nil {
+		return Run{}, err
+	}
+	eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: experiment.Name, SlotName: "arFinalize"})
+	if eng.LastError != nil {
+		return Run{}, fmt.Errorf("arFinalize: %w", eng.LastError)
 	}
 	meterRecords, err := dsl.ActionRelationMeterSnapshot(meterToken)
 	if err != nil {
@@ -104,4 +109,49 @@ func Execute(domainsDir, token string) (Run, error) {
 		return run, fmt.Errorf("acquisition cardinality mismatch: %+v", run)
 	}
 	return run, nil
+}
+
+func installPresentationViews(store *unit.Store, experiment *unit.Unit, training []actionrelationfixturecore.Case) error {
+	observations := experiment.GetStrings("observationUnits")
+	if len(observations) != len(training) {
+		return fmt.Errorf("view observation count mismatch")
+	}
+	var names, digests []string
+	for index, testCase := range training {
+		views, err := actionrelationfixturecore.Views(testCase)
+		if err != nil {
+			return err
+		}
+		observation := store.Get(observations[index])
+		if observation == nil {
+			return fmt.Errorf("missing observation %d", index)
+		}
+		for _, view := range views {
+			wire, _ := json.Marshal([]any{"action-view-evidence/v1", observation.GetString("objectDigest"), view.Digest, view.ProofDigest})
+			digestBytes := sha256.Sum256(wire)
+			digest := hex.EncodeToString(digestBytes[:])
+			name := fmt.Sprintf("AR.View.%s.%02d.%d", experiment.Name, index, view.Bank)
+			u := unit.New(name)
+			u.Set("isA", []string{"ActionPresentationViewEvidence", "Anything"})
+			u.Set("canonicalObject", string(wire))
+			u.Set("objectDigest", digest)
+			u.Set("observationDigest", observation.GetString("objectDigest"))
+			u.Set("viewDigest", view.Digest)
+			u.Set("normalizationProofDigest", view.ProofDigest)
+			u.Set("semanticWorldDigest", view.SemanticWorldDigest)
+			u.Set("originalStateDigest", view.OriginalStateDigest)
+			u.Set("originalActionsRoot", view.OriginalActionsRoot)
+			u.Set("occurrenceMapRoot", view.OccurrenceMapRoot)
+			u.Set("bank", view.Bank)
+			u.Set("cellCount", view.CellCount)
+			u.Set("actionCount", view.ActionCount)
+			store.Put(u)
+			names, digests = append(names, name), append(digests, digest)
+		}
+	}
+	rootWire, _ := json.Marshal([]any{"action-view-evidence-root/v1", digests})
+	rootDigest := sha256.Sum256(rootWire)
+	experiment.Set("viewEvidenceUnits", names)
+	experiment.Set("viewEvidenceRoot", hex.EncodeToString(rootDigest[:]))
+	return nil
 }

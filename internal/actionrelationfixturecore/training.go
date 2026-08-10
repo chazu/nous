@@ -42,6 +42,7 @@ func Training() ([]Case, error) {
 
 func positiveCases() ([]Case, error) {
 	var cases []Case
+	seen := map[string]bool{}
 	for left := 0; left <= 3 && len(cases) < 8; left++ {
 		for right := 0; right <= 3 && len(cases) < 8; right++ {
 			for _, aN := range []int{-2, -1, 1, 2} {
@@ -54,6 +55,11 @@ func positiveCases() ([]Case, error) {
 						return nil, err
 					}
 					if label == "commutes" {
+						key := string(candidate.State) + string(candidate.AOccurrence) + string(candidate.BOccurrence)
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
 						cases = append(cases, candidate)
 						if len(cases) == 8 {
 							return cases, nil
@@ -84,6 +90,9 @@ func negativeCases() ([]Case, error) {
 						continue
 					}
 					if contains(wanted, label) {
+						if label == "conflicts" && actions[left].Kind == "emit" && actions[right].Kind == "emit" {
+							continue
+						}
 						if _, exists := found[label]; !exists {
 							found[label] = candidate
 						}
@@ -112,15 +121,19 @@ func negativeCases() ([]Case, error) {
 }
 
 func makeCase(state actionrelations.State, left, right actionrelations.SemanticAction) (Case, string, error) {
-	occurrences, err := actionrelations.AssignOccurrences([]actionrelations.SemanticAction{left, right})
+	world := actionrelations.World{State: state, Actions: []actionrelations.Action{
+		{Name: "aa", Kind: left.Kind, X: left.XRole, Y: left.YRole, N: left.N, Symbol: left.Symbol},
+		{Name: "ab", Kind: right.Kind, X: right.XRole, Y: right.YRole, N: right.N, Symbol: right.Symbol},
+	}}
+	normalized, err := world.Normalize()
 	if err != nil {
 		return Case{}, "", err
 	}
-	a, b, err := actionrelations.CanonicalPair(occurrences[0], occurrences[1])
+	a, b, err := actionrelations.CanonicalPair(normalized.Occurrences[0], normalized.Occurrences[1])
 	if err != nil || a == b {
 		return Case{}, "", actionrelations.ErrInvalid
 	}
-	stateJSON, _ := state.CanonicalJSON()
+	stateJSON, _ := normalized.State.CanonicalJSON()
 	aJSON, _ := a.CanonicalJSON()
 	bJSON, _ := b.CanonicalJSON()
 	observation, err := actionrelationoracle.Observe(stateJSON, mustActionJSON(a.Action), mustActionJSON(b.Action))
