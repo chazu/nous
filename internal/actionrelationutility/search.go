@@ -19,20 +19,28 @@ import (
 )
 
 type SearchRun struct {
-	RunID        string
-	WorldDigest  string
-	Policy       actionrelationsearch.Policy
-	Store        *unit.Store
-	Search       actionrelationsearch.Result
-	Records      []dsl.ActionRelationMeterRecord
-	Transcript   actionrelationexp.TranscriptBundle
-	RunRoot      actionrelationexp.OperationRoot
-	Terminal     string
-	WorkTerminal WorkTerminal
-	WorkVector   [12]int
-	InitialWork  [12]int
-	WorkTotal    int
-	ProofRoots   []actionrelationexp.OperationRoot
+	RunID         string
+	WorldDigest   string
+	Policy        actionrelationsearch.Policy
+	Store         *unit.Store
+	Search        actionrelationsearch.Result
+	Records       []dsl.ActionRelationMeterRecord
+	Transcript    actionrelationexp.TranscriptBundle
+	RunRoot       actionrelationexp.OperationRoot
+	Terminal      string
+	WorkTerminal  WorkTerminal
+	WorkVector    [12]int
+	InitialWork   [12]int
+	WorkTotal     int
+	ProofRoots    []actionrelationexp.OperationRoot
+	PhysicalWork  int
+	PriorPhysical int
+}
+
+type WorkBudget struct {
+	LifecycleCap  int
+	PhysicalCap   int
+	PriorPhysical int
 }
 
 func ExecuteComplete(domainsDir string, world actionrelations.World, panel, authority string, curriculum, worldOrdinal, cap int, token string) (SearchRun, error) {
@@ -40,6 +48,10 @@ func ExecuteComplete(domainsDir string, world actionrelations.World, panel, auth
 }
 
 func ExecutePolicy(domainsDir string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal, cap int, token string) (SearchRun, error) {
+	return ExecutePolicyWithBudget(domainsDir, world, policy, panel, authority, curriculum, worldOrdinal, WorkBudget{LifecycleCap: cap, PhysicalCap: physicalPolicyCap(policy)}, token)
+}
+
+func ExecutePolicyWithBudget(domainsDir string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, budget WorkBudget, token string) (SearchRun, error) {
 	if !slices.Contains([]actionrelationsearch.Policy{actionrelationsearch.Complete, actionrelationsearch.Lexical, actionrelationsearch.StaticSleep, actionrelationsearch.DynamicSleep, actionrelationsearch.LearnedNoUse}, policy) {
 		return SearchRun{}, fmt.Errorf("unsupported utility policy %q", policy)
 	}
@@ -55,10 +67,14 @@ func ExecutePolicy(domainsDir string, world actionrelations.World, policy action
 	if err != nil {
 		return SearchRun{}, err
 	}
-	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, [12]int{}, cap, token, "", "")
+	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, [12]int{}, budget, token, "", "")
 }
 
 func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, cap int, token string) (SearchRun, error) {
+	return ExecuteLearnedPolicyWithBudget(store, artifactName, boundaryName, world, policy, panel, authority, curriculum, worldOrdinal, initialWork, WorkBudget{LifecycleCap: cap, PhysicalCap: physicalPolicyCap(policy)}, token)
+}
+
+func ExecuteLearnedPolicyWithBudget(store *unit.Store, artifactName, boundaryName string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, budget WorkBudget, token string) (SearchRun, error) {
 	if policy != actionrelationsearch.NousSleep && policy != actionrelationsearch.NoGuardSleep {
 		return SearchRun{}, fmt.Errorf("unsupported learned utility policy %q", policy)
 	}
@@ -70,16 +86,27 @@ func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, 
 	if err != nil {
 		return SearchRun{}, err
 	}
-	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, initialWork, cap, token, artifactName, boundaryName)
+	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, initialWork, budget, token, artifactName, boundaryName)
 }
 
-func executePolicyOnStore(store *unit.Store, normalized actionrelations.NormalizedWorld, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, cap int, token, artifactName, boundaryName string) (SearchRun, error) {
+func executePolicyOnStore(store *unit.Store, normalized actionrelations.NormalizedWorld, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, budget WorkBudget, token, artifactName, boundaryName string) (SearchRun, error) {
+	initialTotal := sumWorkVector(initialWork)
+	if budget.LifecycleCap < 1 || budget.PhysicalCap < 1 || budget.PriorPhysical < 0 || budget.PriorPhysical >= budget.PhysicalCap {
+		return SearchRun{}, fmt.Errorf("invalid utility work budget")
+	}
+	effectiveCap := initialTotal + budget.PhysicalCap - budget.PriorPhysical
+	if budget.LifecycleCap < effectiveCap {
+		effectiveCap = budget.LifecycleCap
+	}
+	if initialTotal >= effectiveCap {
+		return SearchRun{}, fmt.Errorf("utility budget exhausted before run start")
+	}
 	worldDigest, _ := normalized.Digest()
 	runID, err := actionrelationledger.UtilityRunID(panel, authority, curriculum, string(policy), worldOrdinal, worldDigest)
 	if err != nil {
 		return SearchRun{}, err
 	}
-	session, err := BeginSession(store, runID, "utility-search:"+token, sumWorkVector(initialWork), cap)
+	session, err := BeginSession(store, runID, "utility-search:"+token, initialTotal, effectiveCap)
 	if err != nil {
 		return SearchRun{}, err
 	}
@@ -106,7 +133,7 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 				session.Abort()
 				return SearchRun{}, terminalErr
 			}
-			return finishSearchRun(session, runID, worldDigest, policy, runner.result, runner.proofRoots, "budget-exhausted", terminal)
+			return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, "budget-exhausted", terminal)
 		}
 		session.Abort()
 		return SearchRun{}, err
@@ -121,10 +148,10 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 		session.Abort()
 		return SearchRun{}, err
 	}
-	return finishSearchRun(session, runID, worldDigest, policy, runner.result, runner.proofRoots, "completed", WorkTerminal{})
+	return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, "completed", WorkTerminal{})
 }
 
-func finishSearchRun(session *Session, runID, worldDigest string, policy actionrelationsearch.Policy, result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
+func finishSearchRun(session *Session, runID, worldDigest string, policy actionrelationsearch.Policy, priorPhysical int, result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
 	initialWork := session.InitialWork
 	records, err := session.Close()
 	if err != nil {
@@ -145,11 +172,22 @@ func finishSearchRun(session *Session, runID, worldDigest string, policy actionr
 	for index := range workVector {
 		workVector[index] += initialWork[index]
 	}
-	run := SearchRun{RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots)}
+	run := SearchRun{RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots), PhysicalWork: len(records), PriorPhysical: priorPhysical}
 	if err := VerifySearchRun(run); err != nil {
 		return SearchRun{}, err
 	}
 	return run, nil
+}
+
+func physicalPolicyCap(policy actionrelationsearch.Policy) int {
+	switch policy {
+	case actionrelationsearch.DynamicSleep, actionrelationsearch.NousSleep:
+		return 8192
+	case actionrelationsearch.Complete, actionrelationsearch.Lexical, actionrelationsearch.StaticSleep, actionrelationsearch.NoGuardSleep, actionrelationsearch.LearnedNoUse:
+		return 4096
+	default:
+		return 0
+	}
 }
 
 type completeVisit struct {

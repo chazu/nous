@@ -104,6 +104,13 @@ func BeginFamilyScopeFor(domainsDir, token string, family int, scope, panel, aut
 	experiment.Set("expectedObservationCount", len(training))
 	meterToken := "arm:" + token
 	operationCodes := acquisitionOperationSchedule(training, scope)
+	physicalCap := 24_000
+	if scope == "no-guard" {
+		physicalCap = 192
+	}
+	if len(operationCodes) > physicalCap {
+		return nil, fmt.Errorf("acquisition operation schedule exceeds physical cap")
+	}
 	reservationNames := make([]string, len(operationCodes))
 	meterPlan := make([]dsl.ActionRelationMeterPlanEntry, len(operationCodes))
 	for sequence, code := range operationCodes {

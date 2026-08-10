@@ -199,6 +199,24 @@ func TestUtilityBudgetExhaustionRejectsWholeBlockAndEmitsKind49(t *testing.T) {
 	}
 }
 
+func TestUtilityPhysicalCapIsSeparateAndCumulativeAcrossWorlds(t *testing.T) {
+	run, err := ExecutePolicyWithBudget(
+		"../../domains", independentUtilityWorld(), actionrelationsearch.Complete,
+		"development", "authority", 8, 1,
+		WorkBudget{LifecycleCap: 2_000_000, PhysicalCap: 4096, PriorPhysical: 4095},
+		"physical-budget",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Terminal != "budget-exhausted" || run.PhysicalWork != 1 || run.PriorPhysical+run.PhysicalWork != 4096 || run.WorkTotal != 1 {
+		t.Fatalf("physical-cap run=%+v", run)
+	}
+	if len(run.Records) != 1 || run.Records[0].Code != 19 {
+		t.Fatalf("physical-cap records=%#v", run.Records)
+	}
+}
+
 func independentUtilityWorld() actionrelations.World {
 	return actionrelations.World{
 		State: actionrelations.State{Cells: []actionrelations.Cell{{Name: "x", Value: 0}, {Name: "y", Value: 0}, {Name: "z", Value: 0}}},

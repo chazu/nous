@@ -45,6 +45,9 @@ func VerifySearchRun(run SearchRun) error {
 	if vector != run.WorkVector || sumWorkVector(vector) != run.WorkTotal {
 		return fmt.Errorf("utility work vector does not conserve")
 	}
+	if run.PhysicalWork != len(run.Records) || run.PriorPhysical < 0 || run.PriorPhysical+run.PhysicalWork > physicalPolicyCap(run.Policy) {
+		return fmt.Errorf("utility physical work cap does not conserve")
+	}
 	return verifyCertificateAuthority(run)
 }
 
