@@ -26,16 +26,22 @@ type StructuralAttribution struct {
 }
 
 type StructuralOutputMap struct {
-	Curriculum int
-	RunIDs     []string
-	File       *EvidenceFile
-	Canonical  []byte
-	Digest     string
-	RunRoots   map[string]string
+	EvidenceRoot string
+	Curriculum   int
+	RunIDs       []string
+	File         *EvidenceFile
+	Canonical    []byte
+	Digest       string
+	RunRoots     map[string]string
 }
 
 func BuildStructuralOutputMap(curriculum int, runIDs []string, attributions []StructuralAttribution) (StructuralOutputMap, error) {
-	if curriculum < 0 || len(runIDs) != 44 || !sortedUniqueRunIDs(runIDs) {
+	root, _ := EvidenceRoot("development")
+	return BuildStructuralOutputMapAt(root, curriculum, runIDs, attributions)
+}
+
+func BuildStructuralOutputMapAt(evidenceRoot string, curriculum int, runIDs []string, attributions []StructuralAttribution) (StructuralOutputMap, error) {
+	if !validEvidenceRoot(evidenceRoot) || curriculum < 0 || len(runIDs) != 44 || !sortedUniqueRunIDs(runIDs) {
 		return StructuralOutputMap{}, fmt.Errorf("invalid structural-map run authority")
 	}
 	runOrdinal := make(map[string]int, len(runIDs))
@@ -75,7 +81,7 @@ func BuildStructuralOutputMap(curriculum int, runIDs []string, attributions []St
 	if len(keys) > 4192 {
 		return StructuralOutputMap{}, fmt.Errorf("structural map exceeds row cap")
 	}
-	result := StructuralOutputMap{Curriculum: curriculum, RunIDs: slices.Clone(runIDs), RunRoots: map[string]string{}}
+	result := StructuralOutputMap{EvidenceRoot: evidenceRoot, Curriculum: curriculum, RunIDs: slices.Clone(runIDs), RunRoots: map[string]string{}}
 	rootRows := make([]any, len(keys))
 	var shardRows []any
 	if len(keys) > 0 {
@@ -92,7 +98,7 @@ func BuildStructuralOutputMap(curriculum int, runIDs []string, attributions []St
 			copy(row[34:40], bitmap[:])
 			rootRows[index] = []any{item.kind, item.digest, hex.EncodeToString(bitmap[:])}
 		}
-		path := fmt.Sprintf("E/packs/curriculum-%04d/structural-output-map.arsm", curriculum)
+		path := fmt.Sprintf("%s/packs/curriculum-%04d/structural-output-map.arsm", evidenceRoot, curriculum)
 		file := EvidenceFile{Path: path, Mode: "100644", Data: data}
 		result.File = &file
 		first, last := keys[0], keys[len(keys)-1]
@@ -119,7 +125,7 @@ func VerifyStructuralOutputMap(value StructuralOutputMap) error {
 	if err != nil {
 		return err
 	}
-	rebuilt, err := BuildStructuralOutputMap(value.Curriculum, value.RunIDs, rebuiltAttributions)
+	rebuilt, err := BuildStructuralOutputMapAt(value.EvidenceRoot, value.Curriculum, value.RunIDs, rebuiltAttributions)
 	if err != nil || rebuilt.Digest != value.Digest || !bytes.Equal(rebuilt.Canonical, value.Canonical) || !equalOptionalFile(rebuilt.File, value.File) || !mapsEqual(rebuilt.RunRoots, value.RunRoots) {
 		return fmt.Errorf("structural output map mismatch")
 	}
@@ -209,7 +215,8 @@ func BuildRunEvidencePack(panel, authority string, records []RunEvidenceRecord) 
 	runIDsRoot, _ := actionrelationwire.RootDigest("expected-run-ids", runIDRows)
 	transcriptRoot, _ := actionrelationwire.RootDigest("transcript-rows", transcriptRows)
 	resultRoot, _ := actionrelationwire.RootDigest("result-rows", resultRows)
-	path := "E/packs/run-evidence-0000.arrv"
+	evidenceRoot, _ := EvidenceRoot(panel)
+	path := evidenceRoot + "/packs/run-evidence-0000.arrv"
 	file := EvidenceFile{Path: path, Mode: "100644", Data: data}
 	first, last := records[0].RunID, records[len(records)-1].RunID
 	canonical, _ := json.Marshal([]any{"actionrelation-run-evidence-root/v1", panel, authority, RunEvidenceRowSize, len(records), runIDsRoot, transcriptRoot, resultRoot, []any{[]any{0, path, first, last, len(records), len(data), shaHex(data)}}})

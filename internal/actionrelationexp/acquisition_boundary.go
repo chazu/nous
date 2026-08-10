@@ -35,6 +35,7 @@ var acquisitionTableCategories = map[string]bool{
 }
 
 type AcquisitionBoundary struct {
+	EvidenceRoot   string
 	Curriculum     int
 	Scope          string
 	Preboundary    ObjectBundle
@@ -44,6 +45,11 @@ type AcquisitionBoundary struct {
 }
 
 func BuildAcquisitionBoundary(evidence AcquisitionEvidence, curriculum int, scope string) (AcquisitionBoundary, error) {
+	root, _ := EvidenceRoot("development")
+	return BuildAcquisitionBoundaryAt(root, evidence, curriculum, scope)
+}
+
+func BuildAcquisitionBoundaryAt(evidenceRoot string, evidence AcquisitionEvidence, curriculum int, scope string) (AcquisitionBoundary, error) {
 	if evidence.Run.Store == nil || evidence.Run.Experiment == "" || curriculum < 0 || scope != "nous" && scope != "no-guard" {
 		return AcquisitionBoundary{}, fmt.Errorf("invalid acquisition boundary input")
 	}
@@ -52,7 +58,7 @@ func BuildAcquisitionBoundary(evidence AcquisitionEvidence, curriculum int, scop
 		return AcquisitionBoundary{}, err
 	}
 	class := "acquisition-" + scope + "-preboundary"
-	preboundary, err := BuildObjectBundle(ObjectScope{Curriculum: curriculum, Class: class}, records)
+	preboundary, err := BuildObjectBundleAt(evidenceRoot, ObjectScope{Curriculum: curriculum, Class: class}, records)
 	if err != nil {
 		return AcquisitionBoundary{}, err
 	}
@@ -89,11 +95,11 @@ func BuildAcquisitionBoundary(evidence AcquisitionEvidence, curriculum int, scop
 	experiment := evidence.Run.Store.Get(evidence.Run.Experiment)
 	experiment.Set("storeBoundaryUnit", name)
 	experiment.Set("storeBoundaryDigest", digest)
-	return AcquisitionBoundary{Curriculum: curriculum, Scope: scope, Preboundary: preboundary, Canonical: wire, BoundaryDigest: digest, BoundaryUnit: name}, nil
+	return AcquisitionBoundary{EvidenceRoot: evidenceRoot, Curriculum: curriculum, Scope: scope, Preboundary: preboundary, Canonical: wire, BoundaryDigest: digest, BoundaryUnit: name}, nil
 }
 
 func (b AcquisitionBoundary) Verify(evidence AcquisitionEvidence) error {
-	if b.Curriculum < 0 || b.Scope != "nous" && b.Scope != "no-guard" || b.BoundaryDigest != shaHex(b.Canonical) || VerifyObjectBundle(b.Preboundary) != nil || ValidateObject(35, b.Canonical) != nil {
+	if !validEvidenceRoot(b.EvidenceRoot) || b.Curriculum < 0 || b.Scope != "nous" && b.Scope != "no-guard" || b.BoundaryDigest != shaHex(b.Canonical) || VerifyObjectBundle(b.Preboundary) != nil || ValidateObject(35, b.Canonical) != nil {
 		return fmt.Errorf("invalid acquisition boundary")
 	}
 	var row []json.RawMessage
@@ -131,7 +137,7 @@ func (b AcquisitionBoundary) Verify(evidence AcquisitionEvidence) error {
 	if err != nil {
 		return err
 	}
-	fresh, err := BuildObjectBundle(b.Preboundary.Scope, records)
+	fresh, err := BuildObjectBundleAt(b.EvidenceRoot, b.Preboundary.Scope, records)
 	if err != nil || fresh.IndexRoot.ObjectSetRoot != b.Preboundary.IndexRoot.ObjectSetRoot {
 		return fmt.Errorf("post-boundary Store mutation")
 	}

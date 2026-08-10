@@ -81,6 +81,11 @@ func BuildAcquisitionTables(run actionrelationacquire.Run) (map[uint16]TablePack
 }
 
 func BuildAcquisitionTableBundles(run actionrelationacquire.Run, curriculum int) (map[uint16]TableBundle, error) {
+	root, _ := EvidenceRoot("development")
+	return BuildAcquisitionTableBundlesAt(root, run, curriculum)
+}
+
+func BuildAcquisitionTableBundlesAt(evidenceRoot string, run actionrelationacquire.Run, curriculum int) (map[uint16]TableBundle, error) {
 	tables, err := BuildAcquisitionTables(run)
 	if err != nil {
 		return nil, err
@@ -99,7 +104,7 @@ func BuildAcquisitionTableBundles(run actionrelationacquire.Run, curriculum int)
 			start := len(TableHeader) + ordinal*recordSize
 			records[ordinal] = table.Bytes[start : start+recordSize]
 		}
-		bundle, err := BuildTableBundle(curriculum, scope, kind, records)
+		bundle, err := BuildTableBundleAt(evidenceRoot, curriculum, scope, kind, records)
 		if err != nil {
 			return nil, fmt.Errorf("kind %d: %w", kind, err)
 		}
@@ -138,7 +143,12 @@ func completeAcquisitionFor(session *actionrelationacquire.Session, curriculum i
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}
-	tables, err := BuildAcquisitionTableBundles(partial, curriculum)
+	evidenceRoot, rootErr := EvidenceRoot(panel)
+	if rootErr != nil {
+		session.Abort()
+		return AcquisitionEvidence{}, rootErr
+	}
+	tables, err := BuildAcquisitionTableBundlesAt(evidenceRoot, partial, curriculum)
 	if err != nil {
 		session.Abort()
 		return AcquisitionEvidence{}, err
@@ -211,7 +221,7 @@ func completeAcquisitionFor(session *actionrelationacquire.Session, curriculum i
 	if runID != session.RunID {
 		return AcquisitionEvidence{}, fmt.Errorf("acquisition run authority changed after reservation")
 	}
-	transcript, err := BuildAcquisitionTranscript(run, tables, runID)
+	transcript, err := BuildAcquisitionTranscriptAt(evidenceRoot, run, tables, runID)
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}
@@ -223,7 +233,7 @@ func completeAcquisitionFor(session *actionrelationacquire.Session, curriculum i
 			return AcquisitionEvidence{}, fmt.Errorf("rebuild observation table %d: %w", ordinal, err)
 		}
 	}
-	tables[105], err = BuildTableBundle(curriculum, scope, 105, observationRecords)
+	tables[105], err = BuildTableBundleAt(evidenceRoot, curriculum, scope, 105, observationRecords)
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}

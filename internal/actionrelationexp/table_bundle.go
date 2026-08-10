@@ -13,8 +13,13 @@ type TableBundle struct {
 }
 
 func BuildTableBundle(curriculum int, scope string, kind uint16, records [][]byte) (TableBundle, error) {
+	root, _ := EvidenceRoot("development")
+	return BuildTableBundleAt(root, curriculum, scope, kind, records)
+}
+
+func BuildTableBundleAt(evidenceRoot string, curriculum int, scope string, kind uint16, records [][]byte) (TableBundle, error) {
 	recordSize, ok := tableRecordSizes[kind]
-	if !ok || curriculum < 0 || scope != "nous" && scope != "no-guard" || len(records) == 0 {
+	if !validEvidenceRoot(evidenceRoot) || !ok || curriculum < 0 || scope != "nous" && scope != "no-guard" || len(records) == 0 {
 		return TableBundle{}, fmt.Errorf("invalid table bundle identity")
 	}
 	maxRows := (MaximumPackBytes - len(TableHeader)) / recordSize
@@ -26,7 +31,7 @@ func BuildTableBundle(curriculum int, scope string, kind uint16, records [][]byt
 			return TableBundle{}, err
 		}
 		ordinal := len(bundle.Files)
-		path := fmt.Sprintf("E/packs/curriculum-%04d/acquisition-%s/table-%03d-%04d.artb", curriculum, scope, kind, ordinal)
+		path := fmt.Sprintf("%s/packs/curriculum-%04d/acquisition-%s/table-%03d-%04d.artb", evidenceRoot, curriculum, scope, kind, ordinal)
 		bundle.Files = append(bundle.Files, EvidenceFile{Path: path, Mode: "100644", Data: pack.Bytes})
 		bundle.Manifest.Shards = append(bundle.Manifest.Shards, TableShard{
 			PackOrdinal: ordinal, RelativePath: path, FirstOrdinal: pack.FirstOrdinal, LastOrdinal: pack.LastOrdinal,

@@ -200,7 +200,11 @@ func executeAcquisition(domainsDir, panel, authority string, curriculum, family 
 	if err != nil {
 		return Acquisition{}, err
 	}
-	boundary, err := actionrelationexp.BuildAcquisitionBoundary(evidence, curriculum, scope)
+	evidenceRoot, err := actionrelationexp.EvidenceRoot(panel)
+	if err != nil {
+		return Acquisition{}, err
+	}
+	boundary, err := actionrelationexp.BuildAcquisitionBoundaryAt(evidenceRoot, evidence, curriculum, scope)
 	if err != nil {
 		return Acquisition{}, err
 	}

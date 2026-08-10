@@ -100,7 +100,12 @@ type builtCall struct {
 }
 
 func BuildTranscript(runID string, calls []ChargedCall) (TranscriptBundle, error) {
-	if !runIDText(runID) || len(calls) == 0 {
+	root, _ := EvidenceRoot("development")
+	return BuildTranscriptAt(root, runID, calls)
+}
+
+func BuildTranscriptAt(evidenceRoot, runID string, calls []ChargedCall) (TranscriptBundle, error) {
+	if !validEvidenceRoot(evidenceRoot) || !runIDText(runID) || len(calls) == 0 {
 		return TranscriptBundle{}, fmt.Errorf("invalid transcript identity/count")
 	}
 	runRaw, _ := hex.DecodeString(runID)
@@ -159,10 +164,10 @@ func BuildTranscript(runID string, calls []ChargedCall) (TranscriptBundle, error
 			copy(detail[128+index*32:160+index*32], output[:])
 		}
 	}
-	return packTranscript(runID, built)
+	return packTranscript(evidenceRoot, runID, built)
 }
 
-func packTranscript(runID string, calls []builtCall) (TranscriptBundle, error) {
+func packTranscript(evidenceRoot, runID string, calls []builtCall) (TranscriptBundle, error) {
 	bundle := TranscriptBundle{RunID: runID}
 	var journalShards, inputShards, detailShards []TranscriptShard
 	for first := 0; first < len(calls); {
@@ -201,9 +206,9 @@ func packTranscript(runID string, calls []builtCall) (TranscriptBundle, error) {
 			bundle.CallIDs = append(bundle.CallIDs, hex.EncodeToString(calls[index].callID[:]))
 			bundle.EnvelopeDigests = append(bundle.EnvelopeDigests, hex.EncodeToString(calls[index].envelopeDigest[:]))
 		}
-		journalPath := fmt.Sprintf("E/packs/runs/%s/journal-%04d.arjr", runID, ordinal)
-		inputPath := fmt.Sprintf("E/packs/runs/%s/input-%04d.arin", runID, ordinal)
-		detailPath := fmt.Sprintf("E/packs/runs/%s/detail-%04d.arcd", runID, ordinal)
+		journalPath := fmt.Sprintf("%s/packs/runs/%s/journal-%04d.arjr", evidenceRoot, runID, ordinal)
+		inputPath := fmt.Sprintf("%s/packs/runs/%s/input-%04d.arin", evidenceRoot, runID, ordinal)
+		detailPath := fmt.Sprintf("%s/packs/runs/%s/detail-%04d.arcd", evidenceRoot, runID, ordinal)
 		bundle.JournalFiles = append(bundle.JournalFiles, EvidenceFile{Path: journalPath, Mode: "100644", Data: journal})
 		bundle.InputFiles = append(bundle.InputFiles, EvidenceFile{Path: inputPath, Mode: "100644", Data: input})
 		bundle.DetailFiles = append(bundle.DetailFiles, EvidenceFile{Path: detailPath, Mode: "100644", Data: detail})

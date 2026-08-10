@@ -19,6 +19,7 @@ import (
 )
 
 type SearchRun struct {
+	EvidenceRoot      string
 	RunID             string
 	WorldDigest       string
 	Policy            actionrelationsearch.Policy
@@ -103,6 +104,10 @@ func ExecuteLearnedPolicyWithBudget(store *unit.Store, artifactName, boundaryNam
 }
 
 func executePolicyOnStore(store *unit.Store, normalized actionrelations.NormalizedWorld, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, budget WorkBudget, token, artifactName, boundaryName string) (SearchRun, error) {
+	evidenceRoot, err := actionrelationexp.EvidenceRoot(panel)
+	if err != nil {
+		return SearchRun{}, err
+	}
 	initialTotal := sumWorkVector(initialWork)
 	if budget.LifecycleCap < 1 || budget.PhysicalCap < 1 || budget.PriorPhysical < 0 || budget.PriorPhysical >= budget.PhysicalCap {
 		return SearchRun{}, fmt.Errorf("invalid utility work budget")
@@ -146,7 +151,7 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 				session.Abort()
 				return SearchRun{}, terminalErr
 			}
-			return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, runner.structural, "budget-exhausted", terminal)
+			return finishSearchRun(evidenceRoot, session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, runner.structural, "budget-exhausted", terminal)
 		}
 		session.Abort()
 		return SearchRun{}, err
@@ -162,16 +167,16 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 		session.Abort()
 		return SearchRun{}, err
 	}
-	return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, runner.structural, "completed", WorkTerminal{})
+	return finishSearchRun(evidenceRoot, session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, runner.structural, "completed", WorkTerminal{})
 }
 
-func finishSearchRun(session *Session, runID, worldDigest string, policy actionrelationsearch.Policy, priorPhysical int, result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, extraStructural []actionrelationexp.ObjectRecord, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
+func finishSearchRun(evidenceRoot string, session *Session, runID, worldDigest string, policy actionrelationsearch.Policy, priorPhysical int, result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, extraStructural []actionrelationexp.ObjectRecord, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
 	initialWork := session.InitialWork
 	records, err := session.Close()
 	if err != nil {
 		return SearchRun{}, err
 	}
-	transcript, err := BuildTranscript(session.Store, runID, records)
+	transcript, err := BuildTranscriptAt(evidenceRoot, session.Store, runID, records)
 	if err != nil {
 		return SearchRun{}, err
 	}
@@ -190,7 +195,7 @@ func finishSearchRun(session *Session, runID, worldDigest string, policy actionr
 	if err != nil {
 		return SearchRun{}, err
 	}
-	run := SearchRun{RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots), PhysicalWork: len(records), PriorPhysical: priorPhysical, StructuralObjects: structural}
+	run := SearchRun{EvidenceRoot: evidenceRoot, RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots), PhysicalWork: len(records), PriorPhysical: priorPhysical, StructuralObjects: structural}
 	if err := VerifySearchRun(run); err != nil {
 		return SearchRun{}, err
 	}

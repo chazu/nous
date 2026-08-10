@@ -27,7 +27,7 @@ func VerifySearchRun(run SearchRun) error {
 	} else if err := verifyWorkTerminal(run); err != nil {
 		return err
 	}
-	rebuiltTranscript, err := BuildTranscript(run.Store, run.RunID, run.Records)
+	rebuiltTranscript, err := BuildTranscriptAt(run.EvidenceRoot, run.Store, run.RunID, run.Records)
 	if err != nil || actionrelationexp.VerifyTranscript(run.Transcript) != nil || !reflect.DeepEqual(rebuiltTranscript, run.Transcript) {
 		return fmt.Errorf("utility transcript does not rebuild")
 	}

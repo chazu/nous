@@ -23,6 +23,11 @@ func AcquisitionRunID(panel, authority string, curriculum int, scope string) (st
 }
 
 func BuildAcquisitionTranscript(run actionrelationacquire.Run, tables map[uint16]TableBundle, runID string) (AcquisitionTranscript, error) {
+	root, _ := EvidenceRoot("development")
+	return BuildAcquisitionTranscriptAt(root, run, tables, runID)
+}
+
+func BuildAcquisitionTranscriptAt(evidenceRoot string, run actionrelationacquire.Run, tables map[uint16]TableBundle, runID string) (AcquisitionTranscript, error) {
 	if run.Store == nil || run.Experiment == "" || !runIDText(runID) {
 		return AcquisitionTranscript{}, fmt.Errorf("invalid acquisition transcript input")
 	}
@@ -78,7 +83,7 @@ func BuildAcquisitionTranscript(run actionrelationacquire.Run, tables map[uint16
 			return AcquisitionTranscript{}, fmt.Errorf("table %d charged-output coverage %d want %d", kind, translator.ordinals[kind], len(tables[kind].LeafDigests))
 		}
 	}
-	transcript, err := BuildTranscript(runID, calls)
+	transcript, err := BuildTranscriptAt(evidenceRoot, runID, calls)
 	if err != nil {
 		return AcquisitionTranscript{}, err
 	}

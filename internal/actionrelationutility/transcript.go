@@ -14,6 +14,11 @@ import (
 )
 
 func BuildTranscript(store *unit.Store, runID string, records []dsl.ActionRelationMeterRecord) (actionrelationexp.TranscriptBundle, error) {
+	root, _ := actionrelationexp.EvidenceRoot("development")
+	return BuildTranscriptAt(root, store, runID, records)
+}
+
+func BuildTranscriptAt(evidenceRoot string, store *unit.Store, runID string, records []dsl.ActionRelationMeterRecord) (actionrelationexp.TranscriptBundle, error) {
 	if store == nil {
 		return actionrelationexp.TranscriptBundle{}, fmt.Errorf("missing utility Store")
 	}
@@ -28,7 +33,7 @@ func BuildTranscript(store *unit.Store, runID string, records []dsl.ActionRelati
 		}
 		calls[index] = call
 	}
-	return actionrelationexp.BuildTranscript(runID, calls)
+	return actionrelationexp.BuildTranscriptAt(evidenceRoot, runID, calls)
 }
 
 func (s *Session) OperationRoot(firstSequence int) (actionrelationexp.OperationRoot, error) {

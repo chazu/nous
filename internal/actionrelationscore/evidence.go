@@ -34,6 +34,10 @@ func BuildCurriculumEvidence(generated actionrelationfixture.GeneratedAttempt, s
 	if scored.Nous.Boundary.Verify(scored.Nous.Evidence) != nil || scored.NoGuard.Boundary.Verify(scored.NoGuard.Evidence) != nil {
 		return result, fmt.Errorf("invalid acquisition preboundary")
 	}
+	evidenceRoot, err := actionrelationexp.EvidenceRoot(scored.Panel)
+	if err != nil {
+		return result, err
+	}
 	result.NousPreboundary, result.NoGuardPreboundary = scored.Nous.Boundary.Preboundary, scored.NoGuard.Boundary.Preboundary
 
 	runIDs := []string{scored.Nous.Evidence.Transcript.RunID, scored.NoGuard.Evidence.Transcript.RunID}
@@ -94,14 +98,14 @@ func BuildCurriculumEvidence(generated actionrelationfixture.GeneratedAttempt, s
 		slices.Sort(row.RunIDs)
 		attributionRows = append(attributionRows, row)
 	}
-	structuralMap, err := actionrelationexp.BuildStructuralOutputMap(scored.Curriculum, runIDs, attributionRows)
+	structuralMap, err := actionrelationexp.BuildStructuralOutputMapAt(evidenceRoot, scored.Curriculum, runIDs, attributionRows)
 	if err != nil {
 		return result, err
 	}
 	result.StructuralMap = structuralMap
 
 	utilityRecords = uniqueObjectRecords(utilityRecords)
-	result.Utility, err = actionrelationexp.BuildObjectBundle(actionrelationexp.ObjectScope{Curriculum: scored.Curriculum, Class: "utility"}, utilityRecords)
+	result.Utility, err = actionrelationexp.BuildObjectBundleAt(evidenceRoot, actionrelationexp.ObjectScope{Curriculum: scored.Curriculum, Class: "utility"}, utilityRecords)
 	if err != nil {
 		return result, fmt.Errorf("utility object bundle: %w", err)
 	}
@@ -109,7 +113,7 @@ func BuildCurriculumEvidence(generated actionrelationfixture.GeneratedAttempt, s
 	if err != nil {
 		return result, err
 	}
-	result.Authority, err = actionrelationexp.BuildObjectBundle(actionrelationexp.ObjectScope{Curriculum: scored.Curriculum, Class: "authority"}, authorityRecords)
+	result.Authority, err = actionrelationexp.BuildObjectBundleAt(evidenceRoot, actionrelationexp.ObjectScope{Curriculum: scored.Curriculum, Class: "authority"}, authorityRecords)
 	if err != nil {
 		return result, fmt.Errorf("authority object bundle: %w", err)
 	}

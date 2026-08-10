@@ -2,6 +2,7 @@ package actionrelationscore
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/chazu/nous/internal/actionrelationexp"
@@ -61,6 +62,17 @@ func TestDevelopmentCurriculumExecutesExactAcquisitionAndSixWorldPolicyRows(t *t
 	}
 	if len(evidence.RunEvidence) != 44 || len(evidence.Transcripts) != 44 {
 		t.Fatalf("evidence cardinalities runs=%d transcripts=%d", len(evidence.RunEvidence), len(evidence.Transcripts))
+	}
+	wantRoot, _ := actionrelationexp.EvidenceRoot("development")
+	for _, path := range []string{
+		evidence.NousPreboundary.ObjectFiles[0].Path,
+		result.Nous.Evidence.Tables[101].Files[0].Path,
+		evidence.Transcripts[result.Nous.Evidence.Transcript.RunID].JournalFiles[0].Path,
+		evidence.StructuralMap.File.Path,
+	} {
+		if !strings.HasPrefix(path, wantRoot+"/") {
+			t.Fatalf("evidence path %q is outside canonical panel root %q", path, wantRoot)
+		}
 	}
 }
 

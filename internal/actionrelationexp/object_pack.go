@@ -168,11 +168,16 @@ type packedObject struct {
 }
 
 func BuildObjectBundle(scope ObjectScope, records []ObjectRecord) (ObjectBundle, error) {
-	return buildObjectBundle(scope, records, MaximumPackBytes, MaximumIndexRows, MaximumIndexBytes)
+	root, _ := EvidenceRoot("development")
+	return BuildObjectBundleAt(root, scope, records)
 }
 
-func buildObjectBundle(scope ObjectScope, records []ObjectRecord, maxPackBytes, maxIndexRows, maxIndexBytes int) (ObjectBundle, error) {
-	if err := scope.validate(); err != nil || len(records) == 0 || maxPackBytes <= len(ObjectHeader)+4 || maxIndexRows < 1 || maxIndexBytes < len(IndexHeader)+ObjectIndexRowBytes {
+func BuildObjectBundleAt(evidenceRoot string, scope ObjectScope, records []ObjectRecord) (ObjectBundle, error) {
+	return buildObjectBundle(evidenceRoot, scope, records, MaximumPackBytes, MaximumIndexRows, MaximumIndexBytes)
+}
+
+func buildObjectBundle(evidenceRoot string, scope ObjectScope, records []ObjectRecord, maxPackBytes, maxIndexRows, maxIndexBytes int) (ObjectBundle, error) {
+	if !validEvidenceRoot(evidenceRoot) || scope.validate() != nil || len(records) == 0 || maxPackBytes <= len(ObjectHeader)+4 || maxIndexRows < 1 || maxIndexBytes < len(IndexHeader)+ObjectIndexRowBytes {
 		return ObjectBundle{}, fmt.Errorf("invalid object bundle shape")
 	}
 	objects := make([]packedObject, len(records))
@@ -217,7 +222,7 @@ func buildObjectBundle(scope ObjectScope, records []ObjectRecord, maxPackBytes, 
 			copy(data[offset:], objects[index].bytes)
 			offset += len(objects[index].bytes)
 		}
-		path := fmt.Sprintf("E/packs/curriculum-%04d/%s/object-%04d.arop", scope.Curriculum, scope.Class, packOrdinal)
+		path := fmt.Sprintf("%s/packs/curriculum-%04d/%s/object-%04d.arop", evidenceRoot, scope.Curriculum, scope.Class, packOrdinal)
 		digest := sha256.Sum256(data)
 		objectFiles = append(objectFiles, EvidenceFile{Path: path, Mode: "100644", Data: data})
 		objectShards = append(objectShards, ObjectPackShard{PackOrdinal: packOrdinal, Path: path, FirstDigest: objects[first].digest, LastDigest: objects[last-1].digest, RecordCount: last - first, ByteLength: len(data), PackDigest: hex.EncodeToString(digest[:])})
@@ -261,7 +266,7 @@ func buildObjectBundle(scope ObjectScope, records []ObjectRecord, maxPackBytes, 
 			binary.BigEndian.PutUint16(row[46:48], objects[index].pack)
 		}
 		ordinal := len(indexFiles)
-		path := fmt.Sprintf("E/packs/curriculum-%04d/%s/index-%04d.arix", scope.Curriculum, scope.Class, ordinal)
+		path := fmt.Sprintf("%s/packs/curriculum-%04d/%s/index-%04d.arix", evidenceRoot, scope.Curriculum, scope.Class, ordinal)
 		digest := sha256.Sum256(data)
 		indexFiles = append(indexFiles, EvidenceFile{Path: path, Mode: "100644", Data: data})
 		indexShards = append(indexShards, IndexShard{ShardOrdinal: ordinal, Path: path, FirstDigest: objects[first].digest, LastDigest: objects[last-1].digest, RowCount: last - first, ByteLength: len(data), PackDigest: hex.EncodeToString(digest[:])})
@@ -272,6 +277,16 @@ func buildObjectBundle(scope ObjectScope, records []ObjectRecord, maxPackBytes, 
 		return ObjectBundle{}, err
 	}
 	return ObjectBundle{Scope: scope, ObjectFiles: objectFiles, IndexFiles: indexFiles, ObjectRoot: objectRoot, IndexRoot: indexRoot}, nil
+}
+
+func validEvidenceRoot(root string) bool {
+	for _, panel := range []string{"development", "validation", "locked"} {
+		want, _ := EvidenceRoot(panel)
+		if root == want {
+			return true
+		}
+	}
+	return false
 }
 
 func ValidateObject(kind uint16, data []byte) error {
