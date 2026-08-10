@@ -1,6 +1,7 @@
 package actionrelationfixture
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -119,13 +120,25 @@ func validateDrawContext(context DrawContext) error {
 		}
 	case "locked":
 		seed, ok := context.CurriculumSeed.(string)
-		if !digest(context.Authority) || !ok || !digest(seed) {
+		wantSeed, err := LockedCurriculumSeed(context.Authority, context.Curriculum)
+		if err != nil || !ok || seed != wantSeed {
 			return fmt.Errorf("invalid locked draw authority")
 		}
 	default:
 		return fmt.Errorf("invalid draw panel")
 	}
 	return nil
+}
+
+func LockedCurriculumSeed(authority string, curriculum int) (string, error) {
+	key, err := hex.DecodeString(authority)
+	if err != nil || len(key) != 32 || hex.EncodeToString(key) != authority || curriculum < 0 {
+		return "", fmt.Errorf("invalid locked root authority")
+	}
+	preimage, _ := json.Marshal([]any{"actionrelation-locked-curriculum/v1", curriculum})
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(preimage)
+	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
 func digest(value string) bool {

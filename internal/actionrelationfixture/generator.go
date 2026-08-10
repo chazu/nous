@@ -14,6 +14,7 @@ type GeneratedAttempt struct {
 	Curriculum        Curriculum
 	Truth             CurriculumTruth
 	Ledger            AttemptLedger
+	AttemptLedgers    []AttemptLedger
 	Fixture           CurriculumFixture
 }
 
@@ -42,6 +43,7 @@ func GenerateAttempt(context DrawContext, prior []AttemptLedger) (GeneratedAttem
 		ledger, closeErr := meter.Close()
 		if closeErr == nil {
 			result.Ledger = ledger
+			result.AttemptLedgers = append(append([]AttemptLedger(nil), prior...), ledger)
 		}
 		if closeErr != nil {
 			return result, fmt.Errorf("%v; close rejected attempt: %w", cause, closeErr)
@@ -116,6 +118,7 @@ func GenerateAttempt(context DrawContext, prior []AttemptLedger) (GeneratedAttem
 		return result, fmt.Errorf("accepted attempt crossed curriculum generator work cap")
 	}
 	ledgers := append(append([]AttemptLedger(nil), prior...), result.Ledger)
+	result.AttemptLedgers = ledgers
 	result.Fixture, err = assembleCurriculumFixture(context, result.Curriculum, result.Truth, ledgers, result.TrainingAuthority)
 	if err != nil {
 		return result, err
