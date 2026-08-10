@@ -11,7 +11,7 @@ func TestV3ReportUsesExactRefsRatiosAndStageClassification(t *testing.T) {
 	}
 	refs := ReportAuthority{
 		PlanReview: ref("plan"), ImplementationReview: ref("implementation"), BuildAuthority: ref("build"),
-		Competence: ref("competence"), FixtureRoot: ref("fixture"), CurriculumRowsRoot: ref("rows"), EvidencePayload: ref("payload"),
+		Competence: ref("competence"), FixtureRoot: ref("fixture"), CurriculumRowsRoot: testDigest("rows"), EvidencePayload: ref("payload"),
 	}
 	gates := MechanicalGates{true, true, true, true, true, true, true, true}
 	inference := Inference{

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"strings"
 
 	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationwire"
@@ -13,30 +11,7 @@ import (
 
 const MaximumReportBytes = 14 * 1024 * 1024
 
-type AuthorityRef struct {
-	Path   string
-	Digest string
-	Mode   string
-}
-
-func (r AuthorityRef) Wire() []any { return []any{r.Path, r.Digest, r.Mode} }
-
-func (r AuthorityRef) Verify() error {
-	if r.Path == "" || len(r.Path) > 192 || filepath.IsAbs(r.Path) || strings.Contains(r.Path, "\\") || !digestText(r.Digest) || r.Mode != "100644" {
-		return fmt.Errorf("invalid authority reference")
-	}
-	for _, part := range strings.Split(r.Path, "/") {
-		if part == "" || part == "." || part == ".." {
-			return fmt.Errorf("unsafe authority reference")
-		}
-		for _, character := range part {
-			if character > 127 || !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._-", character)) {
-				return fmt.Errorf("unsafe authority path character")
-			}
-		}
-	}
-	return nil
-}
+type AuthorityRef = actionrelationexp.AuthorityRef
 
 type MechanicalGates struct {
 	AuthorityClosure       bool
@@ -64,7 +39,7 @@ type ReportAuthority struct {
 	Competence           AuthorityRef
 	FixtureRoot          AuthorityRef
 	RunningReceipt       *AuthorityRef
-	CurriculumRowsRoot   AuthorityRef
+	CurriculumRowsRoot   string
 	EvidencePayload      AuthorityRef
 }
 
@@ -114,7 +89,7 @@ func BuildReport(panel, authority string, refs ReportAuthority, gates Mechanical
 	}
 	report.Canonical, _ = json.Marshal([]any{
 		"actionrelation-report/v3", panel, authority, manifestDigest, refs.PlanReview.Wire(), refs.ImplementationReview.Wire(),
-		refs.BuildAuthority.Wire(), refs.Competence.Wire(), refs.FixtureRoot.Wire(), running, refs.CurriculumRowsRoot.Wire(),
+		refs.BuildAuthority.Wire(), refs.Competence.Wire(), refs.FixtureRoot.Wire(), running, refs.CurriculumRowsRoot,
 		gates.Wire(), inference.PrimarySearchRatio.Wire(), inference.LifecycleRatio.Wire(), amortization,
 		[]any{inference.ConfidenceInterval[0].Wire(), inference.ConfidenceInterval[1].Wire()}, inference.RandomizationP.Wire(),
 		inference.SavingCoverage.Wire(), inference.Power.Wire(), classification, refs.EvidencePayload.Wire(),
@@ -130,10 +105,13 @@ func VerifyReport(report Report) error {
 	if report.Panel != "development" && report.Panel != "validation" && report.Panel != "locked" || !digestText(report.ManifestDigest) || report.ManifestDigest != digest([]byte(actionrelationexp.PreregisteredManifestJSON)) || len(report.Canonical) > MaximumReportBytes || report.Digest != digest(report.Canonical) {
 		return fmt.Errorf("invalid report identity")
 	}
-	for _, ref := range []AuthorityRef{report.Refs.PlanReview, report.Refs.ImplementationReview, report.Refs.BuildAuthority, report.Refs.Competence, report.Refs.FixtureRoot, report.Refs.CurriculumRowsRoot, report.Refs.EvidencePayload} {
+	for _, ref := range []AuthorityRef{report.Refs.PlanReview, report.Refs.ImplementationReview, report.Refs.BuildAuthority, report.Refs.Competence, report.Refs.FixtureRoot, report.Refs.EvidencePayload} {
 		if err := ref.Verify(); err != nil {
 			return err
 		}
+	}
+	if !digestText(report.Refs.CurriculumRowsRoot) {
+		return fmt.Errorf("invalid curriculum-policy rows root")
 	}
 	if report.Panel == "development" {
 		if report.Refs.RunningReceipt != nil {
@@ -165,7 +143,7 @@ func BuildReportCanonical(report Report) ([]byte, error) {
 	return json.Marshal([]any{
 		"actionrelation-report/v3", report.Panel, report.Authority, report.ManifestDigest,
 		report.Refs.PlanReview.Wire(), report.Refs.ImplementationReview.Wire(), report.Refs.BuildAuthority.Wire(), report.Refs.Competence.Wire(),
-		report.Refs.FixtureRoot.Wire(), running, report.Refs.CurriculumRowsRoot.Wire(), report.MechanicalGates.Wire(),
+		report.Refs.FixtureRoot.Wire(), running, report.Refs.CurriculumRowsRoot, report.MechanicalGates.Wire(),
 		report.Inference.PrimarySearchRatio.Wire(), report.Inference.LifecycleRatio.Wire(), amortization,
 		[]any{report.Inference.ConfidenceInterval[0].Wire(), report.Inference.ConfidenceInterval[1].Wire()}, report.Inference.RandomizationP.Wire(),
 		report.Inference.SavingCoverage.Wire(), report.Inference.Power.Wire(), report.Classification, report.Refs.EvidencePayload.Wire(),

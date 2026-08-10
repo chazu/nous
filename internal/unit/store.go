@@ -2,7 +2,6 @@ package unit
 
 import (
 	"encoding/json"
-	"reflect"
 	"sort"
 	"sync"
 )
@@ -19,69 +18,6 @@ func NewStore() *Store {
 	return &Store{
 		units:    make(map[string]*Unit),
 		inverses: make(map[string]string),
-	}
-}
-
-// Clone returns an independent in-memory copy of the Store. Unit names and
-// slot value types are preserved, including the registered inverse relation
-// table, but subsequent unit and collection mutations cannot affect the
-// source Store.
-func (s *Store) Clone() *Store {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	clone := NewStore()
-	for name, source := range s.units {
-		target := New(name)
-		for slot, value := range source.Slots {
-			target.Slots[slot] = cloneSlotValue(reflect.ValueOf(value)).Interface()
-		}
-		clone.units[name] = target
-	}
-	for slot, inverse := range s.inverses {
-		clone.inverses[slot] = inverse
-	}
-	return clone
-}
-
-func cloneSlotValue(value reflect.Value) reflect.Value {
-	if !value.IsValid() {
-		return reflect.Zero(reflect.TypeOf((*any)(nil)).Elem())
-	}
-	switch value.Kind() {
-	case reflect.Interface:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.New(value.Type()).Elem()
-		result.Set(cloneSlotValue(value.Elem()))
-		return result
-	case reflect.Map:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeMapWithSize(value.Type(), value.Len())
-		iterator := value.MapRange()
-		for iterator.Next() {
-			result.SetMapIndex(cloneSlotValue(iterator.Key()), cloneSlotValue(iterator.Value()))
-		}
-		return result
-	case reflect.Slice:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(cloneSlotValue(value.Index(index)))
-		}
-		return result
-	case reflect.Array:
-		result := reflect.New(value.Type()).Elem()
-		for index := 0; index < value.Len(); index++ {
-			result.Index(index).Set(cloneSlotValue(value.Index(index)))
-		}
-		return result
-	default:
-		return value
 	}
 }
 

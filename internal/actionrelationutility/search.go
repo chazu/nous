@@ -94,7 +94,7 @@ func ExecuteLearnedPolicyWithBudget(store *unit.Store, artifactName, boundaryNam
 	// Acquisition is frozen at the boundary. Utility executes in an isolated
 	// copy so charged and structural search evidence cannot mutate the
 	// acquisition Store or enter its preboundary object set.
-	utilityStore := store.Clone()
+	utilityStore := cloneUtilityStore(store)
 	normalized, err := world.Normalize()
 	if err != nil {
 		return SearchRun{}, err

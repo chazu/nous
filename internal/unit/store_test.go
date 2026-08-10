@@ -47,32 +47,6 @@ func TestStoreEnumerationIsSorted(t *testing.T) {
 	}
 }
 
-func TestStoreCloneIsIndependentAndPreservesInverses(t *testing.T) {
-	s := NewStore()
-	left := New("Left")
-	left.Set("isA", []string{"Anything"})
-	left.Set("nested", map[string]any{"values": []string{"a", "b"}})
-	right := New("Right")
-	s.Put(left)
-	s.Put(right)
-	s.RegisterInverse("peer", "peerOf")
-
-	clone := s.Clone()
-	clone.Get("Left").GetStrings("isA")[0] = "Changed"
-	clone.Get("Left").GetMap("nested")["values"].([]string)[0] = "changed"
-	clone.SetSlot("Left", "peer", "Right")
-
-	if got := s.Get("Left").GetStrings("isA"); !reflect.DeepEqual(got, []string{"Anything"}) {
-		t.Fatalf("clone changed source slice: %v", got)
-	}
-	if got := s.Get("Left").GetMap("nested")["values"]; !reflect.DeepEqual(got, []string{"a", "b"}) {
-		t.Fatalf("clone changed source nested value: %v", got)
-	}
-	if got := clone.Get("Right").GetStrings("peerOf"); !reflect.DeepEqual(got, []string{"Left"}) {
-		t.Fatalf("clone lost inverse registry: %v", got)
-	}
-}
-
 func TestStoreDelete(t *testing.T) {
 	s := NewStore()
 	s.Put(New("A"))
