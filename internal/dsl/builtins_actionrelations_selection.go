@@ -83,22 +83,34 @@ func bARCandidateResult(vm *VM) error {
 }
 
 func bARCloseGuardSearch(vm *VM) error {
-	requestedValue, winnersValue, resultsValue := vm.pop(), vm.pop(), vm.pop()
-	if requestedValue.Kind() != VString || winnersValue.Kind() != VList || resultsValue.Kind() != VList || vm.Store == nil || len(resultsValue.AsList()) != 451 || len(winnersValue.AsList()) == 0 {
+	requestedValue, winnerLeavesValue, evaluationRootsValue, edgeRootValue, candidateLeavesValue, winnersValue, resultsValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
+	if requestedValue.Kind() != VString || winnerLeavesValue.Kind() != VList || evaluationRootsValue.Kind() != VList || edgeRootValue.Kind() != VString || candidateLeavesValue.Kind() != VList || winnersValue.Kind() != VList || resultsValue.Kind() != VList || vm.Store == nil || len(resultsValue.AsList()) != 451 || len(candidateLeavesValue.AsList()) != 451 || len(winnersValue.AsList()) == 0 || len(winnerLeavesValue.AsList()) != len(winnersValue.AsList()) || len(evaluationRootsValue.AsList()) != 2 || !actionrelationsDigest(edgeRootValue.AsString()) {
 		vm.push(Nil())
 		return nil
 	}
 	resultNames := valuesToStrings(resultsValue.AsList())
 	winnerNames := valuesToStrings(winnersValue.AsList())
+	candidateLeaves := valuesToStrings(candidateLeavesValue.AsList())
+	winnerLeaves := valuesToStrings(winnerLeavesValue.AsList())
+	evaluationRoots := valuesToStrings(evaluationRootsValue.AsList())
+	for _, digest := range append(append(append([]string{}, candidateLeaves...), winnerLeaves...), evaluationRoots...) {
+		if !actionrelationsDigest(digest) {
+			vm.push(Nil())
+			return nil
+		}
+	}
 	maxPositive, minLiterals := -1, 3
-	resultDigests := make([]string, len(resultNames))
 	for ordinal, name := range resultNames {
 		result := vm.Store.Get(name)
 		if result == nil || !vm.Store.IsA(name, "ActionGuardCandidateResult") || result.GetInt("ordinal") != ordinal {
 			vm.push(Nil())
 			return nil
 		}
-		resultDigests[ordinal] = result.GetString("objectDigest")
+		candidate := vm.Store.Get(result.GetString("candidate"))
+		if candidate == nil || candidate.GetString("tableLeafDigest") != candidateLeaves[ordinal] {
+			vm.push(Nil())
+			return nil
+		}
 		if result.GetBool("eligible") {
 			positive, literals := result.GetInt("positiveCoverage"), result.GetInt("literalCount")
 			if positive > maxPositive || positive == maxPositive && literals < minLiterals {
@@ -117,13 +129,16 @@ func bARCloseGuardSearch(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	winnerDigests := make([]string, len(winnerNames))
 	for index, name := range winnerNames {
-		winnerDigests[index] = vm.Store.Get(name).GetString("objectDigest")
+		result := vm.Store.Get(name)
+		if result == nil || result.GetInt("ordinal") < 0 || result.GetInt("ordinal") >= len(candidateLeaves) || result.GetString("tableLeafDigest") != winnerLeaves[index] {
+			vm.push(Nil())
+			return nil
+		}
 	}
-	wire, _ := json.Marshal([]any{"action-guard-search-barrier/v1", resultDigests, winnerDigests, maxPositive, minLiterals})
+	wire, _ := json.Marshal([]any{"action-guard-search-barrier/v1", candidateLeaves, edgeRootValue.AsString(), evaluationRoots, winnerLeaves, "completed"})
 	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionGuardSearchBarrier", wire, map[string]any{
-		"candidateResults": resultNames, "winnerResults": winnerNames, "maximumPositiveCoverage": maxPositive, "minimumLiteralCount": minLiterals,
+		"candidateResults": resultNames, "winnerResults": winnerNames, "candidateLeafDigests": candidateLeaves, "edgeTableRoot": edgeRootValue.AsString(), "evaluationTableRoots": evaluationRoots, "winnerLeafDigests": winnerLeaves, "maximumPositiveCoverage": maxPositive, "minimumLiteralCount": minLiterals, "status": "completed",
 	})
 	if err != nil {
 		vm.push(Nil())

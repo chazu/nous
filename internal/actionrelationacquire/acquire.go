@@ -34,10 +34,25 @@ type Run struct {
 	MeterRecords     []dsl.ActionRelationMeterRecord
 }
 
-func Execute(domainsDir, token string) (Run, error) {
+type EvidenceRoots struct {
+	CandidateLeaves      []string
+	EdgeTableRoot        string
+	EvaluationTableRoots []string
+	WinnerLeaves         []string
+}
+
+type Session struct {
+	Store      *unit.Store
+	Experiment string
+	engine     *engine.Engine
+	meterToken string
+	closed     bool
+}
+
+func Begin(domainsDir, token string) (*Session, error) {
 	training, err := actionrelationfixturecore.Training()
 	if err != nil {
-		return Run{}, err
+		return nil, err
 	}
 	store := unit.NewStore()
 	previous := seed.DomainsDir
@@ -45,16 +60,19 @@ func Execute(domainsDir, token string) (Run, error) {
 	err = seed.LoadDomain(store, "actionrelations")
 	seed.DomainsDir = previous
 	if err != nil {
-		return Run{}, err
+		return nil, err
 	}
 	experiment := unit.New("AR.Experiment." + token)
 	experiment.Set("isA", []string{"ActionRelationExperiment", "Anything"})
 	experiment.Set("expectedObservationCount", len(training))
 	meterToken := "arm:" + token
 	if err := dsl.RegisterActionRelationMeter(meterToken); err != nil {
-		return Run{}, err
+		return nil, err
 	}
-	defer dsl.UnregisterActionRelationMeter(meterToken)
+	fail := func(err error) (*Session, error) {
+		dsl.UnregisterActionRelationMeter(meterToken)
+		return nil, err
+	}
 	experiment.Set("meterToken", meterToken)
 	pattern := actionrelations.Pattern{Kinds: []string{"add", "add"}, Roles: []int{0, -1, 1, -1}}
 	patternJSON, _ := pattern.CanonicalJSON()
@@ -77,36 +95,141 @@ func Execute(domainsDir, token string) (Run, error) {
 	eng.Out, eng.VM.Out = io.Discard, io.Discard
 	eng.MutConfig.Enabled = false
 	if err := eng.VM.InitError(); err != nil {
-		return Run{}, err
+		return fail(err)
 	}
 	for _, slot := range []string{"arObserve", "arAllocate", "arEvaluate"} {
 		eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: experiment.Name, SlotName: slot})
 		if eng.LastError != nil {
-			return Run{}, fmt.Errorf("%s: %w", slot, eng.LastError)
+			return fail(fmt.Errorf("%s: %w", slot, eng.LastError))
 		}
 	}
 	if err := installPresentationViews(store, experiment, training); err != nil {
-		return Run{}, err
+		return fail(err)
 	}
 	eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: experiment.Name, SlotName: "arFinalize"})
 	if eng.LastError != nil {
-		return Run{}, fmt.Errorf("arFinalize: %w", eng.LastError)
+		return fail(fmt.Errorf("arFinalize: %w", eng.LastError))
 	}
-	meterRecords, err := dsl.ActionRelationMeterSnapshot(meterToken)
+	session := &Session{Store: store, Experiment: experiment.Name, engine: eng, meterToken: meterToken}
+	run, err := session.Snapshot()
+	if err != nil {
+		return fail(err)
+	}
+	if run.Observations != 16 || run.Candidates != 451 || run.Edges != 450 || run.LiteralRows != 13920 || run.GuardResults != 7216 || run.CandidateResults != 451 || run.Winners < 1 || experiment.GetBool("candidatesFinalized") != true {
+		session.Abort()
+		return nil, fmt.Errorf("partial acquisition cardinality mismatch: %+v", run)
+	}
+	return session, nil
+}
+
+func (s *Session) Snapshot() (Run, error) {
+	if s == nil || s.closed || s.Store == nil {
+		return Run{}, fmt.Errorf("closed acquisition session")
+	}
+	experiment := s.Store.Get(s.Experiment)
+	if experiment == nil {
+		return Run{}, fmt.Errorf("missing acquisition experiment")
+	}
+	meterRecords, err := dsl.ActionRelationMeterSnapshot(s.meterToken)
 	if err != nil {
 		return Run{}, err
 	}
-	run := Run{
-		Store: store, Experiment: experiment.Name,
+	return Run{
+		Store: s.Store, Experiment: s.Experiment,
 		Observations: len(experiment.GetStrings("observationUnits")), Candidates: len(experiment.GetStrings("candidateUnits")),
 		Edges: len(experiment.GetStrings("edgeUnits")), LiteralRows: len(experiment.GetStrings("literalRowUnits")), GuardResults: len(experiment.GetStrings("guardResultUnits")),
 		CandidateResults: len(experiment.GetStrings("candidateResultUnits")), Winners: len(experiment.GetStrings("winnerResultUnits")), Artifact: experiment.GetString("artifactUnit"),
 		MeterRecords: meterRecords,
+	}, nil
+}
+
+func (s *Session) BindEvidence(roots EvidenceRoots) (Run, error) {
+	if s == nil || s.closed || len(roots.CandidateLeaves) != 451 || len(roots.EvaluationTableRoots) != 2 {
+		return Run{}, fmt.Errorf("invalid evidence-bound acquisition session")
 	}
-	if run.Observations != 16 || run.Candidates != 451 || run.Edges != 450 || run.LiteralRows != 13920 || run.GuardResults != 7216 || run.CandidateResults != 451 || run.Winners < 1 || run.Artifact == "" || experiment.GetString("terminal") != "completed" {
-		return run, fmt.Errorf("acquisition cardinality mismatch: %+v", run)
+	experiment := s.Store.Get(s.Experiment)
+	if experiment == nil || len(roots.WinnerLeaves) != len(experiment.GetStrings("winnerResultUnits")) {
+		return Run{}, fmt.Errorf("winner evidence mismatch")
+	}
+	for _, digest := range append(append(append([]string{}, roots.CandidateLeaves...), roots.EvaluationTableRoots...), append([]string{roots.EdgeTableRoot}, roots.WinnerLeaves...)...) {
+		if !actionrelationsDigest(digest) {
+			return Run{}, fmt.Errorf("invalid evidence root digest")
+		}
+	}
+	experiment.Set("candidateLeafDigests", roots.CandidateLeaves)
+	experiment.Set("edgeTableRoot", roots.EdgeTableRoot)
+	experiment.Set("evaluationTableRoots", roots.EvaluationTableRoots)
+	experiment.Set("winnerLeafDigests", roots.WinnerLeaves)
+	experiment.Set("evidenceRootsReady", true)
+	s.engine.WorkOnTask(&agenda.Task{Priority: 900, UnitName: experiment.Name, SlotName: "arClose"})
+	if s.engine.LastError != nil {
+		s.Abort()
+		return Run{}, fmt.Errorf("arClose: %w", s.engine.LastError)
+	}
+	run, err := s.Snapshot()
+	if err != nil {
+		s.Abort()
+		return Run{}, err
+	}
+	s.closed = true
+	dsl.UnregisterActionRelationMeter(s.meterToken)
+	if run.Artifact == "" || experiment.GetString("terminal") != "completed" || !experiment.GetBool("guardSearchClosed") {
+		return run, fmt.Errorf("evidence-bound acquisition did not close")
 	}
 	return run, nil
+}
+
+func (s *Session) Abort() {
+	if s != nil && !s.closed {
+		s.closed = true
+		dsl.UnregisterActionRelationMeter(s.meterToken)
+	}
+}
+
+// Execute is a development helper for semantic/search tests. Protected
+// experiment execution uses Begin, builds the physical ARTB manifests, and
+// supplies their exact roots through BindEvidence.
+func Execute(domainsDir, token string) (Run, error) {
+	session, err := Begin(domainsDir, token)
+	if err != nil {
+		return Run{}, err
+	}
+	run, err := session.Snapshot()
+	if err != nil {
+		session.Abort()
+		return Run{}, err
+	}
+	experiment := run.Store.Get(run.Experiment)
+	candidateLeaves := developmentDigests("candidate", len(experiment.GetStrings("candidateUnits")))
+	winnerLeaves := developmentDigests("winner", len(experiment.GetStrings("winnerResultUnits")))
+	for index, name := range experiment.GetStrings("candidateUnits") {
+		run.Store.Get(name).Set("tableLeafDigest", candidateLeaves[index])
+	}
+	for index, name := range experiment.GetStrings("winnerResultUnits") {
+		run.Store.Get(name).Set("tableLeafDigest", winnerLeaves[index])
+	}
+	return session.BindEvidence(EvidenceRoots{
+		CandidateLeaves: candidateLeaves, EdgeTableRoot: developmentDigests("edge-table", 1)[0],
+		EvaluationTableRoots: developmentDigests("evaluation-table", 2), WinnerLeaves: winnerLeaves,
+	})
+}
+
+func developmentDigests(label string, count int) []string {
+	result := make([]string, count)
+	for index := range result {
+		wire, _ := json.Marshal([]any{"actionrelation-development-only-root/v1", label, index})
+		digest := sha256.Sum256(wire)
+		result[index] = hex.EncodeToString(digest[:])
+	}
+	return result
+}
+
+func actionrelationsDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 32
 }
 
 func installPresentationViews(store *unit.Store, experiment *unit.Unit, training []actionrelationfixturecore.Case) error {

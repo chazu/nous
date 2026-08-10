@@ -230,13 +230,13 @@ units: [
 		name: "AR-H-FinalizeGuardSearch"
 		worth: 700
 		isA: ["Heuristic", "Anything"]
-		english: "Finalize all candidates, retain every tied optimum, close the complete barrier, and freeze canonical relations"
+		english: "Finalize all candidates and retain every tied optimum before evidence-bound closure"
 		overallRecord: {successes: 0, failures: 0}
 		ifWorkingOnTask: #"""
 			"CurSlot" @ "arFinalize" =
 			"CurUnit" @ "ActionRelationExperiment" isa? and
 			"CurUnit" @ "guardsEvaluated" get-slot true = and
-			"CurUnit" @ "guardSearchClosed" get-slot nil = and
+			"CurUnit" @ "candidatesFinalized" get-slot nil = and
 			"""#
 		thenCompute: #"""
 			"CurUnit" @ "experiment" !
@@ -271,7 +271,33 @@ units: [
 				"result" @ "literalCount" get-slot "minLiterals" @ = and
 				if "winners" @ "result" @ list-append "winners" ! then
 			end
-			"candidateResults" @ "winners" @ "AR.Barrier." "experiment" @ concat ar-close-guard-search "barrier" !
+			"candidateResults" @ "experiment" @ "candidateResultUnits" set-slot
+			"winners" @ "experiment" @ "winnerResultUnits" set-slot
+			true "experiment" @ "candidatesFinalized" set-slot
+			"""#
+	},
+	{
+		name: "AR-H-CloseGuardSearch"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Close the complete evidence-bound barrier and freeze canonical relations"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arClose" =
+			"CurUnit" @ "ActionRelationExperiment" isa? and
+			"CurUnit" @ "candidatesFinalized" get-slot true = and
+			"CurUnit" @ "evidenceRootsReady" get-slot true = and
+			"CurUnit" @ "guardSearchClosed" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "experiment" !
+			"experiment" @ "candidateResultUnits" get-slot
+			"experiment" @ "winnerResultUnits" get-slot
+			"experiment" @ "candidateLeafDigests" get-slot
+			"experiment" @ "edgeTableRoot" get-slot
+			"experiment" @ "evaluationTableRoots" get-slot
+			"experiment" @ "winnerLeafDigests" get-slot
+			"AR.Barrier." "experiment" @ concat ar-close-guard-search "barrier" !
 			"barrier" @ nil !=
 			if
 				"barrier" @ "experiment" @ "guardSearchBarrier" set-slot
@@ -283,8 +309,6 @@ units: [
 					true "experiment" @ "guardSearchClosed" set-slot
 				else "no-discovery" "experiment" @ "terminal" set-slot then
 			else "no-discovery" "experiment" @ "terminal" set-slot then
-			"candidateResults" @ "experiment" @ "candidateResultUnits" set-slot
-			"winners" @ "experiment" @ "winnerResultUnits" set-slot
 			"""#
 	},
 	{

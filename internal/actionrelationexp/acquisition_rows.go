@@ -95,6 +95,75 @@ func BuildAcquisitionTableBundles(run actionrelationacquire.Run, curriculum int)
 	return bundles, nil
 }
 
+type AcquisitionEvidence struct {
+	Run    actionrelationacquire.Run
+	Tables map[uint16]TableBundle
+}
+
+func CompleteAcquisition(session *actionrelationacquire.Session, curriculum int) (AcquisitionEvidence, error) {
+	partial, err := session.Snapshot()
+	if err != nil {
+		return AcquisitionEvidence{}, err
+	}
+	tables, err := BuildAcquisitionTableBundles(partial, curriculum)
+	if err != nil {
+		session.Abort()
+		return AcquisitionEvidence{}, err
+	}
+	manifestDigest := func(kind uint16) (string, error) {
+		bundle, ok := tables[kind]
+		if !ok {
+			return "", fmt.Errorf("missing acquisition table %d", kind)
+		}
+		return canonicalDigest(bundle.Manifest.CanonicalJSON())
+	}
+	edgeRoot, err := manifestDigest(104)
+	if err != nil {
+		session.Abort()
+		return AcquisitionEvidence{}, err
+	}
+	evaluationOne, err := manifestDigest(101)
+	if err != nil {
+		session.Abort()
+		return AcquisitionEvidence{}, err
+	}
+	evaluationTwo, err := manifestDigest(102)
+	if err != nil {
+		session.Abort()
+		return AcquisitionEvidence{}, err
+	}
+	experiment := partial.Store.Get(partial.Experiment)
+	candidateLeaves := tables[103].LeafDigests
+	resultLeaves := tables[108].LeafDigests
+	if experiment == nil || len(candidateLeaves) != 451 || len(resultLeaves) != 451 {
+		session.Abort()
+		return AcquisitionEvidence{}, fmt.Errorf("acquisition leaf cardinality mismatch")
+	}
+	for ordinal, name := range experiment.GetStrings("candidateUnits") {
+		partial.Store.Get(name).Set("tableLeafDigest", candidateLeaves[ordinal])
+	}
+	for ordinal, name := range experiment.GetStrings("candidateResultUnits") {
+		partial.Store.Get(name).Set("tableLeafDigest", resultLeaves[ordinal])
+	}
+	winnerLeaves := make([]string, len(experiment.GetStrings("winnerResultUnits")))
+	for index, name := range experiment.GetStrings("winnerResultUnits") {
+		result := partial.Store.Get(name)
+		if result == nil || result.GetInt("ordinal") < 0 || result.GetInt("ordinal") >= len(resultLeaves) {
+			session.Abort()
+			return AcquisitionEvidence{}, fmt.Errorf("invalid acquisition winner")
+		}
+		winnerLeaves[index] = resultLeaves[result.GetInt("ordinal")]
+	}
+	run, err := session.BindEvidence(actionrelationacquire.EvidenceRoots{
+		CandidateLeaves: candidateLeaves, EdgeTableRoot: edgeRoot,
+		EvaluationTableRoots: []string{evaluationOne, evaluationTwo}, WinnerLeaves: winnerLeaves,
+	})
+	if err != nil {
+		return AcquisitionEvidence{}, err
+	}
+	return AcquisitionEvidence{Run: run, Tables: tables}, nil
+}
+
 func encodeViewEvidence(u *unit.Unit) ([]byte, error) {
 	record := make([]byte, 512)
 	for _, field := range []struct {

@@ -3,6 +3,7 @@ package actionrelationexp
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"testing"
 
 	"github.com/chazu/nous/internal/actionrelationacquire"
@@ -53,6 +54,41 @@ func TestAcquisitionStoreEncodesFrozenHighVolumeTables(t *testing.T) {
 	wantVectorBytes, _ := hex.DecodeString(wantVectorRoot)
 	if !bytes.Equal(gotVectorRoot, wantVectorBytes) {
 		t.Fatal("kind 108 does not use the frozen guard-result-vector root")
+	}
+}
+
+func TestEvidenceBoundAcquisitionClosesBarrierAfterTableManifests(t *testing.T) {
+	session, err := actionrelationacquire.Begin("../../domains", "evidence-bound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := CompleteAcquisition(session, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	experiment := evidence.Run.Store.Get(evidence.Run.Experiment)
+	barrier := evidence.Run.Store.Get(experiment.GetString("guardSearchBarrier"))
+	if barrier == nil || evidence.Run.Artifact == "" {
+		t.Fatal("evidence-bound acquisition did not freeze its artifact")
+	}
+	var wire []any
+	if json.Unmarshal([]byte(barrier.GetString("canonicalObject")), &wire) != nil || len(wire) != 6 || wire[0] != "action-guard-search-barrier/v1" || wire[5] != "completed" {
+		t.Fatalf("barrier wire=%v", wire)
+	}
+	edgeManifest, _ := evidence.Tables[104].Manifest.CanonicalJSON()
+	if wire[2] != shaHex(edgeManifest) {
+		t.Fatal("barrier does not name the exact edge-table manifest")
+	}
+	evaluationRoots := wire[3].([]any)
+	for index, kind := range []uint16{101, 102} {
+		manifest, _ := evidence.Tables[kind].Manifest.CanonicalJSON()
+		if evaluationRoots[index] != shaHex(manifest) {
+			t.Fatalf("evaluation root %d does not name kind %d manifest", index, kind)
+		}
+	}
+	candidateLeaves := wire[1].([]any)
+	if len(candidateLeaves) != 451 || candidateLeaves[0] != evidence.Tables[103].LeafDigests[0] {
+		t.Fatal("barrier candidate authority is not ARTB-103 ordinal order")
 	}
 }
 
