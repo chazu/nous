@@ -143,7 +143,7 @@ func (p Pattern) CanonicalJSON() ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal([]any{PatternVersion, p.Kinds, p.Roles})
+	return json.Marshal(p.wire())
 }
 
 func (p Pattern) Digest() (string, error) { return digestCanonical(p.CanonicalJSON()) }
@@ -212,11 +212,7 @@ func (g Guard) CanonicalJSON() ([]byte, error) {
 	if err := g.Validate(); err != nil {
 		return nil, err
 	}
-	literals := make([]any, len(g.Literals))
-	for index, literal := range g.Literals {
-		literals[index] = []any{literal.Atom, literal.Polarity}
-	}
-	return json.Marshal([]any{GuardVersion, literals})
+	return json.Marshal(g.wire())
 }
 
 func (g Guard) Digest() (string, error) { return digestCanonical(g.CanonicalJSON()) }

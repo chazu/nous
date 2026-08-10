@@ -84,6 +84,18 @@ func TestLocalFactsRoundTripUsesEmptyArrays(t *testing.T) {
 	}
 }
 
+func TestExecuteHistoryRunsOnlyTheSuppliedOrder(t *testing.T) {
+	history := []Occurrence{
+		{Action: SemanticAction{Kind: "set", XRole: "c0", N: 2}},
+		{Action: SemanticAction{Kind: "add", XRole: "c0", N: 1}},
+		{Action: SemanticAction{Kind: "emit", Symbol: "done"}},
+	}
+	states, terminal, err := ExecuteHistory(twoCellState(0, 0), history)
+	if err != nil || terminal != "completed" || len(states) != 4 || states[3].Cells[0].Value != 3 || len(states[3].Events) != 1 {
+		t.Fatalf("states=%#v terminal=%q err=%v", states, terminal, err)
+	}
+}
+
 func twoCellState(a, b int) State {
 	return State{Cells: []Cell{{Name: "c0", Value: a}, {Name: "c1", Value: b}}}
 }

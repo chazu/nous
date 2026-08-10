@@ -91,6 +91,31 @@ func CompareStates(left, right State) (int, error) {
 	return bytes.Compare(a, b), nil
 }
 
+// ExecuteHistory runs one caller-supplied history and stops at the first
+// inapplicable occurrence. It does not enumerate, reorder, or search histories.
+func ExecuteHistory(initial State, history []Occurrence) ([]State, string, error) {
+	if err := initial.Validate(); err != nil || len(history) > MaxActions {
+		return nil, "", ErrInvalid
+	}
+	states := []State{initial}
+	current := initial
+	for _, occurrence := range history {
+		if _, err := occurrence.CanonicalJSON(); err != nil {
+			return nil, "", err
+		}
+		next, outcome, err := Apply(current, occurrence.Action)
+		if err != nil {
+			return nil, "", err
+		}
+		if outcome != "applied" {
+			return states, "inapplicable", nil
+		}
+		states = append(states, next)
+		current = next
+	}
+	return states, "completed", nil
+}
+
 type LocalFacts struct {
 	StateDigest      string
 	OccurrenceDigest string
