@@ -56,3 +56,31 @@ func TestActionRelationMeterEnforcesReservedPlan(t *testing.T) {
 		t.Fatalf("records=%#v err=%v", records, err)
 	}
 }
+
+func TestActionRelationMeterExtendsOnlyAtCompoundBoundary(t *testing.T) {
+	token := "ar-meter-extension-test"
+	if err := RegisterActionRelationMeterPlan(token, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer UnregisterActionRelationMeter(token)
+	first := ActionRelationMeterPlanEntry{Code: 23, SourceTaskDigest: strings.Repeat("a", 64)}
+	second := ActionRelationMeterPlanEntry{Code: 19, SourceTaskDigest: strings.Repeat("b", 64)}
+	if err := ExtendActionRelationMeterPlan(token, []ActionRelationMeterPlanEntry{first}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExtendActionRelationMeterPlan(token, []ActionRelationMeterPlanEntry{second}); err == nil {
+		t.Fatal("meter extended with outstanding reserved work")
+	}
+	if err := ChargeActionRelationMeter(token, 23, 10, "search-applicable", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExtendActionRelationMeterPlan(token, []ActionRelationMeterPlanEntry{second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ChargeActionRelationMeter(token, 19, 12, "terminal", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ActionRelationMeterPlanComplete(token); err != nil {
+		t.Fatal(err)
+	}
+}

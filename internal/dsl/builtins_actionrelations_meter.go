@@ -54,6 +54,28 @@ func RegisterActionRelationMeterPlan(token string, plan []ActionRelationMeterPla
 	return nil
 }
 
+// ExtendActionRelationMeterPlan publishes one complete next compound block.
+// No extension is legal while an earlier reserved block remains unconsumed.
+func ExtendActionRelationMeterPlan(token string, plan []ActionRelationMeterPlanEntry) error {
+	if len(plan) == 0 {
+		return errors.New("empty action-relation meter plan extension")
+	}
+	actionRelationMeters.Lock()
+	defer actionRelationMeters.Unlock()
+	meter := actionRelationMeters.items[token]
+	if meter == nil || len(meter.records) != len(meter.plan) {
+		return errors.New("action-relation meter has outstanding reserved work")
+	}
+	for _, entry := range plan {
+		raw, err := hex.DecodeString(entry.SourceTaskDigest)
+		if entry.Code < 1 || entry.Code > 25 || err != nil || len(raw) != 32 || entry.SourceTaskDigest != strings.ToLower(entry.SourceTaskDigest) {
+			return errors.New("invalid action-relation meter plan extension")
+		}
+	}
+	meter.plan = append(meter.plan, plan...)
+	return nil
+}
+
 func UnregisterActionRelationMeter(token string) {
 	actionRelationMeters.Lock()
 	delete(actionRelationMeters.items, token)

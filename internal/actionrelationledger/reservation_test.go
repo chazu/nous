@@ -1,6 +1,9 @@
 package actionrelationledger
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestReservationRoundTripAndCap(t *testing.T) {
 	runID, err := AcquisitionRunID("development", "a3e18b10a01cf83315bff398586e91cd33544861", 4, "nous")
@@ -31,5 +34,20 @@ func TestReservationRejectsTampering(t *testing.T) {
 	reservation.TotalAfter = 2
 	if err := VerifyReservation(reservation, 10); err == nil {
 		t.Fatal("verification accepted a mutated reservation")
+	}
+}
+
+func TestUtilityRunIDUsesExactWorldAndPolicyContext(t *testing.T) {
+	world := strings.Repeat("c", 64)
+	first, err := UtilityRunID("development", "authority", 3, "dynamic-diamond-sleep", 2, world)
+	if err != nil || len(first) != 32 {
+		t.Fatalf("runID=%q err=%v", first, err)
+	}
+	second, err := UtilityRunID("development", "authority", 3, "nous-guarded-sleep", 2, world)
+	if err != nil || first == second {
+		t.Fatalf("context collision first=%q second=%q err=%v", first, second, err)
+	}
+	if _, err := UtilityRunID("development", "authority", 3, "unknown", 2, world); err == nil {
+		t.Fatal("unknown utility policy accepted")
 	}
 }

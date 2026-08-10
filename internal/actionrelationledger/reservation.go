@@ -30,6 +30,15 @@ func AcquisitionRunID(panel, authority string, curriculum int, scope string) (st
 	return hex.EncodeToString(digest[:16]), nil
 }
 
+func UtilityRunID(panel, authority string, curriculum int, policy string, worldOrdinal int, worldDigest string) (string, error) {
+	if panel == "" || authority == "" || curriculum < 0 || worldOrdinal < 0 || worldOrdinal > 5 || !digestText(worldDigest) || !utilityPolicy(policy) {
+		return "", fmt.Errorf("invalid utility run identity")
+	}
+	wire, _ := json.Marshal([]any{"actionrelation-run-id/v1", panel, authority, curriculum, "utility", policy, worldOrdinal, worldDigest})
+	digest := sha256.Sum256(wire)
+	return hex.EncodeToString(digest[:16]), nil
+}
+
 func BuildReservation(runID, taskDigest string, operationCodes []uint8, totalBefore, cap int) (Reservation, error) {
 	if !runIDText(runID) || !digestText(taskDigest) || len(operationCodes) == 0 || totalBefore < 0 || cap < 1 {
 		return Reservation{}, fmt.Errorf("invalid work reservation identity")
@@ -84,6 +93,15 @@ func VerifyReservation(value Reservation, cap int) error {
 func TaskDigest(runID string, sequence int, code uint8) string {
 	wire, _ := json.Marshal([]any{"actionrelation-task/v1", runID, "acquisition", sequence, code})
 	return shaHex(wire)
+}
+
+func utilityPolicy(value string) bool {
+	switch value {
+	case "complete", "lexical-order", "static-rw-sleep", "dynamic-diamond-sleep", "nous-guarded-sleep", "no-guard-sleep", "learned-no-use":
+		return true
+	default:
+		return false
+	}
 }
 
 func shaHex(data []byte) string { digest := sha256.Sum256(data); return hex.EncodeToString(digest[:]) }
