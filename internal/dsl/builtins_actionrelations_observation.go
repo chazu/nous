@@ -33,6 +33,13 @@ func bARObservationAssemble(vm *VM) error {
 	stateDigest, _ := state.Digest()
 	aDigest, _ := aOccurrence.Digest()
 	bDigest, _ := bOccurrence.Digest()
+	pattern, patternErr := actionrelations.PatternFor(aOccurrence, bOccurrence)
+	if patternErr != nil {
+		vm.push(Nil())
+		return nil
+	}
+	patternJSON, _ := pattern.CanonicalJSON()
+	patternDigest, _ := pattern.Digest()
 	aInitial := arTransition(vm, aInitialValue.AsString())
 	bInitial := arTransition(vm, bInitialValue.AsString())
 	if !validInitialTransition(aInitial, stateDigest, aDigest) || !validInitialTransition(bInitial, stateDigest, bDigest) {
@@ -53,6 +60,7 @@ func bARObservationAssemble(vm *VM) error {
 	name, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationObservation", canonical, map[string]any{
 		"stateDigest": stateDigest, "aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "label": label,
 		"aInitialRow": aInitial.name, "bInitialRow": bInitial.name, "bAfterARow": optionalName(bAfterA), "aAfterBRow": optionalName(aAfterB), "equalityRow": equalityValue.AsString(),
+		"pattern": string(patternJSON), "patternDigest": patternDigest, "bothInitiallyApplicable": aInitial.outcome == "applied" && bInitial.outcome == "applied", "traceLength": len(state.Events),
 	})
 	if err != nil {
 		vm.push(Nil())

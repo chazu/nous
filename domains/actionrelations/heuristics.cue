@@ -226,4 +226,65 @@ units: [
 			else "no-discovery" "experiment" @ "terminal" set-slot then
 			"""#
 	},
+	{
+		name: "AR-H-FinalizeGuardSearch"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Finalize all candidates, retain every tied optimum, close the complete barrier, and freeze canonical relations"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arFinalize" =
+			"CurUnit" @ "ActionRelationExperiment" isa? and
+			"CurUnit" @ "guardsEvaluated" get-slot true = and
+			"CurUnit" @ "guardSearchClosed" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "experiment" !
+			0 list-of "candidateResults" !
+			"experiment" @ "candidateUnits" get-slot each
+				it "candidate" !
+				"AR.CandidateResult." "candidate" @ concat "request" !
+				"candidate" @ "candidate" @ "guardResults" get-slot "experiment" @ "viewEvidenceRoot" get-slot "request" @ ar-candidate-result "result" !
+				"result" @ "candidate" @ "candidateResult" set-slot
+				"candidateResults" @ "result" @ list-append "candidateResults" !
+			end
+			-1 "maxPositive" ! 3 "minLiterals" !
+			"candidateResults" @ each
+				it "result" !
+				"result" @ "eligible" get-slot
+				if
+					"result" @ "positiveCoverage" get-slot "positive" !
+					"result" @ "literalCount" get-slot "literals" !
+					"positive" @ "maxPositive" @ >
+					if "positive" @ "maxPositive" ! "literals" @ "minLiterals" !
+					else
+						"positive" @ "maxPositive" @ = "literals" @ "minLiterals" @ < and
+						if "literals" @ "minLiterals" ! then
+					then
+				then
+			end
+			0 list-of "winners" !
+			"candidateResults" @ each
+				it "result" !
+				"result" @ "eligible" get-slot
+				"result" @ "positiveCoverage" get-slot "maxPositive" @ = and
+				"result" @ "literalCount" get-slot "minLiterals" @ = and
+				if "winners" @ "result" @ list-append "winners" ! then
+			end
+			"candidateResults" @ "winners" @ "AR.Barrier." "experiment" @ concat ar-close-guard-search "barrier" !
+			"barrier" @ nil !=
+			if
+				"barrier" @ "experiment" @ "guardSearchBarrier" set-slot
+				"barrier" @ "experiment" @ "semanticTrainingRoot" get-slot "AR.Artifact." "experiment" @ concat ar-freeze-relation "artifact" !
+				"artifact" @ nil !=
+				if
+					"artifact" @ "experiment" @ "artifactUnit" set-slot
+					"completed" "experiment" @ "terminal" set-slot
+					true "experiment" @ "guardSearchClosed" set-slot
+				else "no-discovery" "experiment" @ "terminal" set-slot then
+			else "no-discovery" "experiment" @ "terminal" set-slot then
+			"candidateResults" @ "experiment" @ "candidateResultUnits" set-slot
+			"winners" @ "experiment" @ "winnerResultUnits" set-slot
+			"""#
+	},
 ]

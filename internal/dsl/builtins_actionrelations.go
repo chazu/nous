@@ -28,6 +28,9 @@ func init() {
 		"ar-guard-match":          bARGuardMatch,
 		"ar-guard-result":         bARGuardResult,
 		"ar-observation-assemble": bARObservationAssemble,
+		"ar-candidate-result":     bARCandidateResult,
+		"ar-close-guard-search":   bARCloseGuardSearch,
+		"ar-freeze-relation":      bARFreezeRelation,
 	})
 }
 

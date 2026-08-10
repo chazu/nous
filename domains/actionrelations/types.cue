@@ -17,6 +17,7 @@ units: [
 	{name: "ActionStateEqualityRow", worth: 500, isA: ["Anything"]},
 	{name: "ActionGuardLiteralRow", worth: 500, isA: ["Anything"]},
 	{name: "ActionGuardResult", worth: 550, isA: ["Anything"]},
+	{name: "ActionGuardCandidateResult", worth: 600, isA: ["Anything"]},
 	{name: "ActionGuardCandidate", worth: 550, isA: ["Anything"]},
 	{name: "ActionGuardRefinement", worth: 500, isA: ["Anything"]},
 	{name: "ActionGuardSearchBarrier", worth: 650, isA: ["Anything"]},
