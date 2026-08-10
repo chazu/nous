@@ -518,6 +518,26 @@ primitive grammar could not express.
 Nous must materialize its own schema and evidence; these algorithms are
 conventional baselines and conceptual guides.
 
+### Recorded outcome
+
+The reviewed `transform-schema/v2` public development panel classified
+`interim-power-authorized`. Nous produced perfect held-out behavior on all 48
+development curricula, compared with 14 of 48 for bounded PBE, with zero false
+applications. The paired advantage was 34 of 48 curricula, its stratified
+bootstrap interval was 30/48 to 37/48, its paired-randomization p-value was
+1/10,001, and all 2,000 synthetic locked-panel power replicates passed. All 12
+mechanical gates and the independent competence suite passed. This is interim
+evidence that the vocabulary can generalize an executable schema on the frozen
+synthetic distribution; validation and locked panels remain unrun.
+
+The result also exposed an evidence-delivery limitation: its canonical local
+bundle contains 638,361 files and approximately 2.7 GB, while the v2 guard
+requires every leaf to be an ordinary committed Git blob before validation.
+That storage decision is isolated to the transformation lane and does not gate
+Vocabulary 3. See the
+[transformation-schema result record](transformation-schema-induction-vocabulary-results.md)
+for the implementation reviews, exact statistics, limitations, and next gate.
+
 ## Vocabulary 3: commutativity and partial-order reasoning
 
 ### Marginal reasoning gain
