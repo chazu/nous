@@ -96,11 +96,16 @@ func BuildAcquisitionTableBundles(run actionrelationacquire.Run, curriculum int)
 }
 
 type AcquisitionEvidence struct {
-	Run    actionrelationacquire.Run
-	Tables map[uint16]TableBundle
+	Run        actionrelationacquire.Run
+	Tables     map[uint16]TableBundle
+	Transcript AcquisitionTranscript
 }
 
 func CompleteAcquisition(session *actionrelationacquire.Session, curriculum int) (AcquisitionEvidence, error) {
+	return CompleteAcquisitionFor(session, curriculum, "development", PlanCommit)
+}
+
+func CompleteAcquisitionFor(session *actionrelationacquire.Session, curriculum int, panel, authority string) (AcquisitionEvidence, error) {
 	partial, err := session.Snapshot()
 	if err != nil {
 		return AcquisitionEvidence{}, err
@@ -161,7 +166,74 @@ func CompleteAcquisition(session *actionrelationacquire.Session, curriculum int)
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}
-	return AcquisitionEvidence{Run: run, Tables: tables}, nil
+	runID, err := AcquisitionRunID(panel, authority, curriculum, "nous")
+	if err != nil {
+		return AcquisitionEvidence{}, err
+	}
+	transcript, err := BuildAcquisitionTranscript(run, tables, runID)
+	if err != nil {
+		return AcquisitionEvidence{}, err
+	}
+	observationNames := run.Store.Get(run.Experiment).GetStrings("observationUnits")
+	observationRecords := make([][]byte, len(observationNames))
+	for ordinal, name := range observationNames {
+		observationRecords[ordinal], err = encodeObservation(run.Store.Get(name))
+		if err != nil {
+			return AcquisitionEvidence{}, fmt.Errorf("rebuild observation table %d: %w", ordinal, err)
+		}
+	}
+	tables[105], err = BuildTableBundle(curriculum, "nous", 105, observationRecords)
+	if err != nil {
+		return AcquisitionEvidence{}, err
+	}
+	if err := retainAcquisitionTranscriptAuthority(run.Store, run.Experiment, transcript); err != nil {
+		return AcquisitionEvidence{}, err
+	}
+	return AcquisitionEvidence{Run: run, Tables: tables, Transcript: transcript}, nil
+}
+
+func retainAcquisitionTranscriptAuthority(store *unit.Store, experimentName string, transcript AcquisitionTranscript) error {
+	experiment := store.Get(experimentName)
+	if experiment == nil {
+		return fmt.Errorf("missing acquisition experiment")
+	}
+	reservationNames := make([]string, len(transcript.Reservations))
+	for index, reservation := range transcript.Reservations {
+		if err := VerifyWorkReservation(reservation, acquisitionLifecycleCap); err != nil {
+			return err
+		}
+		name := fmt.Sprintf("AR.Reservation.%s.%05d", transcript.RunID, index)
+		u := unit.New(name)
+		u.Set("isA", []string{"CompoundWorkReservation", "Anything"})
+		u.Set("canonicalObject", string(reservation.Canonical))
+		u.Set("objectDigest", reservation.Digest)
+		store.Put(u)
+		reservationNames[index] = name
+	}
+	rootNames := make([]string, 0, len(transcript.ObservationRoots)+1)
+	for index, root := range append(append([]OperationRoot{}, transcript.ObservationRoots...), transcript.RunRoot) {
+		if root.Digest != shaHex(root.Canonical) || ValidateObject(46, root.Canonical) != nil {
+			return fmt.Errorf("invalid retained operation root %d", index)
+		}
+		name := fmt.Sprintf("AR.OperationRoot.%s.%03d", transcript.RunID, index)
+		u := unit.New(name)
+		u.Set("isA", []string{"ActionRelationOperationRoot", "Anything"})
+		u.Set("canonicalObject", string(root.Canonical))
+		u.Set("objectDigest", root.Digest)
+		store.Put(u)
+		rootNames = append(rootNames, name)
+	}
+	journalRoot, _ := transcript.Transcript.JournalRoot.Digest()
+	inputRoot, _ := transcript.Transcript.InputRoot.Digest()
+	detailRoot, _ := transcript.Transcript.DetailRoot.Digest()
+	experiment.Set("runID", transcript.RunID)
+	experiment.Set("reservationUnits", reservationNames)
+	experiment.Set("operationRootUnits", rootNames)
+	experiment.Set("runOperationRoot", transcript.RunRoot.Digest)
+	experiment.Set("journalRoot", journalRoot)
+	experiment.Set("inputRoot", inputRoot)
+	experiment.Set("detailRoot", detailRoot)
+	return nil
 }
 
 func encodeViewEvidence(u *unit.Unit) ([]byte, error) {

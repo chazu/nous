@@ -10,19 +10,21 @@ import (
 )
 
 var acquisitionObjectKinds = map[string]uint16{
-	"FiniteActionState":        1,
-	"FiniteSemanticAction":     2,
-	"ActionOccurrence":         3,
-	"FiniteActionWorldCore":    4,
-	"ActionRelationPattern":    6,
-	"ActionGuard":              7,
-	"ActionLocalFacts":         8,
-	"GuardedActionRelation":    9,
-	"GuardedActionArtifact":    10,
-	"ActionTrainingEvidence":   11,
-	"ActionPresentationView":   12,
-	"ActionNormalizationProof": 13,
-	"ActionGuardSearchBarrier": 28,
+	"FiniteActionState":           1,
+	"FiniteSemanticAction":        2,
+	"ActionOccurrence":            3,
+	"FiniteActionWorldCore":       4,
+	"ActionRelationPattern":       6,
+	"ActionGuard":                 7,
+	"ActionLocalFacts":            8,
+	"GuardedActionRelation":       9,
+	"GuardedActionArtifact":       10,
+	"ActionTrainingEvidence":      11,
+	"ActionPresentationView":      12,
+	"ActionNormalizationProof":    13,
+	"CompoundWorkReservation":     27,
+	"ActionGuardSearchBarrier":    28,
+	"ActionRelationOperationRoot": 46,
 }
 
 var acquisitionTableCategories = map[string]bool{

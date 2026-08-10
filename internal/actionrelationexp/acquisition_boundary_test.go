@@ -34,7 +34,7 @@ func TestAcquisitionBoundaryIndexesOnlyNonTableLogicalObjects(t *testing.T) {
 			seenKinds[kind] = true
 		}
 	}
-	for _, kind := range []uint16{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 28} {
+	for _, kind := range []uint16{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 27, 28, 46} {
 		if !seenKinds[kind] {
 			t.Fatalf("missing acquisition object decoder kind %d", kind)
 		}

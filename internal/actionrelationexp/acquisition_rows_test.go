@@ -90,6 +90,18 @@ func TestEvidenceBoundAcquisitionClosesBarrierAfterTableManifests(t *testing.T) 
 	if len(candidateLeaves) != 451 || candidateLeaves[0] != evidence.Tables[103].LeafDigests[0] {
 		t.Fatal("barrier candidate authority is not ARTB-103 ordinal order")
 	}
+	if err := VerifyAcquisitionTranscript(evidence.Transcript, evidence.Run); err != nil {
+		t.Fatalf("acquisition transcript: %v", err)
+	}
+	if len(evidence.Transcript.Transcript.CallIDs) != len(evidence.Run.MeterRecords) || len(evidence.Transcript.Reservations) != len(evidence.Run.MeterRecords) || len(evidence.Transcript.ObservationRoots) != 16 {
+		t.Fatal("acquisition transcript does not cover every charged call and observation")
+	}
+	firstObservation := evidence.Run.Store.Get(experiment.GetStrings("observationUnits")[0])
+	firstRecord := evidence.Tables[105].Files[0].Data[len(TableHeader) : len(TableHeader)+tableRecordSizes[105]]
+	wantOperationRoot, _ := hex.DecodeString(firstObservation.GetString("operationRoot"))
+	if !bytes.Equal(firstRecord[292:324], wantOperationRoot) || firstObservation.GetString("operationRoot") != evidence.Transcript.ObservationRoots[0].Digest {
+		t.Fatal("ARTB-105 does not retain the exact post-call operation range")
+	}
 }
 
 func TestAcquisitionTablesProduceCompletePhysicalManifests(t *testing.T) {
