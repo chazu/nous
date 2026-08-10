@@ -55,3 +55,26 @@ func TestAcquisitionStoreEncodesFrozenHighVolumeTables(t *testing.T) {
 		t.Fatal("kind 108 does not use the frozen guard-result-vector root")
 	}
 }
+
+func TestAcquisitionTablesProduceCompletePhysicalManifests(t *testing.T) {
+	run, err := actionrelationacquire.Execute("../../domains", "table-bundles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundles, err := BuildAcquisitionTableBundles(run, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []uint16{101, 102, 103, 104, 105, 106, 107, 108} {
+		bundle, ok := bundles[kind]
+		if !ok {
+			t.Fatalf("missing table kind %d", kind)
+		}
+		if err := VerifyTableBundle(bundle); err != nil {
+			t.Fatalf("kind %d: %v", kind, err)
+		}
+		if bundle.Manifest.Curriculum != 9 || bundle.Manifest.Scope != "nous" || len(bundle.LeafDigests) != bundle.Manifest.Count {
+			t.Fatalf("kind %d manifest mismatch", kind)
+		}
+	}
+}

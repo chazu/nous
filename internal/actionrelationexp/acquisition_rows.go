@@ -72,6 +72,29 @@ func BuildAcquisitionTables(run actionrelationacquire.Run) (map[uint16]TablePack
 	return tables, nil
 }
 
+func BuildAcquisitionTableBundles(run actionrelationacquire.Run, curriculum int) (map[uint16]TableBundle, error) {
+	tables, err := BuildAcquisitionTables(run)
+	if err != nil {
+		return nil, err
+	}
+	bundles := make(map[uint16]TableBundle, len(tables))
+	for kind, table := range tables {
+		recordSize := tableRecordSizes[kind]
+		count := int(table.LastOrdinal-table.FirstOrdinal) + 1
+		records := make([][]byte, count)
+		for ordinal := range records {
+			start := len(TableHeader) + ordinal*recordSize
+			records[ordinal] = table.Bytes[start : start+recordSize]
+		}
+		bundle, err := BuildTableBundle(curriculum, "nous", kind, records)
+		if err != nil {
+			return nil, fmt.Errorf("kind %d: %w", kind, err)
+		}
+		bundles[kind] = bundle
+	}
+	return bundles, nil
+}
+
 func encodeViewEvidence(u *unit.Unit) ([]byte, error) {
 	record := make([]byte, 512)
 	for _, field := range []struct {
