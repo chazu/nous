@@ -2,12 +2,24 @@ package actionrelationexp
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/hex"
 	"testing"
 )
 
 func TestFixedTablePackFramingAndMerkleVerification(t *testing.T) {
-	records := [][]byte{make([]byte, 128), bytes.Repeat([]byte{0x5a}, 128), bytes.Repeat([]byte{0xff}, 128)}
-	pack, err := BuildTablePack(101, 7, records)
+	records := make([][]byte, 3)
+	for ordinal := range records {
+		records[ordinal] = make([]byte, 128)
+		copy(records[ordinal][0:32], bytes.Repeat([]byte{byte(ordinal + 1)}, 32))
+		copy(records[ordinal][64:96], bytes.Repeat([]byte{byte(ordinal + 4)}, 32))
+		binary.BigEndian.PutUint16(records[ordinal][96:98], uint16(ordinal))
+		records[ordinal][99] = 1
+		if ordinal > 0 {
+			copy(records[ordinal][32:64], bytes.Repeat([]byte{byte(ordinal + 7)}, 32))
+		}
+	}
+	pack, err := BuildTablePack(103, 7, records)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,5 +49,23 @@ func TestTableManifestRequiresContiguousShardCoverage(t *testing.T) {
 	manifest.Shards[1].FirstOrdinal = 3
 	if _, err := manifest.CanonicalJSON(); err == nil {
 		t.Fatal("accepted shard gap")
+	}
+}
+
+func TestTableVerificationRejectsSemanticallyInvalidRehashedRow(t *testing.T) {
+	row := make([]byte, 96)
+	copy(row[0:32], bytes.Repeat([]byte{1}, 32))
+	copy(row[32:64], bytes.Repeat([]byte{2}, 32))
+	row[64], row[65] = 1, 1
+	pack, err := BuildTablePack(102, 0, [][]byte{row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack.Bytes[6+66] = 1
+	pack.Digest = shaHex(pack.Bytes)
+	root := tableMerkleRoot(102, 0, [][]byte{pack.Bytes[6:]})
+	pack.MerkleRoot = hex.EncodeToString(root[:])
+	if err := VerifyTablePack(pack); err == nil {
+		t.Fatal("accepted nonzero reserved bytes after recomputing physical roots")
 	}
 }

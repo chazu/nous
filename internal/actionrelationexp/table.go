@@ -41,6 +41,9 @@ func BuildTablePack(kind uint16, firstOrdinal uint32, records [][]byte) (TablePa
 		if len(record) != recordSize {
 			return TablePack{}, fmt.Errorf("kind %d record %d size %d want %d", kind, index, len(record), recordSize)
 		}
+		if err := ValidateTableRecord(kind, record); err != nil {
+			return TablePack{}, fmt.Errorf("kind %d record %d: %w", kind, index, err)
+		}
 		copy(bytes[len(TableHeader)+index*recordSize:], record)
 	}
 	digest := sha256.Sum256(bytes)
@@ -61,6 +64,9 @@ func VerifyTablePack(pack TablePack) error {
 	for index := range records {
 		start := len(TableHeader) + index*recordSize
 		records[index] = pack.Bytes[start : start+recordSize]
+		if err := ValidateTableRecord(pack.Kind, records[index]); err != nil {
+			return fmt.Errorf("invalid table record %d: %w", index, err)
+		}
 	}
 	digest := sha256.Sum256(pack.Bytes)
 	root := tableMerkleRoot(pack.Kind, pack.FirstOrdinal, records)
@@ -73,16 +79,7 @@ func VerifyTablePack(pack TablePack) error {
 func tableMerkleRoot(kind uint16, firstOrdinal uint32, records [][]byte) [32]byte {
 	level := make([][32]byte, len(records))
 	for index, record := range records {
-		preimage := make([]byte, 0, 12+len(record))
-		preimage = append(preimage, []byte("ARTB1-LEAF\x00")...)
-		var kindBytes [2]byte
-		var ordinalBytes [4]byte
-		binary.BigEndian.PutUint16(kindBytes[:], kind)
-		binary.BigEndian.PutUint32(ordinalBytes[:], firstOrdinal+uint32(index))
-		preimage = append(preimage, kindBytes[:]...)
-		preimage = append(preimage, ordinalBytes[:]...)
-		preimage = append(preimage, record...)
-		level[index] = sha256.Sum256(preimage)
+		level[index] = TableLeafDigest(kind, firstOrdinal+uint32(index), record)
 	}
 	for len(level) > 1 {
 		next := make([][32]byte, (len(level)+1)/2)
@@ -99,6 +96,19 @@ func tableMerkleRoot(kind uint16, firstOrdinal uint32, records [][]byte) [32]byt
 		level = next
 	}
 	return level[0]
+}
+
+func TableLeafDigest(kind uint16, ordinal uint32, record []byte) [32]byte {
+	preimage := make([]byte, 0, len("ARTB1-LEAF\x00")+2+4+len(record))
+	preimage = append(preimage, []byte("ARTB1-LEAF\x00")...)
+	var kindBytes [2]byte
+	var ordinalBytes [4]byte
+	binary.BigEndian.PutUint16(kindBytes[:], kind)
+	binary.BigEndian.PutUint32(ordinalBytes[:], ordinal)
+	preimage = append(preimage, kindBytes[:]...)
+	preimage = append(preimage, ordinalBytes[:]...)
+	preimage = append(preimage, record...)
+	return sha256.Sum256(preimage)
 }
 
 type TableShard struct {
