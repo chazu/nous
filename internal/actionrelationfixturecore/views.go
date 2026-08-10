@@ -27,6 +27,10 @@ type View struct {
 }
 
 func Views(testCase Case) ([]View, error) {
+	return ViewsMeasured(testCase, nil)
+}
+
+func ViewsMeasured(testCase Case, reserve WorkReservation) ([]View, error) {
 	state, err := actionrelations.ParseState(testCase.State)
 	if err != nil {
 		return nil, err
@@ -63,6 +67,9 @@ func Views(testCase Case) ([]View, error) {
 			mapping[index] = []any{actionNames[index], occurrenceDigest}
 		}
 		world := actionrelations.World{State: originalState, Actions: actions}
+		if err := reserveWork(reserve); err != nil {
+			return nil, err
+		}
 		normalized, err := world.Normalize()
 		if err != nil {
 			return nil, err

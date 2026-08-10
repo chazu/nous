@@ -10,22 +10,41 @@ import (
 )
 
 func TrainingFamily(family int) ([]Case, error) {
+	pool, err := BuildTrainingPool(family, nil)
+	if err != nil {
+		return nil, err
+	}
+	return SelectTrainingPool(pool, nil)
+}
+
+func BuildTrainingPool(family int, reserve WorkReservation) ([]Case, error) {
 	if family < 0 || family >= len(FamilyNames) {
 		return nil, fmt.Errorf("invalid training family")
 	}
 	if family == 0 {
-		return Training()
+		positives, err := positiveCasesMeasured(reserve)
+		if err != nil {
+			return nil, err
+		}
+		negatives, err := negativeCasesMeasured(reserve)
+		if err != nil {
+			return nil, err
+		}
+		return append(positives, negatives...), nil
 	}
-	positives, err := familyPositiveCases(family)
+	positives, err := familyPositiveCasesMeasured(family, reserve)
 	if err != nil {
 		return nil, err
 	}
-	negatives, err := negativeCases()
+	negatives, err := negativeCasesMeasured(reserve)
 	if err != nil {
 		return nil, err
 	}
 	switch family {
 	case 1, 7:
+		if err := reserveWork(reserve); err != nil {
+			return nil, err
+		}
 		hard, label, err := makeCase(
 			actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: 2}, {Name: "c1", Value: 0}, {Name: "c2", Value: 0}}, Events: []string{}},
 			action("add", "c0", "", 1, ""), action("add", "c0", "", 1, ""),
@@ -35,6 +54,9 @@ func TrainingFamily(family int) ([]Case, error) {
 		}
 		negatives[4] = hard
 	case 2:
+		if err := reserveWork(reserve); err != nil {
+			return nil, err
+		}
 		hard, label, err := makeCase(
 			actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: 0}, {Name: "c1", Value: 0}, {Name: "c2", Value: 0}}, Events: []string{}},
 			action("set", "c0", "", 1, ""), action("set", "c0", "", 2, ""),
@@ -44,6 +66,9 @@ func TrainingFamily(family int) ([]Case, error) {
 		}
 		negatives[6] = hard
 	case 6:
+		if err := reserveWork(reserve); err != nil {
+			return nil, err
+		}
 		hard, label, err := makeCase(
 			actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: 0}, {Name: "c1", Value: 0}, {Name: "c2", Value: 0}}, Events: []string{}},
 			action("emit", "", "", 0, "e0"), action("emit", "", "", 0, "e1"),
@@ -53,14 +78,14 @@ func TrainingFamily(family int) ([]Case, error) {
 		}
 		negatives[7] = hard
 	}
-	result := append(positives, negatives...)
-	for index := range result {
-		result[index].Ordinal = index
-	}
-	return result, nil
+	return append(positives, negatives...), nil
 }
 
 func familyPositiveCases(family int) ([]Case, error) {
+	return familyPositiveCasesMeasured(family, nil)
+}
+
+func familyPositiveCasesMeasured(family int, reserve WorkReservation) ([]Case, error) {
 	pairs := familyPairs(family)
 	byCore := map[string]Case{}
 	for values := 0; values < 64; values++ {
@@ -73,6 +98,9 @@ func familyPositiveCases(family int) ([]Case, error) {
 				{Name: "c0", Value: values / 16}, {Name: "c1", Value: values / 4 % 4}, {Name: "c2", Value: values % 4},
 			}, Events: events}
 			for _, pair := range pairs {
+				if err := reserveWork(reserve); err != nil {
+					return nil, err
+				}
 				testCase, label, err := makeCase(state, pair[0], pair[1])
 				if err != nil || label != "commutes" {
 					continue
@@ -120,6 +148,112 @@ func familyPositiveCases(family int) ([]Case, error) {
 		result[index] = byCore[keys[index]]
 	}
 	return result, nil
+}
+
+func SelectTrainingPool(pool []Case, reserve WorkReservation) ([]Case, error) {
+	if len(pool) < TrainingCount {
+		return nil, fmt.Errorf("training pool has only %d candidates", len(pool))
+	}
+	type candidate struct {
+		row           Case
+		core          []byte
+		positive      bool
+		eventConflict bool
+	}
+	candidates := make([]candidate, len(pool))
+	seen := map[string]bool{}
+	for index, row := range pool {
+		core, err := trainingCaseCore(row)
+		if err != nil || seen[string(core)] {
+			return nil, fmt.Errorf("invalid or duplicate training pool row %d", index)
+		}
+		seen[string(core)] = true
+		left, _ := actionrelations.ParseOccurrence(row.AOccurrence)
+		right, _ := actionrelations.ParseOccurrence(row.BOccurrence)
+		candidates[index] = candidate{row: row, core: core, positive: row.Label == "commutes", eventConflict: row.Label == "conflicts" && left.Action.Kind == "emit" && right.Action.Kind == "emit"}
+	}
+	slices.SortFunc(candidates, func(a, b candidate) int { return bytes.Compare(a.core, b.core) })
+	var selected []candidate
+	var reservationErr error
+	var visit func(index, positives, negatives int, labels map[string]bool, eventConflict bool) bool
+	visit = func(index, positives, negatives int, labels map[string]bool, eventConflict bool) bool {
+		if reservationErr != nil {
+			return false
+		}
+		reservationErr = reserveWork(reserve)
+		if reservationErr != nil {
+			return false
+		}
+		if positives > 8 || negatives > 8 || positives+len(candidates)-index < 8 || negatives+len(candidates)-index < 8 {
+			return false
+		}
+		if positives == 8 && negatives == 8 {
+			return len(labels) == 7 && eventConflict
+		}
+		if index == len(candidates) {
+			return false
+		}
+		current := candidates[index]
+		nextLabels := mapsClone(labels)
+		if !current.positive {
+			nextLabels[current.row.Label] = true
+		}
+		selected = append(selected, current)
+		if visit(index+1, positives+boolInt(current.positive), negatives+boolInt(!current.positive), nextLabels, eventConflict || current.eventConflict) {
+			return true
+		}
+		selected = selected[:len(selected)-1]
+		return visit(index+1, positives, negatives, labels, eventConflict)
+	}
+	if !visit(0, 0, 0, map[string]bool{}, false) {
+		if reservationErr != nil {
+			return nil, reservationErr
+		}
+		return nil, fmt.Errorf("training DFS found no frozen selection")
+	}
+	result := make([]Case, 0, TrainingCount)
+	for _, positive := range []bool{true, false} {
+		for _, candidate := range selected {
+			if candidate.positive == positive {
+				result = append(result, candidate.row)
+			}
+		}
+	}
+	for ordinal := range result {
+		result[ordinal].Ordinal = ordinal
+	}
+	return result, nil
+}
+
+func trainingCaseCore(testCase Case) ([]byte, error) {
+	state, err := actionrelations.ParseState(testCase.State)
+	if err != nil {
+		return nil, err
+	}
+	left, err := actionrelations.ParseOccurrence(testCase.AOccurrence)
+	if err != nil {
+		return nil, err
+	}
+	right, err := actionrelations.ParseOccurrence(testCase.BOccurrence)
+	if err != nil {
+		return nil, err
+	}
+	return (actionrelations.NormalizedWorld{State: state, Actions: []actionrelations.SemanticAction{left.Action, right.Action}}).CanonicalJSON()
+}
+
+func mapsClone(values map[string]bool) map[string]bool {
+	result := make(map[string]bool, len(values)+1)
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func familyPairs(family int) [][2]actionrelations.SemanticAction {
@@ -196,7 +330,28 @@ func familyPairs(family int) [][2]actionrelations.SemanticAction {
 	return result
 }
 
+func LatentGuard(family int) (actionrelations.Guard, error) {
+	var atom string
+	switch family {
+	case 0, 3, 4, 5:
+		return actionrelations.Guard{}, nil
+	case 1, 7:
+		atom = "combined-adds-in-bounds"
+	case 2:
+		atom = "argument-equal"
+	case 6:
+		atom = "symbol-equal"
+	default:
+		return actionrelations.Guard{}, fmt.Errorf("invalid family")
+	}
+	return actionrelations.Guard{Literals: []actionrelations.Literal{{Atom: atom, Polarity: true}}}, nil
+}
+
 func VerifyFamilyGuard(family int, guard actionrelations.Guard) error {
+	return VerifyFamilyGuardMeasured(family, guard, nil)
+}
+
+func VerifyFamilyGuardMeasured(family int, guard actionrelations.Guard, reserve WorkReservation) error {
 	if family < 0 || family >= len(FamilyNames) {
 		return fmt.Errorf("invalid guard family")
 	}
@@ -211,6 +366,9 @@ func VerifyFamilyGuard(family int, guard actionrelations.Guard) error {
 			}, Events: events}
 			stateJSON, _ := state.CanonicalJSON()
 			for pairOrdinal, pair := range familyPairs(family) {
+				if err := reserveWork(reserve); err != nil {
+					return err
+				}
 				occurrences, err := actionrelations.AssignOccurrences([]actionrelations.SemanticAction{pair[0], pair[1]})
 				if err != nil {
 					return err

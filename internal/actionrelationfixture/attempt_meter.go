@@ -47,11 +47,13 @@ func (m *AttemptMeter) RunPhase(work func(reserve func() error) (bool, error)) e
 	vocabulary := generatorPhaseVocabulary[len(m.phases)]
 	start := m.total
 	active := true
+	reservationFailed := false
 	reserve := func() error {
 		if !active || m.closed || m.failed {
 			return fmt.Errorf("generator reservation escaped its phase")
 		}
 		if m.total >= m.cap {
+			reservationFailed = true
 			return ErrGeneratorWorkCap
 		}
 		m.total++
@@ -59,6 +61,9 @@ func (m *AttemptMeter) RunPhase(work func(reserve func() error) (bool, error)) e
 	}
 	passed, workErr := work(reserve)
 	active = false
+	if reservationFailed {
+		workErr = ErrGeneratorWorkCap
+	}
 	status := "failed"
 	if !errors.Is(workErr, ErrGeneratorWorkCap) {
 		if m.total >= m.cap {

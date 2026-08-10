@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/chazu/nous/internal/actionrelationfixturecore"
 	"github.com/chazu/nous/internal/actionrelationoracle"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 	"github.com/chazu/nous/internal/actionrelationwire"
@@ -46,6 +47,10 @@ type CurriculumTruth struct {
 }
 
 func SealCurriculumTruth(curriculum Curriculum) (CurriculumTruth, error) {
+	return SealCurriculumTruthMeasured(curriculum, nil)
+}
+
+func SealCurriculumTruthMeasured(curriculum Curriculum, reserve actionrelationfixturecore.WorkReservation) (CurriculumTruth, error) {
 	if len(curriculum.Worlds) != 6 {
 		return CurriculumTruth{}, fmt.Errorf("curriculum truth requires six worlds")
 	}
@@ -61,7 +66,7 @@ func SealCurriculumTruth(curriculum Curriculum) (CurriculumTruth, error) {
 		if err != nil || worldDigest(world) != view.Core.Digest {
 			return CurriculumTruth{}, fmt.Errorf("truth world %d changed semantic core", slot)
 		}
-		truth, err := SealWorldTruth(world)
+		truth, err := SealWorldTruthMeasured(world, reserve)
 		if err != nil {
 			return CurriculumTruth{}, fmt.Errorf("truth world %d: %w", slot, err)
 		}
@@ -89,20 +94,17 @@ func SealCurriculumTruth(curriculum Curriculum) (CurriculumTruth, error) {
 }
 
 func SealWorldTruth(world actionrelations.NormalizedWorld) (WorldTruth, error) {
+	return SealWorldTruthMeasured(world, nil)
+}
+
+func SealWorldTruthMeasured(world actionrelations.NormalizedWorld, reserve actionrelationfixturecore.WorkReservation) (WorldTruth, error) {
 	canonical, err := world.CanonicalJSON()
 	if err != nil {
 		return WorldTruth{}, err
 	}
 	digestBytes := sha256.Sum256(canonical)
 	worldDigest := hex.EncodeToString(digestBytes[:])
-	complete, err := actionrelationsearch.Search(actionrelations.World{State: world.State, Actions: presentationActions(world.Actions)}, actionrelationsearch.Complete, actionrelationsearch.Artifact{})
-	if err != nil {
-		return WorldTruth{}, err
-	}
-	terminals := slices.Clone(complete.TerminalDigests)
-	slices.Sort(terminals)
-	terminals = slices.Compact(terminals)
-	rows, err := enumeratePairLabels(world)
+	terminals, rows, err := enumerateTruth(world, reserve)
 	if err != nil {
 		return WorldTruth{}, err
 	}
@@ -157,13 +159,17 @@ type truthNode struct {
 	remaining []actionrelations.Occurrence
 }
 
-func enumeratePairLabels(world actionrelations.NormalizedWorld) ([]PairLabelRow, error) {
+func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelationfixturecore.WorkReservation) ([]string, []PairLabelRow, error) {
 	queue := []truthNode{{state: world.State, remaining: world.Occurrences}}
 	seenNodes := map[string]bool{}
 	rows := map[string]PairLabelRow{}
+	terminals := map[string]bool{}
 	for len(queue) > 0 {
 		node := queue[0]
 		queue = queue[1:]
+		if err := reserveTruthWork(reserve); err != nil {
+			return nil, nil, err
+		}
 		identity := truthNodeIdentity(node)
 		if seenNodes[identity] {
 			continue
@@ -175,46 +181,86 @@ func enumeratePairLabels(world actionrelations.NormalizedWorld) ([]PairLabelRow,
 			for rightIndex := leftIndex + 1; rightIndex < len(node.remaining); rightIndex++ {
 				left, right, err := actionrelations.CanonicalPair(node.remaining[leftIndex], node.remaining[rightIndex])
 				if err != nil {
-					return nil, err
+					return nil, nil, err
+				}
+				aDigest, _ := left.Digest()
+				bDigest, _ := right.Digest()
+				minDigest, maxDigest := aDigest, bDigest
+				if minDigest > maxDigest {
+					minDigest, maxDigest = maxDigest, minDigest
+				}
+				key := stateDigest + minDigest + maxDigest
+				if _, exists := rows[key]; exists {
+					continue
+				}
+				if err := reserveTruthWork(reserve); err != nil {
+					return nil, nil, err
 				}
 				leftJSON, _ := left.Action.CanonicalJSON()
 				rightJSON, _ := right.Action.CanonicalJSON()
 				observation, err := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
-				aDigest, _ := left.Digest()
-				bDigest, _ := right.Digest()
 				label := observation.Label
 				if aDigest > bDigest {
 					aDigest, bDigest = bDigest, aDigest
 					label = reversePairLabel(label)
 				}
+				if err := reserveTruthWork(reserve); err != nil {
+					return nil, nil, err
+				}
 				row := PairLabelRow{StateDigest: stateDigest, ADigest: aDigest, BDigest: bDigest, Label: label}
-				rows[stateDigest+aDigest+bDigest] = row
+				rows[key] = row
 			}
 		}
+		applied := 0
 		for _, occurrence := range node.remaining {
 			next, outcome, err := actionrelations.Apply(node.state, occurrence.Action)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if outcome != "applied" {
 				continue
 			}
+			applied++
 			digest, _ := occurrence.Digest()
 			queue = append(queue, truthNode{state: next, remaining: removeTruthOccurrence(node.remaining, digest)})
 		}
+		if applied == 0 {
+			terminal, err := actionrelationsearch.BuildTerminalBehaviorFromApplicability(node.state, node.remaining, make([]bool, len(node.remaining)))
+			if err != nil {
+				return nil, nil, err
+			}
+			if !terminals[terminal.Digest] {
+				if err := reserveTruthWork(reserve); err != nil {
+					return nil, nil, err
+				}
+				terminals[terminal.Digest] = true
+			}
+		}
 		if len(seenNodes)+len(queue) > 65536 {
-			return nil, fmt.Errorf("truth reachability exceeds frozen cap")
+			return nil, nil, fmt.Errorf("truth reachability exceeds frozen cap")
 		}
 	}
+	terminalRows := make([]string, 0, len(terminals))
+	for digest := range terminals {
+		terminalRows = append(terminalRows, digest)
+	}
+	slices.Sort(terminalRows)
 	result := make([]PairLabelRow, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, row)
 	}
 	slices.SortFunc(result, comparePairRows)
-	return result, nil
+	return terminalRows, result, nil
+}
+
+func reserveTruthWork(reserve actionrelationfixturecore.WorkReservation) error {
+	if reserve == nil {
+		return nil
+	}
+	return reserve()
 }
 
 func reversePairLabel(label string) string {
@@ -307,14 +353,6 @@ func removeTruthOccurrence(values []actionrelations.Occurrence, digest string) [
 			continue
 		}
 		result = append(result, value)
-	}
-	return result
-}
-
-func presentationActions(actions []actionrelations.SemanticAction) []actionrelations.Action {
-	result := make([]actionrelations.Action, len(actions))
-	for index, action := range actions {
-		result[index] = actionrelations.Action{Name: fmt.Sprintf("a%d", index), Kind: action.Kind, X: action.XRole, Y: action.YRole, N: action.N, Symbol: action.Symbol}
 	}
 	return result
 }

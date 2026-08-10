@@ -39,23 +39,69 @@ type Curriculum struct {
 	Worlds              []UtilityView
 }
 
+type SkeletonCatalogs struct {
+	Positive []actionrelationfixturecore.UtilityCore
+	Neutral  []actionrelationfixturecore.UtilityCore
+	Adverse  []actionrelationfixturecore.UtilityCore
+}
+
 func BuildCurriculum(context DrawContext) (Curriculum, error) {
 	draws, err := PrecommitDraws(context)
 	if err != nil {
 		return Curriculum{}, err
 	}
 	family := context.Curriculum % 8
-	result := Curriculum{Family: family, WithinFamilyOrdinal: context.Curriculum / 8, Draws: draws}
-	catalogs := map[string][]actionrelationfixturecore.UtilityCore{}
-	for _, stratum := range []string{actionrelationfixturecore.PositiveEffect, actionrelationfixturecore.Neutral, actionrelationfixturecore.Adverse} {
-		catalogs[stratum], err = actionrelationfixturecore.SkeletonCatalog(family, stratum)
-		if err != nil || len(catalogs[stratum]) < 2 {
-			return Curriculum{}, fmt.Errorf("family %d %s catalog: %w", family, stratum, err)
+	catalogs, err := BuildSkeletonCatalogs(family, nil)
+	if err != nil {
+		return Curriculum{}, err
+	}
+	return BuildCurriculumFromCatalogs(context, draws, catalogs, nil)
+}
+
+func BuildSkeletonCatalogs(family int, reserve actionrelationfixturecore.WorkReservation) (SkeletonCatalogs, error) {
+	result := SkeletonCatalogs{}
+	rows := []struct {
+		stratum string
+		target  *[]actionrelationfixturecore.UtilityCore
+	}{
+		{actionrelationfixturecore.PositiveEffect, &result.Positive},
+		{actionrelationfixturecore.Neutral, &result.Neutral},
+		{actionrelationfixturecore.Adverse, &result.Adverse},
+	}
+	for _, row := range rows {
+		catalog, err := actionrelationfixturecore.SkeletonCatalogMeasured(family, row.stratum, reserve)
+		if err != nil {
+			return SkeletonCatalogs{}, fmt.Errorf("family %d %s catalog: %w", family, row.stratum, err)
 		}
+		if len(catalog) < 2 {
+			return SkeletonCatalogs{}, fmt.Errorf("family %d %s catalog has only %d worlds", family, row.stratum, len(catalog))
+		}
+		*row.target = catalog
+	}
+	return result, nil
+}
+
+func BuildCurriculumFromCatalogs(context DrawContext, draws DrawBlock, catalogs SkeletonCatalogs, reserve actionrelationfixturecore.WorkReservation) (Curriculum, error) {
+	if err := validateDrawContext(context); err != nil || !equalDrawContexts(draws.Context, context) {
+		return Curriculum{}, fmt.Errorf("invalid measured curriculum context")
+	}
+	wantDraws, err := PrecommitDraws(context)
+	if err != nil || !equalDrawBlocks(draws, wantDraws) {
+		return Curriculum{}, fmt.Errorf("measured curriculum changed draw block")
+	}
+	family := context.Curriculum % 8
+	result := Curriculum{Family: family, WithinFamilyOrdinal: context.Curriculum / 8, Draws: draws}
+	byStratum := map[string][]actionrelationfixturecore.UtilityCore{
+		actionrelationfixturecore.PositiveEffect: catalogs.Positive,
+		actionrelationfixturecore.Neutral:        catalogs.Neutral,
+		actionrelationfixturecore.Adverse:        catalogs.Adverse,
 	}
 	for slot := 0; slot < 6; slot++ {
 		stratum := []string{actionrelationfixturecore.PositiveEffect, actionrelationfixturecore.PositiveEffect, actionrelationfixturecore.Neutral, actionrelationfixturecore.Neutral, actionrelationfixturecore.Adverse, actionrelationfixturecore.Adverse}[slot]
-		catalog := catalogs[stratum]
+		catalog := byStratum[stratum]
+		if len(catalog) < 2 {
+			return Curriculum{}, fmt.Errorf("family %d %s catalog has fewer than two worlds", family, stratum)
+		}
 		localSlot := slot % 2
 		firstDraw := draws.Draws[(slot-localSlot)*11]
 		first, _ := Pick(firstDraw.U64, len(catalog))
@@ -71,7 +117,7 @@ func BuildCurriculum(context DrawContext) (Curriculum, error) {
 				}
 			}
 		}
-		view, err := present(slot, stratum, catalog[selected], draws.Draws[slot*11:slot*11+11])
+		view, err := presentMeasured(slot, stratum, catalog[selected], draws.Draws[slot*11:slot*11+11], reserve)
 		if err != nil {
 			return Curriculum{}, err
 		}
@@ -81,6 +127,10 @@ func BuildCurriculum(context DrawContext) (Curriculum, error) {
 }
 
 func present(slot int, stratum string, core actionrelationfixturecore.UtilityCore, draws []Draw) (UtilityView, error) {
+	return presentMeasured(slot, stratum, core, draws, nil)
+}
+
+func presentMeasured(slot int, stratum string, core actionrelationfixturecore.UtilityCore, draws []Draw, reserve actionrelationfixturecore.WorkReservation) (UtilityView, error) {
 	cellBank, _ := Pick(draws[1].U64, len(cellNameBanks))
 	actionBank, _ := Pick(draws[2].U64, len(actionNameBanks))
 	cellPermutation := []int{0, 1, 2}
@@ -121,6 +171,11 @@ func present(slot int, stratum string, core actionrelationfixturecore.UtilityCor
 		actions[index] = orderedActions[original]
 	}
 	world := actionrelations.World{State: state, Actions: actions}
+	if reserve != nil {
+		if err := reserve(); err != nil {
+			return UtilityView{}, err
+		}
+	}
 	normalized, err := world.Normalize()
 	if err != nil {
 		return UtilityView{}, err

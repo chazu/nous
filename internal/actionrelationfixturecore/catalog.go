@@ -39,6 +39,10 @@ type UtilityCore struct {
 }
 
 func SkeletonCatalog(family int, stratum string) ([]UtilityCore, error) {
+	return SkeletonCatalogMeasured(family, stratum, nil)
+}
+
+func SkeletonCatalogMeasured(family int, stratum string, reserve WorkReservation) ([]UtilityCore, error) {
 	if family < 0 || family >= len(FamilyNames) || stratum != PositiveEffect && stratum != Neutral && stratum != Adverse {
 		return nil, fmt.Errorf("invalid family/stratum")
 	}
@@ -50,6 +54,9 @@ func SkeletonCatalog(family int, stratum string) ([]UtilityCore, error) {
 	seen := map[string]bool{}
 	var result []UtilityCore
 	for encoded := 0; encoded < 64; encoded++ {
+		if err := reserveWork(reserve); err != nil {
+			return nil, err
+		}
 		values := []int{encoded / 16, encoded / 4 % 4, encoded % 4}
 		state := actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: values[0]}, {Name: "c1", Value: values[1]}, {Name: "c2", Value: values[2]}}, Events: []string{}}
 		if hasApplicableInertCheck(state, occurrences) {
@@ -73,11 +80,14 @@ func SkeletonCatalog(family int, stratum string) ([]UtilityCore, error) {
 			continue
 		}
 		seen[digest] = true
-		assessment, err := assessUtilityCore(family, world)
+		assessment, err := assessUtilityCoreMeasured(family, world, reserve)
 		if err != nil {
 			return nil, fmt.Errorf("state %v: %w", values, err)
 		}
 		assessment.Family, assessment.Stratum, assessment.World, assessment.Canonical, assessment.Digest = family, stratum, world, canonical, digest
+		if err := reserveWork(reserve); err != nil {
+			return nil, err
+		}
 		if stratumAccepts(family, stratum, assessment) {
 			result = append(result, assessment)
 		}
@@ -162,6 +172,10 @@ type reachableNode struct {
 }
 
 func assessUtilityCore(family int, world actionrelations.NormalizedWorld) (UtilityCore, error) {
+	return assessUtilityCoreMeasured(family, world, nil)
+}
+
+func assessUtilityCoreMeasured(family int, world actionrelations.NormalizedWorld, reserve WorkReservation) (UtilityCore, error) {
 	queue := []reachableNode{{state: world.State, remaining: world.Occurrences}}
 	seenNodes := map[string]bool{}
 	seenStates := map[string]bool{}
@@ -171,6 +185,9 @@ func assessUtilityCore(family int, world actionrelations.NormalizedWorld) (Utili
 	for len(queue) > 0 {
 		node := queue[0]
 		queue = queue[1:]
+		if err := reserveWork(reserve); err != nil {
+			return UtilityCore{}, err
+		}
 		key := nodeIdentity(node)
 		if seenNodes[key] {
 			continue
@@ -202,6 +219,9 @@ func assessUtilityCore(family int, world actionrelations.NormalizedWorld) (Utili
 		}
 		for leftIndex := 0; leftIndex < len(node.remaining); leftIndex++ {
 			for rightIndex := leftIndex + 1; rightIndex < len(node.remaining); rightIndex++ {
+				if err := reserveWork(reserve); err != nil {
+					return UtilityCore{}, err
+				}
 				left, right, err := actionrelations.CanonicalPair(node.remaining[leftIndex], node.remaining[rightIndex])
 				if err != nil {
 					return UtilityCore{}, fmt.Errorf("pair %d/%d: %w", leftIndex, rightIndex, err)

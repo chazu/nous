@@ -11,6 +11,8 @@ import (
 
 const TrainingCount = 16
 
+type WorkReservation func() error
+
 type Case struct {
 	Ordinal              int
 	State                []byte
@@ -43,12 +45,19 @@ func Training() ([]Case, error) {
 }
 
 func positiveCases() ([]Case, error) {
+	return positiveCasesMeasured(nil)
+}
+
+func positiveCasesMeasured(reserve WorkReservation) ([]Case, error) {
 	var cases []Case
 	seen := map[string]bool{}
 	for left := 0; left <= 3 && len(cases) < 8; left++ {
 		for right := 0; right <= 3 && len(cases) < 8; right++ {
 			for _, aN := range []int{-2, -1, 1, 2} {
 				for _, bN := range []int{-2, -1, 1, 2} {
+					if err := reserveWork(reserve); err != nil {
+						return nil, err
+					}
 					state := actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: left}, {Name: "c1", Value: right}}}
 					a := actionrelations.SemanticAction{Kind: "add", XRole: "c0", N: aN}
 					b := actionrelations.SemanticAction{Kind: "add", XRole: "c1", N: bN}
@@ -75,6 +84,10 @@ func positiveCases() ([]Case, error) {
 }
 
 func negativeCases() ([]Case, error) {
+	return negativeCasesMeasured(nil)
+}
+
+func negativeCasesMeasured(reserve WorkReservation) ([]Case, error) {
 	wanted := []string{"a-enables-b", "b-enables-a", "a-disables-b", "b-disables-a", "mutual-disables", "inapplicable", "conflicts"}
 	found := map[string]Case{}
 	actions := actionAlphabet()
@@ -87,6 +100,9 @@ func negativeCases() ([]Case, error) {
 			state := stateFor(cells, values, 0)
 			for left := 0; left < len(actions) && len(found) < len(wanted); left++ {
 				for right := left; right < len(actions) && len(found) < len(wanted); right++ {
+					if err := reserveWork(reserve); err != nil {
+						return nil, err
+					}
 					candidate, label, err := makeCase(state, actions[left], actions[right])
 					if err != nil {
 						continue
@@ -111,6 +127,9 @@ func negativeCases() ([]Case, error) {
 		}
 		result = append(result, candidate)
 	}
+	if err := reserveWork(reserve); err != nil {
+		return nil, err
+	}
 	eventConflict, label, err := makeCase(
 		stateFor(1, 0, 0),
 		actionrelations.SemanticAction{Kind: "emit", Symbol: "a"},
@@ -120,6 +139,13 @@ func negativeCases() ([]Case, error) {
 		return nil, fmt.Errorf("event conflict: label=%s err=%v", label, err)
 	}
 	return append(result, eventConflict), nil
+}
+
+func reserveWork(reserve WorkReservation) error {
+	if reserve == nil {
+		return nil
+	}
+	return reserve()
 }
 
 func makeCase(state actionrelations.State, left, right actionrelations.SemanticAction) (Case, string, error) {

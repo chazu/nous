@@ -30,6 +30,14 @@ func SealCurriculumFixture(context DrawContext, curriculum Curriculum, truth Cur
 	if err != nil || truth.Root != wantTruth.Root {
 		return CurriculumFixture{}, fmt.Errorf("curriculum scorer truth changed")
 	}
+	training, err := SealTrainingAuthority(curriculum.Family)
+	if err != nil {
+		return CurriculumFixture{}, err
+	}
+	return assembleCurriculumFixture(context, curriculum, truth, ledgers, training)
+}
+
+func assembleCurriculumFixture(context DrawContext, curriculum Curriculum, truth CurriculumTruth, ledgers []AttemptLedger, training TrainingAuthority) (CurriculumFixture, error) {
 	if len(ledgers) != context.Attempt+1 || len(ledgers) < 1 {
 		return CurriculumFixture{}, fmt.Errorf("attempt-ledger sequence does not reach accepted attempt")
 	}
@@ -41,10 +49,6 @@ func SealCurriculumFixture(context DrawContext, curriculum Curriculum, truth Cur
 			return CurriculumFixture{}, fmt.Errorf("invalid attempt ledger %d", attempt)
 		}
 		ledgerDigests[attempt] = ledger.Digest
-	}
-	training, err := SealTrainingAuthority(curriculum.Family)
-	if err != nil {
-		return CurriculumFixture{}, err
 	}
 	worldDigests := make([]string, 6)
 	for slot, view := range curriculum.Worlds {

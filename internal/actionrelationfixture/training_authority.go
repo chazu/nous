@@ -18,12 +18,27 @@ type TrainingAuthority struct {
 
 func SealTrainingAuthority(family int) (TrainingAuthority, error) {
 	training, err := actionrelationfixturecore.TrainingFamily(family)
-	if err != nil || len(training) != 16 {
+	if err != nil {
 		return TrainingAuthority{}, fmt.Errorf("training family %d: %w", family, err)
+	}
+	if len(training) != 16 {
+		return TrainingAuthority{}, fmt.Errorf("training family %d has %d cases", family, len(training))
+	}
+	return SealTrainingAuthorityFromCases(training, nil)
+}
+
+func SealTrainingAuthorityFromCases(training []actionrelationfixturecore.Case, reserve actionrelationfixturecore.WorkReservation) (TrainingAuthority, error) {
+	if len(training) != 16 {
+		return TrainingAuthority{}, fmt.Errorf("training authority requires 16 cases")
 	}
 	authority := TrainingAuthority{CoreDigests: make([]string, len(training)), ViewEvidenceDigests: make([]string, 0, 2*len(training))}
 	seen := map[string]bool{}
 	for ordinal, testCase := range training {
+		if reserve != nil {
+			if err := reserve(); err != nil {
+				return TrainingAuthority{}, err
+			}
+		}
 		observation, err := sealTrainingObservation(testCase)
 		if err != nil {
 			return TrainingAuthority{}, fmt.Errorf("training core %d: %w", ordinal, err)
@@ -34,7 +49,7 @@ func SealTrainingAuthority(family int) (TrainingAuthority, error) {
 		}
 		seen[observationDigest] = true
 		authority.CoreDigests[ordinal] = observationDigest
-		views, err := actionrelationfixturecore.Views(testCase)
+		views, err := actionrelationfixturecore.ViewsMeasured(testCase, reserve)
 		if err != nil || len(views) != 2 {
 			return TrainingAuthority{}, fmt.Errorf("training views %d: %w", ordinal, err)
 		}
