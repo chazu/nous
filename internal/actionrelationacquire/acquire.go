@@ -11,6 +11,7 @@ import (
 	"io"
 
 	"github.com/chazu/nous/internal/actionrelationfixturecore"
+	"github.com/chazu/nous/internal/actionrelationwire"
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/engine"
@@ -58,9 +59,6 @@ func Execute(domainsDir, token string) (Run, error) {
 	pattern := actionrelations.Pattern{Kinds: []string{"add", "add"}, Roles: []int{0, -1, 1, -1}}
 	patternJSON, _ := pattern.CanonicalJSON()
 	experiment.Set("pattern", string(patternJSON))
-	trainingBytes, _ := json.Marshal(training)
-	trainingDigest := sha256.Sum256(trainingBytes)
-	experiment.Set("semanticTrainingRoot", hex.EncodeToString(trainingDigest[:]))
 	store.Put(experiment)
 	for _, testCase := range training {
 		name := fmt.Sprintf("AR.Training.%s.%02d", token, testCase.Ordinal)
@@ -116,7 +114,21 @@ func installPresentationViews(store *unit.Store, experiment *unit.Unit, training
 	if len(observations) != len(training) {
 		return fmt.Errorf("view observation count mismatch")
 	}
-	var names, digests []string
+	observationDigests := make([]string, len(observations))
+	for index, name := range observations {
+		observation := store.Get(name)
+		if observation == nil {
+			return fmt.Errorf("missing observation %d", index)
+		}
+		observationDigests[index] = observation.GetString("objectDigest")
+	}
+	semanticTrainingRoot, err := actionrelationwire.RootDigest("semantic-training", observationDigests)
+	if err != nil {
+		return err
+	}
+	experiment.Set("semanticTrainingRoot", semanticTrainingRoot)
+	var names, presentationNames, proofNames []string
+	var rootRows []any
 	for index, testCase := range training {
 		views, err := actionrelationfixturecore.Views(testCase)
 		if err != nil {
@@ -127,6 +139,20 @@ func installPresentationViews(store *unit.Store, experiment *unit.Unit, training
 			return fmt.Errorf("missing observation %d", index)
 		}
 		for _, view := range views {
+			viewName := fmt.Sprintf("AR.Presentation.%s.%02d.%d", experiment.Name, index, view.Bank)
+			viewUnit := unit.New(viewName)
+			viewUnit.Set("isA", []string{"ActionPresentationView", "Anything"})
+			viewUnit.Set("canonicalObject", string(view.Canonical))
+			viewUnit.Set("objectDigest", view.Digest)
+			store.Put(viewUnit)
+			presentationNames = append(presentationNames, viewName)
+			proofName := fmt.Sprintf("AR.NormalizationProof.%s.%02d.%d", experiment.Name, index, view.Bank)
+			proofUnit := unit.New(proofName)
+			proofUnit.Set("isA", []string{"ActionNormalizationProof", "Anything"})
+			proofUnit.Set("canonicalObject", string(view.Proof))
+			proofUnit.Set("objectDigest", view.ProofDigest)
+			store.Put(proofUnit)
+			proofNames = append(proofNames, proofName)
 			wire, _ := json.Marshal([]any{"action-view-evidence/v1", observation.GetString("objectDigest"), view.Digest, view.ProofDigest})
 			digestBytes := sha256.Sum256(wire)
 			digest := hex.EncodeToString(digestBytes[:])
@@ -146,12 +172,17 @@ func installPresentationViews(store *unit.Store, experiment *unit.Unit, training
 			u.Set("cellCount", view.CellCount)
 			u.Set("actionCount", view.ActionCount)
 			store.Put(u)
-			names, digests = append(names, name), append(digests, digest)
+			names = append(names, name)
+			rootRows = append(rootRows, []any{observation.GetString("objectDigest"), view.Bank, digest})
 		}
 	}
-	rootWire, _ := json.Marshal([]any{"action-view-evidence-root/v1", digests})
-	rootDigest := sha256.Sum256(rootWire)
+	rootDigest, err := actionrelationwire.RootDigest("view-evidence", rootRows)
+	if err != nil {
+		return err
+	}
 	experiment.Set("viewEvidenceUnits", names)
-	experiment.Set("viewEvidenceRoot", hex.EncodeToString(rootDigest[:]))
+	experiment.Set("presentationViewUnits", presentationNames)
+	experiment.Set("normalizationProofUnits", proofNames)
+	experiment.Set("viewEvidenceRoot", rootDigest)
 	return nil
 }

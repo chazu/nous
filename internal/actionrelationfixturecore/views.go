@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/chazu/nous/internal/actionrelationwire"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
@@ -92,11 +93,22 @@ func Views(testCase Case) ([]View, error) {
 			return bytes.Compare(a, b)
 		})
 		proofJSON, _ := json.Marshal([]any{"action-normalization-proof/v1", viewDigest, mapRows, semanticWorldDigest})
-		originalActionsJSON, _ := json.Marshal(actionRows)
-		mappingJSON, _ := json.Marshal(mapping)
+		actionDigests := make([]string, len(actions))
+		for index, action := range actions {
+			actionJSON, _ := action.CanonicalJSON()
+			actionDigests[index] = digestView(actionJSON)
+		}
+		originalActionsRoot, err := actionrelationwire.RootDigest("original-actions", actionDigests)
+		if err != nil {
+			return nil, err
+		}
+		occurrenceMapRoot, err := actionrelationwire.RootDigest("occurrence-map", mapping)
+		if err != nil {
+			return nil, err
+		}
 		result[bank] = View{
 			Bank: bank, Canonical: viewJSON, Digest: viewDigest, Proof: proofJSON, ProofDigest: digestView(proofJSON), SemanticWorldDigest: semanticWorldDigest,
-			OriginalStateDigest: digestView(stateJSON), OriginalActionsRoot: digestView(originalActionsJSON), OccurrenceMapRoot: digestView(mappingJSON), CellCount: len(state.Cells), ActionCount: len(actions),
+			OriginalStateDigest: digestView(stateJSON), OriginalActionsRoot: originalActionsRoot, OccurrenceMapRoot: occurrenceMapRoot, CellCount: len(state.Cells), ActionCount: len(actions),
 		}
 	}
 	return result, nil

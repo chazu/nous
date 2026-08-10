@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/chazu/nous/internal/actionrelationacquire"
+	"github.com/chazu/nous/internal/actionrelationwire"
 )
 
 func TestAcquisitionStoreEncodesFrozenHighVolumeTables(t *testing.T) {
@@ -41,5 +42,16 @@ func TestAcquisitionStoreEncodesFrozenHighVolumeTables(t *testing.T) {
 	viewDigest, _ := hex.DecodeString(viewUnit.GetString("viewDigest"))
 	if !bytes.Equal(viewRecord[:32], viewDigest) || viewRecord[224] != 0 || viewRecord[225] < 1 || viewRecord[225] > 3 || viewRecord[226] != 2 || viewRecord[227] != 1 || !bytes.Equal(viewRecord[228:], make([]byte, 512-228)) {
 		t.Fatalf("kind 106 first record violates frozen layout")
+	}
+	firstResult := run.Store.Get(run.Store.Get(run.Experiment).GetStrings("candidateResultUnits")[0])
+	guardResultDigests := make([]string, 0, 16)
+	for _, name := range firstResult.GetStrings("guardResults") {
+		guardResultDigests = append(guardResultDigests, run.Store.Get(name).GetString("objectDigest"))
+	}
+	wantVectorRoot, _ := actionrelationwire.RootDigest("guard-result-vector", guardResultDigests)
+	gotVectorRoot := tables[108].Bytes[len(TableHeader)+32 : len(TableHeader)+64]
+	wantVectorBytes, _ := hex.DecodeString(wantVectorRoot)
+	if !bytes.Equal(gotVectorRoot, wantVectorBytes) {
+		t.Fatal("kind 108 does not use the frozen guard-result-vector root")
 	}
 }

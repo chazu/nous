@@ -1,13 +1,13 @@
 package actionrelationexp
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
 	"github.com/chazu/nous/internal/actionrelationacquire"
+	"github.com/chazu/nous/internal/actionrelationwire"
 	"github.com/chazu/nous/internal/unit"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
@@ -300,9 +300,10 @@ func encodeCandidateResult(store *unit.Store, u *unit.Unit) ([]byte, error) {
 		}
 		guardResultDigests = append(guardResultDigests, row.GetString("objectDigest"))
 	}
-	vectorBytes, _ := json.Marshal([]any{"action-guard-result-vector/v1", guardResultDigests})
-	vectorRoot := sha256.Sum256(vectorBytes)
-	copy(record[32:64], vectorRoot[:])
+	vectorRoot, err := actionrelationwire.RootDigest("guard-result-vector", guardResultDigests)
+	if err != nil || !putDigest(record[32:64], vectorRoot) {
+		return nil, fmt.Errorf("invalid guard-result vector")
+	}
 	positive, negative := u.GetInt("positiveCoverage"), u.GetInt("negativeCoverage")
 	if positive < 0 || positive > 16 || negative < 0 || negative > 16 {
 		return nil, fmt.Errorf("invalid result coverage")
@@ -322,9 +323,8 @@ func actionrelationsAtomCode(atom string) uint16 {
 }
 
 func factPairRoot(left, right string) string {
-	wire, _ := json.Marshal([]any{"action-local-fact-pair/v1", left, right})
-	digest := sha256.Sum256(wire)
-	return hex.EncodeToString(digest[:])
+	root, _ := actionrelationwire.RootDigest("local-fact-pair", []string{left, right})
+	return root
 }
 
 func putDigest(target []byte, value string) bool {

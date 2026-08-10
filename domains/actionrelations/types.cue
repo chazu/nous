@@ -10,6 +10,8 @@ units: [
 	},
 	{name: "ActionRelationTrainingCase", worth: 650, isA: ["Anything"]},
 	{name: "ActionRelationObservation", worth: 650, isA: ["Anything"]},
+	{name: "ActionPresentationView", worth: 600, isA: ["Anything"]},
+	{name: "ActionNormalizationProof", worth: 600, isA: ["Anything"]},
 	{name: "ActionPresentationViewEvidence", worth: 600, isA: ["Anything"]},
 	{name: "FiniteActionState", worth: 600, isA: ["Anything"]},
 	{name: "ActionLocalFacts", worth: 550, isA: ["Anything"]},

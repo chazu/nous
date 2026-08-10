@@ -3,6 +3,7 @@ package actionrelationacquire
 import (
 	"testing"
 
+	"github.com/chazu/nous/internal/actionrelationwire"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
@@ -22,6 +23,26 @@ func TestCUEAcquisitionEvidenceCardinalities(t *testing.T) {
 		t.Fatalf("meter code counts=%v", codes)
 	}
 	experiment := run.Store.Get(run.Experiment)
+	if len(experiment.GetStrings("presentationViewUnits")) != 32 || len(experiment.GetStrings("normalizationProofUnits")) != 32 || len(experiment.GetStrings("viewEvidenceUnits")) != 32 {
+		t.Fatal("acquisition did not retain the two presentation lineages per observation")
+	}
+	observationDigests := make([]string, 16)
+	for index, name := range experiment.GetStrings("observationUnits") {
+		observationDigests[index] = run.Store.Get(name).GetString("objectDigest")
+	}
+	semanticRoot, _ := actionrelationwire.RootDigest("semantic-training", observationDigests)
+	if experiment.GetString("semanticTrainingRoot") != semanticRoot {
+		t.Fatal("semantic training root does not commit the ordered observation cores")
+	}
+	viewRows := make([]any, 0, 32)
+	for _, name := range experiment.GetStrings("viewEvidenceUnits") {
+		view := run.Store.Get(name)
+		viewRows = append(viewRows, []any{view.GetString("observationDigest"), view.GetInt("bank"), view.GetString("objectDigest")})
+	}
+	viewRoot, _ := actionrelationwire.RootDigest("view-evidence", viewRows)
+	if experiment.GetString("viewEvidenceRoot") != viewRoot {
+		t.Fatal("view root does not commit ordered observation/bank/evidence rows")
+	}
 	winner := run.Store.Get(experiment.GetStrings("winnerResultUnits")[0])
 	candidate := run.Store.Get(winner.GetString("candidate"))
 	guard, err := actionrelations.ParseGuard([]byte(candidate.GetString("guard")))
