@@ -45,6 +45,13 @@ func TestDevelopmentCurriculumExecutesExactAcquisitionAndSixWorldPolicyRows(t *t
 	}
 }
 
+func TestExportedCurriculumExecutorRejectsProtectedPanelsBeforeConstruction(t *testing.T) {
+	_, err := ExecuteCurriculum("../../domains", actionrelationfixture.GeneratedAttempt{Context: actionrelationfixture.DrawContext{Panel: "validation", Authority: "validation-public-v1"}})
+	if err == nil {
+		t.Fatal("development helper accepted protected panel work")
+	}
+}
+
 func policyWorldDigests(rows []WorldPolicyRow, policy actionrelationsearch.Policy) []string {
 	var result []string
 	for _, row := range rows {

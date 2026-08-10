@@ -39,7 +39,10 @@ func ExecuteCurriculum(domainsDir string, generated actionrelationfixture.Genera
 		Family: generated.Curriculum.Family, Runs: map[actionrelationsearch.Policy][]actionrelationutility.SearchRun{},
 		OperationRoots: map[string]actionrelationexp.OperationRoot{},
 	}
-	if actionrelationfixture.VerifyCurriculumFixture(generated.Fixture) != nil || generated.Fixture.Panel != context.Panel || generated.Fixture.Curriculum != context.Curriculum || generated.Curriculum.Family != context.Curriculum%8 || len(generated.Curriculum.Worlds) != 6 || len(generated.Truth.Worlds) != 6 {
+	// This exported helper is deliberately development-only. Validation and
+	// locked policy execution will be reachable solely from the staged guarded
+	// panel caller after implementation acceptance.
+	if context.Panel != "development" || context.Authority != "development-public-v1" || actionrelationfixture.VerifyCurriculumFixture(generated.Fixture) != nil || generated.Fixture.Panel != context.Panel || generated.Fixture.Curriculum != context.Curriculum || generated.Curriculum.Family != context.Curriculum%8 || len(generated.Curriculum.Worlds) != 6 || len(generated.Truth.Worlds) != 6 {
 		return result, fmt.Errorf("invalid scorer curriculum authority")
 	}
 	nous, err := executeAcquisition(domainsDir, context.Panel, context.Authority, context.Curriculum, result.Family, "nous")
