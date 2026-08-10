@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const TableHeader = "ARTB1\n"
@@ -137,7 +138,7 @@ func (m TableManifest) CanonicalJSON() ([]byte, error) {
 	rows := make([]any, len(m.Shards))
 	expected := uint32(0)
 	for index, shard := range m.Shards {
-		if shard.PackOrdinal != index || shard.FirstOrdinal != expected || shard.LastOrdinal < shard.FirstOrdinal || shard.ByteLength != len(TableHeader)+(int(shard.LastOrdinal-shard.FirstOrdinal)+1)*m.RecordSize || !digestText(shard.PackDigest) {
+		if shard.PackOrdinal != index || !safeEvidencePath(shard.RelativePath) || shard.FirstOrdinal != expected || shard.LastOrdinal < shard.FirstOrdinal || shard.ByteLength != len(TableHeader)+(int(shard.LastOrdinal-shard.FirstOrdinal)+1)*m.RecordSize || shard.ByteLength > MaximumPackBytes || !digestText(shard.PackDigest) {
 			return nil, fmt.Errorf("invalid table shard %d", index)
 		}
 		rows[index] = []any{shard.PackOrdinal, shard.RelativePath, shard.FirstOrdinal, shard.LastOrdinal, shard.ByteLength, shard.PackDigest}
@@ -145,6 +146,9 @@ func (m TableManifest) CanonicalJSON() ([]byte, error) {
 	}
 	if int(expected) != m.Count {
 		return nil, fmt.Errorf("table shard coverage mismatch")
+	}
+	if !digestText(m.MerkleRoot) {
+		return nil, fmt.Errorf("invalid table Merkle root")
 	}
 	return json.Marshal([]any{"actionrelation-table-manifest/v3", m.Curriculum, m.Scope, m.Kind, m.RecordSize, m.Count, rows, m.MerkleRoot})
 }
@@ -154,5 +158,5 @@ func digestText(value string) bool {
 		return false
 	}
 	_, err := hex.DecodeString(value)
-	return err == nil
+	return err == nil && value == strings.ToLower(value)
 }
