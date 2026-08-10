@@ -171,7 +171,7 @@ type RunEvidencePack struct {
 }
 
 func BuildRunEvidencePack(panel, authority string, records []RunEvidenceRecord) (RunEvidencePack, error) {
-	if !panelNames[panel] || !digestText(authority) || len(records) != panelRunCounts[panel] {
+	if !validPanelAuthority(panel, authority) || len(records) != panelRunCounts[panel] {
 		return RunEvidencePack{}, fmt.Errorf("invalid run-evidence authority")
 	}
 	records = slices.Clone(records)
@@ -226,6 +226,12 @@ func VerifyRunEvidencePack(value RunEvidencePack) error {
 
 var panelNames = map[string]bool{"development": true, "validation": true, "locked": true}
 var panelRunCounts = map[string]int{"development": 704, "validation": 1056, "locked": 1408}
+
+func validPanelAuthority(panel, authority string) bool {
+	return panel == "development" && authority == "development-public-v1" ||
+		panel == "validation" && authority == "validation-public-v1" ||
+		panel == "locked" && digestText(authority)
+}
 
 func sortedUniqueRunIDs(values []string) bool {
 	for index, value := range values {

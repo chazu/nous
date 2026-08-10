@@ -10,7 +10,6 @@ import (
 
 	"github.com/chazu/nous/internal/actionrelationfixturecore"
 	"github.com/chazu/nous/internal/actionrelationoracle"
-	"github.com/chazu/nous/internal/actionrelationsearch"
 	"github.com/chazu/nous/internal/actionrelationwire"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
@@ -228,15 +227,15 @@ func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelatio
 			queue = append(queue, truthNode{state: next, remaining: removeTruthOccurrence(node.remaining, digest)})
 		}
 		if applied == 0 {
-			terminal, err := actionrelationsearch.BuildTerminalBehaviorFromApplicability(node.state, node.remaining, make([]bool, len(node.remaining)))
+			terminalDigest, err := fixtureTerminalDigest(node.state, node.remaining)
 			if err != nil {
 				return nil, nil, err
 			}
-			if !terminals[terminal.Digest] {
+			if !terminals[terminalDigest] {
 				if err := reserveTruthWork(reserve); err != nil {
 					return nil, nil, err
 				}
-				terminals[terminal.Digest] = true
+				terminals[terminalDigest] = true
 			}
 		}
 		if len(seenNodes)+len(queue) > 65536 {
@@ -254,6 +253,27 @@ func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelatio
 	}
 	slices.SortFunc(result, comparePairRows)
 	return terminalRows, result, nil
+}
+
+func fixtureTerminalDigest(state actionrelations.State, remaining []actionrelations.Occurrence) (string, error) {
+	stateJSON, err := state.CanonicalJSON()
+	if err != nil {
+		return "", err
+	}
+	digests := make([]string, len(remaining))
+	for index, occurrence := range remaining {
+		digests[index], err = occurrence.Digest()
+		if err != nil {
+			return "", err
+		}
+	}
+	slices.Sort(digests)
+	terminal := "complete"
+	if len(remaining) > 0 {
+		terminal = "deadlock"
+	}
+	wire, _ := json.Marshal([]any{"action-terminal/v1", json.RawMessage(stateJSON), digests, terminal})
+	return shaHex(wire), nil
 }
 
 func reserveTruthWork(reserve actionrelationfixturecore.WorkReservation) error {

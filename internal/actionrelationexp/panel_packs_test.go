@@ -69,7 +69,7 @@ func TestDevelopmentRunEvidencePackHasExact240ByteRows(t *testing.T) {
 			StructuralRoot: testDigest(fmt.Sprintf("structural-%d", index)),
 		}
 	}
-	value, err := BuildRunEvidencePack("development", testDigest("authority"), records)
+	value, err := BuildRunEvidencePack("development", "development-public-v1", records)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +84,11 @@ func TestDevelopmentRunEvidencePackHasExact240ByteRows(t *testing.T) {
 	corrupt.File.Data[6+208] = 1
 	if err := VerifyRunEvidencePack(corrupt); err == nil {
 		t.Fatal("accepted a forged work-terminal digest")
+	}
+}
+
+func TestRunEvidenceAuthorityMatchesFrozenPanelClass(t *testing.T) {
+	if validPanelAuthority("development", testDigest("authority")) || validPanelAuthority("validation", "development-public-v1") || validPanelAuthority("locked", "development-public-v1") || !validPanelAuthority("locked", testDigest("locked-root")) {
+		t.Fatal("panel authority class changed")
 	}
 }
