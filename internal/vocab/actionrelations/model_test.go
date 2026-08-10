@@ -21,6 +21,24 @@ func TestParsersRequireCanonicalBytes(t *testing.T) {
 	}
 }
 
+func TestIdentifiersAdmitFrozenEventSymbols(t *testing.T) {
+	for _, symbol := range []string{"e0", "e1", "e2", "e3"} {
+		action := SemanticAction{Kind: "emit", Symbol: symbol}
+		wire, err := action.CanonicalJSON()
+		if err != nil {
+			t.Fatalf("symbol %s: %v", symbol, err)
+		}
+		if _, err := ParseSemanticAction(wire); err != nil {
+			t.Fatalf("parse symbol %s: %v", symbol, err)
+		}
+	}
+	for _, symbol := range []string{"0e", "E0", "e_0"} {
+		if _, err := (SemanticAction{Kind: "emit", Symbol: symbol}).CanonicalJSON(); err == nil {
+			t.Fatalf("accepted invalid symbol %q", symbol)
+		}
+	}
+}
+
 func TestWholeWorldNormalizationErasesPresentation(t *testing.T) {
 	left := World{
 		State: State{Cells: []Cell{{Name: "alice", Value: 3}, {Name: "bob", Value: 0}}},

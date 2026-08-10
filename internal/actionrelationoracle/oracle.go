@@ -319,8 +319,8 @@ func identifier(value string) bool {
 	if len(value) < 1 || len(value) > 8 {
 		return false
 	}
-	for _, char := range []byte(value) {
-		if char < 'a' || char > 'z' {
+	for index, char := range []byte(value) {
+		if index == 0 && (char < 'a' || char > 'z') || index > 0 && (char < 'a' || char > 'z') && (char < '0' || char > '9') {
 			return false
 		}
 	}
