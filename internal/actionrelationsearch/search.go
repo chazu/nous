@@ -29,16 +29,29 @@ const (
 )
 
 type Result struct {
-	Policy              Policy
-	TerminalDigests     []string
-	NodeLookups         int
-	ConstructedNodes    int
-	ApplicabilityChecks int
-	EligibilityChecks   int
-	CertificateChecks   int
-	CertificateHits     int
-	SleepPropagations   int
-	Edges               int
+	Policy                   Policy
+	TerminalDigests          []string
+	NodeLookups              int
+	ConstructedNodes         int
+	ApplicabilityChecks      int
+	EligibilityChecks        int
+	CertificateChecks        int
+	CertificateHits          int
+	SleepPropagations        int
+	Edges                    int
+	RootNodeDigest           string
+	RootSubtree              EvidenceObject
+	TerminalSet              EvidenceObject
+	Nodes                    []EvidenceObject
+	RemainingSets            []EvidenceObject
+	ProofMaps                []EvidenceObject
+	SearchEdges              []EvidenceObject
+	Propagations             []EvidenceObject
+	CompletedSubtrees        []EvidenceObject
+	TerminalBehaviors        []EvidenceObject
+	SubtreeRoots             []EvidenceObject
+	TerminalSets             []EvidenceObject
+	CertificateEvidenceBound bool
 }
 
 func (r Result) Work() int {
@@ -51,6 +64,12 @@ type Artifact struct {
 
 type CertificateFunc func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error)
 type EligibilityFunc func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error)
+type CertificateEvidenceFunc func(state actionrelations.State, left, right actionrelations.Occurrence) (CertificateDecision, error)
+
+type CertificateDecision struct {
+	Certified         bool
+	CertificateDigest string
+}
 
 func Search(world actionrelations.World, policy Policy, artifact Artifact) (Result, error) {
 	return SearchWithCertifier(world, policy, artifact, nil)
@@ -61,6 +80,17 @@ func SearchWithCertifier(world actionrelations.World, policy Policy, artifact Ar
 }
 
 func SearchWithAdapters(world actionrelations.World, policy Policy, artifact Artifact, eligibility EligibilityFunc, certifier CertificateFunc) (Result, error) {
+	return searchWithEvidenceAdapters(world, policy, artifact, eligibility, certifier, nil, false)
+}
+
+func SearchWithEvidenceAdapters(world actionrelations.World, policy Policy, artifact Artifact, eligibility EligibilityFunc, certifier CertificateEvidenceFunc) (Result, error) {
+	if certifier == nil && policy != Complete && policy != Lexical && policy != LearnedNoUse {
+		return Result{}, fmt.Errorf("certified policy requires evidence-producing certifier")
+	}
+	return searchWithEvidenceAdapters(world, policy, artifact, eligibility, nil, certifier, true)
+}
+
+func searchWithEvidenceAdapters(world actionrelations.World, policy Policy, artifact Artifact, eligibility EligibilityFunc, certifier CertificateFunc, evidenceCertifier CertificateEvidenceFunc, authoritative bool) (Result, error) {
 	normalized, err := world.Normalize()
 	if err != nil {
 		return Result{}, err
@@ -68,59 +98,97 @@ func SearchWithAdapters(world actionrelations.World, policy Policy, artifact Art
 	if !onePolicy(policy) {
 		return Result{}, fmt.Errorf("unknown policy %q", policy)
 	}
-	search := searcher{policy: policy, artifact: artifact, eligibility: eligibility, certifier: certifier, memo: map[string][]string{}, certificateCache: map[string]bool{}}
-	terminals, err := search.visit(normalized.State, normalized.Occurrences, nil)
+	search := searcher{policy: policy, artifact: artifact, eligibility: eligibility, certifier: certifier, evidenceCertifier: evidenceCertifier, memo: map[string]visitSummary{}, certificateCache: map[string]CertificateDecision{}, evidence: map[string]bool{}}
+	summary, err := search.visit(normalized.State, normalized.Occurrences, nil)
 	if err != nil {
 		return Result{}, err
 	}
+	terminals := summary.TerminalDigests
 	slices.Sort(terminals)
 	search.result.TerminalDigests = slices.Compact(terminals)
 	search.result.Policy = policy
+	search.result.RootNodeDigest = summary.Node.Digest
+	search.result.RootSubtree = summary.Subtree
+	search.result.TerminalSet = summary.TerminalSet
+	search.result.CertificateEvidenceBound = authoritative
 	return search.result, nil
 }
 
 type searcher struct {
-	policy           Policy
-	artifact         Artifact
-	certifier        CertificateFunc
-	eligibility      EligibilityFunc
-	result           Result
-	memo             map[string][]string
-	certificateCache map[string]bool
+	policy            Policy
+	artifact          Artifact
+	certifier         CertificateFunc
+	evidenceCertifier CertificateEvidenceFunc
+	eligibility       EligibilityFunc
+	result            Result
+	memo              map[string]visitSummary
+	certificateCache  map[string]CertificateDecision
+	evidence          map[string]bool
 }
 
-func (s *searcher) visit(state actionrelations.State, remaining []actionrelations.Occurrence, sleepers []string) ([]string, error) {
+type visitSummary struct {
+	Node            EvidenceObject
+	TerminalDigests []string
+	EdgePreorder    []string
+	Subtree         EvidenceObject
+	TerminalSet     EvidenceObject
+}
+
+func (s *searcher) visit(state actionrelations.State, remaining []actionrelations.Occurrence, proofs []ProofEntry) (visitSummary, error) {
 	s.result.NodeLookups++
-	key, err := nodeKey(state, remaining, sleepers)
+	remainingObject, err := BuildRemaining(remaining)
 	if err != nil {
-		return nil, err
+		return visitSummary{}, err
 	}
-	if terminals, ok := s.memo[key]; ok {
-		return slices.Clone(terminals), nil
+	proofMap, err := BuildProofMap(proofs)
+	if err != nil {
+		return visitSummary{}, err
 	}
+	node, err := BuildSearchNode(state, remainingObject, proofMap)
+	if err != nil {
+		return visitSummary{}, err
+	}
+	if summary, ok := s.memo[node.Digest]; ok {
+		return summary, nil
+	}
+	s.record(&s.result.RemainingSets, remainingObject)
+	s.record(&s.result.ProofMaps, proofMap)
+	s.record(&s.result.Nodes, node)
 	s.result.ConstructedNodes++
 	enabled := make([]actionrelations.Occurrence, 0, len(remaining))
 	for _, occurrence := range remaining {
 		s.result.ApplicabilityChecks++
 		ok, err := actionrelations.Applicable(state, occurrence.Action)
 		if err != nil {
-			return nil, err
+			return visitSummary{}, err
 		}
 		if ok {
 			enabled = append(enabled, occurrence)
 		}
 	}
 	if len(enabled) == 0 {
-		terminal, err := terminalDigest(state, remaining)
+		terminal, err := BuildTerminalBehavior(state, remaining)
 		if err != nil {
-			return nil, err
+			return visitSummary{}, err
 		}
-		s.memo[key] = []string{terminal}
-		return []string{terminal}, nil
+		s.record(&s.result.TerminalBehaviors, terminal)
+		terminalSet, _ := BuildTerminalSet([]string{terminal.Digest})
+		subtree, _ := BuildSubtreeRoot(node.Digest, nil)
+		s.record(&s.result.TerminalSets, terminalSet)
+		s.record(&s.result.SubtreeRoots, subtree)
+		summary := visitSummary{Node: node, TerminalDigests: []string{terminal.Digest}, Subtree: subtree, TerminalSet: terminalSet}
+		s.memo[node.Digest] = summary
+		return summary, nil
 	}
-	sleeperSet := makeSet(sleepers)
+	priorProofs := map[string]string{}
+	for _, proof := range proofs {
+		priorProofs[proof.SleeperDigest] = proof.PropagationDigest
+	}
+	sleeperSet := makeSet(proofSleeperDigests(proofs))
 	var earlier []actionrelations.Occurrence
+	earlierSubtrees := map[string]string{}
 	var terminals []string
+	var edgePreorder []string
 	for _, taken := range enabled {
 		takenDigest, _ := taken.Digest()
 		if sleeperSet[takenDigest] {
@@ -128,14 +196,18 @@ func (s *searcher) visit(state actionrelations.State, remaining []actionrelation
 		}
 		next, outcome, err := actionrelations.Apply(state, taken.Action)
 		if err != nil || outcome != "applied" {
-			return nil, fmt.Errorf("enabled transition failed: %s %w", outcome, err)
+			return visitSummary{}, fmt.Errorf("enabled transition failed: %s %w", outcome, err)
 		}
 		childRemaining := removeOccurrence(remaining, takenDigest)
-		candidateDigests := append(slices.Clone(sleepers), occurrenceDigests(earlier)...)
+		childRemainingObject, err := BuildRemaining(childRemaining)
+		if err != nil {
+			return visitSummary{}, err
+		}
+		candidateDigests := append(proofSleeperDigests(proofs), occurrenceDigests(earlier)...)
 		slices.Sort(candidateDigests)
 		candidateDigests = slices.Compact(candidateDigests)
 		childRemainingSet := makeSet(occurrenceDigests(childRemaining))
-		var childSleepers []string
+		var childProofs []ProofEntry
 		for _, candidateDigest := range candidateDigests {
 			if !childRemainingSet[candidateDigest] {
 				continue
@@ -146,33 +218,66 @@ func (s *searcher) visit(state actionrelations.State, remaining []actionrelation
 			}
 			eligible, err := s.eligible(state, taken, candidate)
 			if err != nil {
-				return nil, err
+				return visitSummary{}, err
 			}
 			if !eligible {
 				continue
 			}
-			certified, err := s.certify(state, taken, candidate)
+			decision, err := s.certify(state, taken, candidate)
 			if err != nil {
-				return nil, err
+				return visitSummary{}, err
 			}
-			if certified {
-				childSleepers = append(childSleepers, candidateDigest)
+			if decision.Certified {
+				source, sourceAuthority := "prior-sleep", priorProofs[candidateDigest]
+				if sourceAuthority == "" {
+					source, sourceAuthority = "earlier-sibling", earlierSubtrees[candidateDigest]
+				}
+				successorDigest, _ := next.Digest()
+				propagation, err := BuildPropagation(node.Digest, takenDigest, candidateDigest, source, sourceAuthority, decision.CertificateDigest, successorDigest, childRemainingObject.Digest)
+				if err != nil {
+					return visitSummary{}, err
+				}
+				s.record(&s.result.Propagations, propagation)
+				childProofs = append(childProofs, ProofEntry{SleeperDigest: candidateDigest, PropagationDigest: propagation.Digest})
 				s.result.SleepPropagations++
 			}
 		}
-		slices.Sort(childSleepers)
-		childTerminals, err := s.visit(next, childRemaining, childSleepers)
+		childSummary, err := s.visit(next, childRemaining, childProofs)
 		if err != nil {
-			return nil, err
+			return visitSummary{}, err
 		}
-		terminals = append(terminals, childTerminals...)
+		edge, err := BuildSearchEdge(node.Digest, takenDigest, childProofs, childSummary.Node.Digest)
+		if err != nil {
+			return visitSummary{}, err
+		}
+		s.record(&s.result.SearchEdges, edge)
+		edgePreorder = append(edgePreorder, edge.Digest)
+		edgePreorder = append(edgePreorder, childSummary.EdgePreorder...)
+		terminals = append(terminals, childSummary.TerminalDigests...)
 		s.result.Edges++
+		completed, err := BuildCompletedSubtree(node.Digest, takenDigest, childSummary.Subtree, childSummary.TerminalSet)
+		if err != nil {
+			return visitSummary{}, err
+		}
+		s.record(&s.result.CompletedSubtrees, completed)
+		earlierSubtrees[takenDigest] = completed.Digest
 		earlier = append(earlier, taken)
 	}
 	slices.Sort(terminals)
 	terminals = slices.Compact(terminals)
-	s.memo[key] = slices.Clone(terminals)
-	return terminals, nil
+	terminalSet, err := BuildTerminalSet(terminals)
+	if err != nil {
+		return visitSummary{}, err
+	}
+	subtree, err := BuildSubtreeRoot(node.Digest, edgePreorder)
+	if err != nil {
+		return visitSummary{}, err
+	}
+	s.record(&s.result.TerminalSets, terminalSet)
+	s.record(&s.result.SubtreeRoots, subtree)
+	summary := visitSummary{Node: node, TerminalDigests: slices.Clone(terminals), EdgePreorder: edgePreorder, Subtree: subtree, TerminalSet: terminalSet}
+	s.memo[node.Digest] = summary
+	return summary, nil
 }
 
 func (s *searcher) eligible(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error) {
@@ -229,10 +334,10 @@ func (s *searcher) eligible(state actionrelations.State, left, right actionrelat
 	}
 }
 
-func (s *searcher) certify(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error) {
+func (s *searcher) certify(state actionrelations.State, left, right actionrelations.Occurrence) (CertificateDecision, error) {
 	left, right, err := actionrelations.CanonicalPair(left, right)
 	if err != nil {
-		return false, err
+		return CertificateDecision{}, err
 	}
 	stateDigest, _ := state.Digest()
 	leftDigest, _ := left.Digest()
@@ -243,11 +348,19 @@ func (s *searcher) certify(state actionrelations.State, left, right actionrelati
 		s.result.CertificateHits++
 		return result, nil
 	}
-	result := false
-	if s.certifier != nil {
-		result, err = s.certifier(state, left, right)
+	decision := CertificateDecision{}
+	if s.evidenceCertifier != nil {
+		decision, err = s.evidenceCertifier(state, left, right)
+		if err != nil || decision.Certified && !digestText(decision.CertificateDigest) || !decision.Certified && decision.CertificateDigest != "" {
+			return CertificateDecision{}, fmt.Errorf("invalid certificate evidence: %w", err)
+		}
+	} else if s.certifier != nil {
+		decision.Certified, err = s.certifier(state, left, right)
 		if err != nil {
-			return false, err
+			return CertificateDecision{}, err
+		}
+		if decision.Certified {
+			decision.CertificateDigest = developmentCertificateDigest(stateDigest, leftDigest, rightDigest)
 		}
 	} else {
 		stateJSON, _ := state.CanonicalJSON()
@@ -255,32 +368,37 @@ func (s *searcher) certify(state actionrelations.State, left, right actionrelati
 		rightJSON, _ := right.Action.CanonicalJSON()
 		observation, oracleErr := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
 		if oracleErr != nil {
-			return false, oracleErr
+			return CertificateDecision{}, oracleErr
 		}
-		result = observation.Label == "commutes"
+		decision.Certified = observation.Label == "commutes"
+		if decision.Certified {
+			decision.CertificateDigest = developmentCertificateDigest(stateDigest, leftDigest, rightDigest)
+		}
 	}
-	s.certificateCache[key] = result
-	return result, nil
+	s.certificateCache[key] = decision
+	return decision, nil
 }
 
-func nodeKey(state actionrelations.State, remaining []actionrelations.Occurrence, sleepers []string) (string, error) {
-	stateDigest, err := state.Digest()
-	if err != nil {
-		return "", err
-	}
-	wire, _ := json.Marshal([]any{"sleep-search-node-key/v1", stateDigest, occurrenceDigests(remaining), sleepers})
+func developmentCertificateDigest(stateDigest, leftDigest, rightDigest string) string {
+	wire, _ := json.Marshal([]any{"actionrelation-development-certificate/v1", stateDigest, leftDigest, rightDigest})
 	digest := sha256.Sum256(wire)
-	return hex.EncodeToString(digest[:]), nil
+	return hex.EncodeToString(digest[:])
 }
 
-func terminalDigest(state actionrelations.State, remaining []actionrelations.Occurrence) (string, error) {
-	stateDigest, err := state.Digest()
-	if err != nil {
-		return "", err
+func proofSleeperDigests(proofs []ProofEntry) []string {
+	result := make([]string, len(proofs))
+	for index, proof := range proofs {
+		result[index] = proof.SleeperDigest
 	}
-	wire, _ := json.Marshal([]any{"sleep-terminal-behavior/v1", stateDigest, occurrenceDigests(remaining)})
-	digest := sha256.Sum256(wire)
-	return hex.EncodeToString(digest[:]), nil
+	slices.Sort(result)
+	return result
+}
+
+func (s *searcher) record(target *[]EvidenceObject, object EvidenceObject) {
+	if !s.evidence[object.Digest] {
+		s.evidence[object.Digest] = true
+		*target = append(*target, object)
+	}
 }
 
 func occurrenceDigests(occurrences []actionrelations.Occurrence) []string {
