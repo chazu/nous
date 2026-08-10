@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/chazu/nous/internal/unit"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
@@ -15,17 +16,18 @@ import (
 // none classifies a pair or executes both orders of a diamond.
 func init() {
 	registerVocabularyWords("actionrelations", map[string]builtinFn{
-		"ar-state-valid?":       bARStateValid,
-		"ar-action-valid?":      bARActionValid,
-		"ar-action-facts":       bARActionFacts,
-		"ar-applicable?":        bARApplicable,
-		"ar-apply":              bARApply,
-		"ar-state-equal?":       bARStateEqual,
-		"ar-guard-root":         bARGuardRoot,
-		"ar-guard-extend":       bARGuardExtend,
-		"ar-candidate-allocate": bARCandidateAllocate,
-		"ar-guard-match":        bARGuardMatch,
-		"ar-guard-result":       bARGuardResult,
+		"ar-state-valid?":         bARStateValid,
+		"ar-action-valid?":        bARActionValid,
+		"ar-action-facts":         bARActionFacts,
+		"ar-applicable?":          bARApplicable,
+		"ar-apply":                bARApply,
+		"ar-state-equal?":         bARStateEqual,
+		"ar-guard-root":           bARGuardRoot,
+		"ar-guard-extend":         bARGuardExtend,
+		"ar-candidate-allocate":   bARCandidateAllocate,
+		"ar-guard-match":          bARGuardMatch,
+		"ar-guard-result":         bARGuardResult,
+		"ar-observation-assemble": bARObservationAssemble,
 	})
 }
 
@@ -55,8 +57,8 @@ func bARActionValid(vm *VM) error {
 }
 
 func bARActionFacts(vm *VM) error {
-	occurrenceValue, stateValue := vm.pop(), vm.pop()
-	if occurrenceValue.Kind() != VString || stateValue.Kind() != VString {
+	requestedValue, occurrenceValue, stateValue := vm.pop(), vm.pop(), vm.pop()
+	if requestedValue.Kind() != VString || occurrenceValue.Kind() != VString || stateValue.Kind() != VString || vm.Store == nil {
 		vm.push(Nil())
 		return nil
 	}
@@ -72,59 +74,112 @@ func bARActionFacts(vm *VM) error {
 		return nil
 	}
 	data, _ := facts.CanonicalJSON()
-	vm.push(StringVal(string(data)))
+	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionLocalFacts", data, map[string]any{
+		"stateDigest": facts.StateDigest, "occurrenceDigest": facts.OccurrenceDigest, "facts": string(data),
+	})
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(name))
 	return nil
 }
 
 func bARApplicable(vm *VM) error {
-	actionValue, stateValue := vm.pop(), vm.pop()
-	state, action, ok := arStateAction(stateValue, actionValue)
-	if !ok {
-		vm.push(BoolVal(false))
+	requestedValue, occurrenceValue, stateValue := vm.pop(), vm.pop(), vm.pop()
+	state, occurrence, ok := arStateOccurrence(stateValue, occurrenceValue)
+	if !ok || requestedValue.Kind() != VString || vm.Store == nil {
+		vm.push(Nil())
 		return nil
 	}
-	applicable, err := actionrelations.Applicable(state, action)
-	vm.push(BoolVal(err == nil && applicable))
+	applicable, err := actionrelations.Applicable(state, occurrence.Action)
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	stateDigest, _ := state.Digest()
+	occurrenceDigest, _ := occurrence.Digest()
+	wire, _ := json.Marshal([]any{"action-applicability-row/v1", stateDigest, occurrenceDigest, applicable})
+	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionApplicabilityRow", wire, map[string]any{
+		"stateDigest": stateDigest, "occurrenceDigest": occurrenceDigest, "applicable": applicable,
+	})
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(name))
 	return nil
 }
 
 func bARApply(vm *VM) error {
-	claimedValue, actionValue, stateValue := vm.pop(), vm.pop(), vm.pop()
-	state, action, ok := arStateAction(stateValue, actionValue)
-	if !ok || claimedValue.Kind() != VBool {
+	stateRequest, transitionRequest, applicabilityValue, occurrenceValue, stateValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
+	state, occurrence, ok := arStateOccurrence(stateValue, occurrenceValue)
+	if !ok || applicabilityValue.Kind() != VString || transitionRequest.Kind() != VString || stateRequest.Kind() != VString || vm.Store == nil {
 		vm.push(Nil())
 		return nil
 	}
-	applicable, err := actionrelations.Applicable(state, action)
-	if err != nil || applicable != claimedValue.AsBool() || !applicable {
+	applicability := vm.Store.Get(applicabilityValue.AsString())
+	stateDigest, _ := state.Digest()
+	occurrenceDigest, _ := occurrence.Digest()
+	if applicability == nil || !vm.Store.IsA(applicability.Name, "ActionApplicabilityRow") || applicability.GetString("stateDigest") != stateDigest || applicability.GetString("occurrenceDigest") != occurrenceDigest {
 		vm.push(Nil())
 		return nil
 	}
-	next, outcome, err := actionrelations.Apply(state, action)
-	if err != nil || outcome != "applied" {
+	next, outcome, err := actionrelations.Apply(state, occurrence.Action)
+	if err != nil || (outcome == "applied") != applicability.GetBool("applicable") {
 		vm.push(Nil())
 		return nil
 	}
-	data, _ := next.CanonicalJSON()
-	vm.push(StringVal(string(data)))
+	outputDigest := ""
+	outputName := ""
+	if outcome == "applied" {
+		data, _ := next.CanonicalJSON()
+		outputDigest, _ = next.Digest()
+		outputName, err = arStoreCanonical(vm, stateRequest.AsString(), "FiniteActionState", data, map[string]any{"state": string(data), "stateDigest": outputDigest})
+		if err != nil {
+			vm.push(Nil())
+			return nil
+		}
+	}
+	applicabilityDigest := applicability.GetString("objectDigest")
+	wire, _ := json.Marshal([]any{"action-transition-row/v1", stateDigest, occurrenceDigest, applicabilityDigest, outcome, outputDigest})
+	transitionName, err := arStoreCanonical(vm, transitionRequest.AsString(), "ActionTransitionRow", wire, map[string]any{
+		"stateDigest": stateDigest, "occurrenceDigest": occurrenceDigest, "applicabilityRow": applicability.Name, "outcome": outcome, "outputState": outputName, "outputStateDigest": outputDigest,
+	})
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(ListVal([]Value{StringVal(transitionName), StringVal(outputName)}))
 	return nil
 }
 
 func bARStateEqual(vm *VM) error {
-	rightValue, leftValue := vm.pop(), vm.pop()
-	if leftValue.Kind() != VString || rightValue.Kind() != VString {
-		vm.push(BoolVal(false))
+	requestedValue, rightValue, leftValue := vm.pop(), vm.pop(), vm.pop()
+	if leftValue.Kind() != VString || rightValue.Kind() != VString || requestedValue.Kind() != VString || vm.Store == nil {
+		vm.push(Nil())
 		return nil
 	}
 	left, leftErr := actionrelations.ParseState([]byte(leftValue.AsString()))
 	right, rightErr := actionrelations.ParseState([]byte(rightValue.AsString()))
 	if leftErr != nil || rightErr != nil {
-		vm.push(BoolVal(false))
+		vm.push(Nil())
 		return nil
 	}
 	a, _ := left.CanonicalJSON()
 	b, _ := right.CanonicalJSON()
-	vm.push(BoolVal(bytes.Equal(a, b)))
+	equal := bytes.Equal(a, b)
+	leftDigest, _ := left.Digest()
+	rightDigest, _ := right.Digest()
+	wire, _ := json.Marshal([]any{"action-state-equality-row/v1", leftDigest, rightDigest, equal})
+	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionStateEqualityRow", wire, map[string]any{
+		"leftStateDigest": leftDigest, "rightStateDigest": rightDigest, "equal": equal,
+	})
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(name))
 	return nil
 }
 
@@ -220,8 +275,13 @@ func arStoreCandidate(vm *VM, requested string, pattern actionrelations.Pattern,
 		parentDigest = unit.GetString("objectDigest")
 	}
 	wire, _ := json.Marshal([]any{"action-guard-candidate/v1", guardDigest, parentDigest, patternDigest, ordinal, len(guard.Literals)})
+	atoms := make([]string, len(guard.Literals))
+	polarities := make([]any, len(guard.Literals))
+	for index, literal := range guard.Literals {
+		atoms[index], polarities[index] = literal.Atom, literal.Polarity
+	}
 	return arStoreCanonical(vm, requested, "ActionGuardCandidate", wire, map[string]any{
-		"pattern": string(mustCanonicalPattern(pattern)), "guard": string(mustCanonicalGuard(guard)), "parentCandidate": parent, "ordinal": ordinal, "literalCount": len(guard.Literals),
+		"pattern": string(mustCanonicalPattern(pattern)), "guard": string(mustCanonicalGuard(guard)), "parentCandidate": parent, "ordinal": ordinal, "literalCount": len(guard.Literals), "atoms": atoms, "polarities": polarities,
 	})
 }
 
@@ -266,45 +326,99 @@ func mustCanonicalGuard(guard actionrelations.Guard) []byte {
 }
 
 func bARGuardMatch(vm *VM) error {
-	rightValue, leftValue, polarityValue, atomValue := vm.pop(), vm.pop(), vm.pop(), vm.pop()
-	if rightValue.Kind() != VString || leftValue.Kind() != VString || polarityValue.Kind() != VBool || atomValue.Kind() != VString {
-		vm.push(BoolVal(false))
+	requestedValue, polarityValue, atomValue, rightValue, leftValue, observationValue, guardValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
+	if requestedValue.Kind() != VString || rightValue.Kind() != VString || leftValue.Kind() != VString || observationValue.Kind() != VString || guardValue.Kind() != VString || polarityValue.Kind() != VBool || atomValue.Kind() != VString || vm.Store == nil {
+		vm.push(Nil())
 		return nil
 	}
-	left, leftErr := actionrelations.ParseLocalFacts([]byte(leftValue.AsString()))
-	right, rightErr := actionrelations.ParseLocalFacts([]byte(rightValue.AsString()))
+	guard, guardErr := actionrelations.ParseGuard([]byte(guardValue.AsString()))
+	observation := vm.Store.Get(observationValue.AsString())
+	leftUnit, rightUnit := vm.Store.Get(leftValue.AsString()), vm.Store.Get(rightValue.AsString())
+	if guardErr != nil || observation == nil || leftUnit == nil || rightUnit == nil || !vm.Store.IsA(observation.Name, "ActionRelationObservation") || observation.GetString("aFacts") != leftUnit.Name || observation.GetString("bFacts") != rightUnit.Name {
+		vm.push(Nil())
+		return nil
+	}
+	literal := actionrelations.Literal{Atom: atomValue.AsString(), Polarity: polarityValue.AsBool()}
+	if !slices.Contains(guard.Literals, literal) {
+		vm.push(Nil())
+		return nil
+	}
+	left, leftErr := actionrelations.ParseLocalFacts([]byte(leftUnit.GetString("facts")))
+	right, rightErr := actionrelations.ParseLocalFacts([]byte(rightUnit.GetString("facts")))
 	value, err := actionrelations.EvaluateAtom(atomValue.AsString(), left, right)
-	vm.push(BoolVal(leftErr == nil && rightErr == nil && err == nil && value == polarityValue.AsBool()))
+	if leftErr != nil || rightErr != nil || err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	result := value == polarityValue.AsBool()
+	guardDigest, _ := guard.Digest()
+	wire, _ := json.Marshal([]any{"action-guard-literal-row/v1", guardDigest, observation.GetString("objectDigest"), leftUnit.GetString("objectDigest"), rightUnit.GetString("objectDigest"), literal.Atom, literal.Polarity, result})
+	name, storeErr := arStoreCanonical(vm, requestedValue.AsString(), "ActionGuardLiteralRow", wire, map[string]any{
+		"guardDigest": guardDigest, "observationDigest": observation.GetString("objectDigest"), "atom": literal.Atom, "polarity": literal.Polarity, "result": result,
+	})
+	if storeErr != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(name))
 	return nil
 }
 
 func bARGuardResult(vm *VM) error {
-	rowsValue, guardValue := vm.pop(), vm.pop()
-	if guardValue.Kind() != VString || rowsValue.Kind() != VList {
-		vm.push(BoolVal(false))
+	requestedValue, rowsValue, observationValue, guardValue := vm.pop(), vm.pop(), vm.pop(), vm.pop()
+	if requestedValue.Kind() != VString || guardValue.Kind() != VString || observationValue.Kind() != VString || rowsValue.Kind() != VList || vm.Store == nil {
+		vm.push(Nil())
 		return nil
 	}
 	guard, err := actionrelations.ParseGuard([]byte(guardValue.AsString()))
+	observation := vm.Store.Get(observationValue.AsString())
 	rows := rowsValue.AsList()
-	if err != nil || len(rows) != len(guard.Literals) {
-		vm.push(BoolVal(false))
+	if err != nil || observation == nil || !vm.Store.IsA(observation.Name, "ActionRelationObservation") || len(rows) != len(guard.Literals) {
+		vm.push(Nil())
 		return nil
 	}
-	for _, row := range rows {
-		if row.Kind() != VBool || !row.AsBool() {
-			vm.push(BoolVal(false))
+	guardDigest, _ := guard.Digest()
+	result := true
+	rowDigests := make([]string, len(rows))
+	for index, row := range rows {
+		if row.Kind() != VString {
+			vm.push(Nil())
 			return nil
 		}
+		u := vm.Store.Get(row.AsString())
+		literal := guard.Literals[index]
+		if u == nil || !vm.Store.IsA(u.Name, "ActionGuardLiteralRow") || u.GetString("guardDigest") != guardDigest || u.GetString("observationDigest") != observation.GetString("objectDigest") || u.GetString("atom") != literal.Atom || u.GetBool("polarity") != literal.Polarity {
+			vm.push(Nil())
+			return nil
+		}
+		rowDigests[index] = u.GetString("objectDigest")
+		result = result && u.GetBool("result")
 	}
-	vm.push(BoolVal(true))
+	wire, _ := json.Marshal([]any{"action-guard-result/v1", guardDigest, observation.GetString("objectDigest"), rowDigests, result})
+	name, storeErr := arStoreCanonical(vm, requestedValue.AsString(), "ActionGuardResult", wire, map[string]any{
+		"guardDigest": guardDigest, "observationDigest": observation.GetString("objectDigest"), "literalRows": valuesToStrings(rows), "result": result,
+	})
+	if storeErr != nil {
+		vm.push(Nil())
+		return nil
+	}
+	vm.push(StringVal(name))
 	return nil
 }
 
-func arStateAction(stateValue, actionValue Value) (actionrelations.State, actionrelations.SemanticAction, bool) {
-	if stateValue.Kind() != VString || actionValue.Kind() != VString {
-		return actionrelations.State{}, actionrelations.SemanticAction{}, false
+func valuesToStrings(values []Value) []string {
+	result := make([]string, len(values))
+	for index, value := range values {
+		result[index] = value.AsString()
+	}
+	return result
+}
+
+func arStateOccurrence(stateValue, occurrenceValue Value) (actionrelations.State, actionrelations.Occurrence, bool) {
+	if stateValue.Kind() != VString || occurrenceValue.Kind() != VString {
+		return actionrelations.State{}, actionrelations.Occurrence{}, false
 	}
 	state, stateErr := actionrelations.ParseState([]byte(stateValue.AsString()))
-	action, actionErr := actionrelations.ParseSemanticAction([]byte(actionValue.AsString()))
-	return state, action, stateErr == nil && actionErr == nil
+	occurrence, occurrenceErr := actionrelations.ParseOccurrence([]byte(occurrenceValue.AsString()))
+	return state, occurrence, stateErr == nil && occurrenceErr == nil
 }

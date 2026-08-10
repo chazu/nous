@@ -36,28 +36,31 @@ func TestActionRelationPrimitiveWordsExposeOnlySingleSteps(t *testing.T) {
 	action := actionrelations.SemanticAction{Kind: "set", XRole: "c0", N: 3}
 	occurrence := actionrelations.Occurrence{Action: action}
 	stateJSON, _ := state.CanonicalJSON()
-	actionJSON, _ := action.CanonicalJSON()
 	occurrenceJSON, _ := occurrence.CanonicalJSON()
-	vm := &VM{stack: []Value{StringVal(string(stateJSON)), StringVal(string(actionJSON))}}
-	if err := bARApplicable(vm); err != nil || !vm.pop().AsBool() {
+	vm := &VM{Store: actionRelationTestStore(), stack: []Value{StringVal(string(stateJSON)), StringVal(string(occurrenceJSON)), StringVal("AR.Applicable")}}
+	if err := bARApplicable(vm); err != nil {
 		t.Fatalf("applicable err=%v", err)
 	}
-	vm.stack = []Value{StringVal(string(stateJSON)), StringVal(string(actionJSON)), BoolVal(true)}
+	applicabilityName := vm.pop().AsString()
+	if !vm.Store.Get(applicabilityName).GetBool("applicable") {
+		t.Fatal("expected applicable row")
+	}
+	vm.stack = []Value{StringVal(string(stateJSON)), StringVal(string(occurrenceJSON)), StringVal(applicabilityName), StringVal("AR.Transition"), StringVal("AR.State.Next")}
 	if err := bARApply(vm); err != nil {
 		t.Fatal(err)
 	}
-	if value := vm.pop(); value.Kind() != VString {
+	if value := vm.pop(); value.Kind() != VList || vm.Store.Get(value.AsList()[1].AsString()).GetString("state") == "" {
 		t.Fatalf("apply=%v", value)
 	}
-	vm.stack = []Value{StringVal(string(stateJSON)), StringVal(string(occurrenceJSON))}
+	vm.stack = []Value{StringVal(string(stateJSON)), StringVal(string(occurrenceJSON)), StringVal("AR.Facts")}
 	if err := bARActionFacts(vm); err != nil {
 		t.Fatal(err)
 	}
 	value := vm.pop()
-	if value.Kind() != VString {
+	if value.Kind() != VString || vm.Store.Get(value.AsString()) == nil {
 		t.Fatalf("facts=%v", value)
 	}
-	if _, err := actionrelations.ParseLocalFacts([]byte(value.AsString())); err != nil {
+	if _, err := actionrelations.ParseLocalFacts([]byte(vm.Store.Get(value.AsString()).GetString("facts"))); err != nil {
 		t.Fatalf("facts parse: %v value=%s", err, value.AsString())
 	}
 }

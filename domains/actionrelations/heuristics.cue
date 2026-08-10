@@ -91,4 +91,139 @@ units: [
 			else "no-discovery" "experiment" @ "terminal" set-slot then
 			"""#
 	},
+	{
+		name: "AR-H-AssembleTrainingObservations"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Construct every training observation through visible applicability, transition, and complete-state equality rows"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arObserve" =
+			"CurUnit" @ "ActionRelationExperiment" isa? and
+			"CurUnit" @ "observationsAssembled" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "experiment" !
+			0 list-of "observations" !
+			"ActionRelationTrainingCase" examples each
+				it "case" !
+				"case" @ "ActionRelationTrainingCase" !=
+				"case" @ "experiment" get-slot "experiment" @ = and
+				if
+					"case" @ "state" get-slot "state" !
+					"case" @ "aOccurrence" get-slot "a" !
+					"case" @ "bOccurrence" get-slot "b" !
+					"AR.Facts.A." "case" @ concat "aFactsRequest" !
+					"AR.Facts.B." "case" @ concat "bFactsRequest" !
+					"state" @ "a" @ "aFactsRequest" @ ar-action-facts "aFacts" !
+					"state" @ "b" @ "bFactsRequest" @ ar-action-facts "bFacts" !
+					"AR.App.A.Initial." "case" @ concat "aAppRequest" !
+					"AR.App.B.Initial." "case" @ concat "bAppRequest" !
+					"state" @ "a" @ "aAppRequest" @ ar-applicable? "aApp" !
+					"state" @ "b" @ "bAppRequest" @ ar-applicable? "bApp" !
+					"AR.Transition.A.Initial." "case" @ concat "aTransitionRequest" !
+					"AR.Transition.B.Initial." "case" @ concat "bTransitionRequest" !
+					"AR.State.AfterA." "case" @ concat "afterARequest" !
+					"AR.State.AfterB." "case" @ concat "afterBRequest" !
+					"state" @ "a" @ "aApp" @ "aTransitionRequest" @ "afterARequest" @ ar-apply "aInitialResult" !
+					"state" @ "b" @ "bApp" @ "bTransitionRequest" @ "afterBRequest" @ ar-apply "bInitialResult" !
+					"aInitialResult" @ 0 list-get "aInitial" !
+					"bInitialResult" @ 0 list-get "bInitial" !
+					"aInitialResult" @ 1 list-get "afterAUnit" !
+					"bInitialResult" @ 1 list-get "afterBUnit" !
+					"" "bAfterA" ! "" "aAfterB" ! "" "equality" !
+					"" "abState" ! "" "baState" !
+					"afterAUnit" @ "" !=
+					if
+						"afterAUnit" @ "state" get-slot "afterA" !
+						"AR.App.B.AfterA." "case" @ concat "crossAppRequest" !
+						"afterA" @ "b" @ "crossAppRequest" @ ar-applicable? "crossApp" !
+						"AR.Transition.B.AfterA." "case" @ concat "crossTransitionRequest" !
+						"AR.State.AB." "case" @ concat "abRequest" !
+						"afterA" @ "b" @ "crossApp" @ "crossTransitionRequest" @ "abRequest" @ ar-apply "crossResult" !
+						"crossResult" @ 0 list-get "bAfterA" !
+						"crossResult" @ 1 list-get "abUnit" !
+						"abUnit" @ "" != if "abUnit" @ "state" get-slot "abState" ! then
+					then
+					"afterBUnit" @ "" !=
+					if
+						"afterBUnit" @ "state" get-slot "afterB" !
+						"AR.App.A.AfterB." "case" @ concat "crossAppRequest" !
+						"afterB" @ "a" @ "crossAppRequest" @ ar-applicable? "crossApp" !
+						"AR.Transition.A.AfterB." "case" @ concat "crossTransitionRequest" !
+						"AR.State.BA." "case" @ concat "baRequest" !
+						"afterB" @ "a" @ "crossApp" @ "crossTransitionRequest" @ "baRequest" @ ar-apply "crossResult" !
+						"crossResult" @ 0 list-get "aAfterB" !
+						"crossResult" @ 1 list-get "baUnit" !
+						"baUnit" @ "" != if "baUnit" @ "state" get-slot "baState" ! then
+					then
+					"abState" @ "" != "baState" @ "" != and
+					if
+						"AR.Equality." "case" @ concat "equalityRequest" !
+						"abState" @ "baState" @ "equalityRequest" @ ar-state-equal? "equality" !
+					then
+					"AR.Observation." "case" @ concat "observationRequest" !
+					"state" @ "a" @ "b" @ "aInitial" @ "bInitial" @ "bAfterA" @ "aAfterB" @ "equality" @ "case" @ "label" get-slot "observationRequest" @ ar-observation-assemble "observation" !
+					"observation" @ nil !=
+					if
+						"experiment" @ "observation" @ "experiment" set-slot
+						"case" @ "observation" @ "trainingCase" set-slot
+						"aFacts" @ "observation" @ "aFacts" set-slot
+						"bFacts" @ "observation" @ "bFacts" set-slot
+						"observations" @ "observation" @ list-append "observations" !
+					then
+				then
+			end
+			"observations" @ "experiment" @ "observationUnits" set-slot
+			"observations" @ list-length "experiment" @ "expectedObservationCount" get-slot =
+			if true "experiment" @ "observationsAssembled" set-slot
+			else "no-discovery" "experiment" @ "terminal" set-slot then
+			"""#
+	},
+	{
+		name: "AR-H-EvaluateGuardSpace"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Evaluate every normalized guard against every committed observation through explicit signed-literal rows"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arEvaluate" =
+			"CurUnit" @ "ActionRelationExperiment" isa? and
+			"CurUnit" @ "guardSpaceAllocated" get-slot true = and
+			"CurUnit" @ "observationsAssembled" get-slot true = and
+			"CurUnit" @ "guardsEvaluated" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "experiment" !
+			0 list-of "allResults" ! 0 list-of "allLiteralRows" !
+			"experiment" @ "candidateUnits" get-slot each
+				it "candidate" !
+				"candidate" @ "guard" get-slot "guard" !
+				"candidate" @ "atoms" get-slot "atoms" !
+				"candidate" @ "polarities" get-slot "polarities" !
+				0 list-of "candidateResults" !
+				"experiment" @ "observationUnits" get-slot each
+					it "observation" !
+					0 list-of "literalRows" !
+					"atoms" @ list-length iota each
+						it "literalIndex" !
+						"AR.Literal." "candidate" @ concat "." concat "observation" @ concat "." concat "literalIndex" @ concat "literalRequest" !
+						"guard" @ "observation" @ "observation" @ "aFacts" get-slot "observation" @ "bFacts" get-slot "atoms" @ "literalIndex" @ list-get "polarities" @ "literalIndex" @ list-get "literalRequest" @ ar-guard-match "literalRow" !
+						"literalRows" @ "literalRow" @ list-append "literalRows" !
+						"allLiteralRows" @ "literalRow" @ list-append "allLiteralRows" !
+					end
+					"AR.GuardResult." "candidate" @ concat "." concat "observation" @ concat "resultRequest" !
+					"guard" @ "observation" @ "literalRows" @ "resultRequest" @ ar-guard-result "guardResult" !
+					"candidateResults" @ "guardResult" @ list-append "candidateResults" !
+					"allResults" @ "guardResult" @ list-append "allResults" !
+				end
+				"candidateResults" @ "candidate" @ "guardResults" set-slot
+			end
+			"allResults" @ "experiment" @ "guardResultUnits" set-slot
+			"allLiteralRows" @ "experiment" @ "literalRowUnits" set-slot
+			"allResults" @ list-length "experiment" @ "candidateUnits" get-slot list-length "experiment" @ "observationUnits" get-slot list-length * =
+			if true "experiment" @ "guardsEvaluated" set-slot
+			else "no-discovery" "experiment" @ "terminal" set-slot then
+			"""#
+	},
 ]
