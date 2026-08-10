@@ -21,6 +21,14 @@ type PrimitiveResult struct {
 	Result  bool
 }
 
+type TransitionResult struct {
+	Request     string
+	Row         string
+	Outcome     string
+	OutputState string
+	ResultState actionrelations.State
+}
+
 func SearchApplicable(store *unit.Store, meterToken, nodeName, worldDigest, policy string, state actionrelations.State, occurrence actionrelations.Occurrence, token string) (PrimitiveResult, error) {
 	stateJSON, occurrenceJSON, err := semanticInputs(state, occurrence)
 	if err != nil {
@@ -53,6 +61,40 @@ func StaticFootprint(store *unit.Store, meterToken, nodeName, worldDigest string
 		return PrimitiveResult{}, err
 	}
 	return executePrimitive(store, request, "arStaticFootprint")
+}
+
+func SearchApply(store *unit.Store, meterToken, applicabilityRow string, state actionrelations.State, occurrence actionrelations.Occurrence, token string) (TransitionResult, error) {
+	stateJSON, occurrenceJSON, err := semanticInputs(state, occurrence)
+	if err != nil {
+		return TransitionResult{}, err
+	}
+	request, err := putRequest(store, "AR.TransitionRequest."+token, "ActionRelationTransitionRequest", meterToken, map[string]any{
+		"state": string(stateJSON), "occurrence": string(occurrenceJSON), "applicabilityRow": applicabilityRow,
+	})
+	if err != nil {
+		return TransitionResult{}, err
+	}
+	if err := runPrimitiveTask(store, request, "arSearchApply"); err != nil {
+		return TransitionResult{}, err
+	}
+	u := store.Get(request)
+	rowName, stateName := u.GetString("transitionRow"), u.GetString("outputState")
+	row := store.Get(rowName)
+	if row == nil || row.GetString("outcome") == "" {
+		return TransitionResult{}, fmt.Errorf("search transition lacks result row")
+	}
+	result := TransitionResult{Request: request, Row: rowName, Outcome: row.GetString("outcome"), OutputState: stateName}
+	if stateName != "" {
+		stateUnit := store.Get(stateName)
+		if stateUnit == nil {
+			return TransitionResult{}, fmt.Errorf("search transition lacks output state")
+		}
+		result.ResultState, err = actionrelations.ParseState([]byte(stateUnit.GetString("canonicalObject")))
+		if err != nil {
+			return TransitionResult{}, err
+		}
+	}
+	return result, nil
 }
 
 func semanticInputs(state actionrelations.State, occurrence actionrelations.Occurrence) ([]byte, []byte, error) {
@@ -94,16 +136,8 @@ func executePrimitive(store *unit.Store, requestName, slot string) (PrimitiveRes
 	if request == nil {
 		return PrimitiveResult{}, fmt.Errorf("missing utility primitive request")
 	}
-	ag := agenda.New()
-	eng := engine.New(store, ag)
-	eng.Out, eng.VM.Out = io.Discard, io.Discard
-	eng.MutConfig.Enabled = false
-	if err := eng.VM.InitError(); err != nil {
+	if err := runPrimitiveTask(store, requestName, slot); err != nil {
 		return PrimitiveResult{}, err
-	}
-	eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: requestName, SlotName: slot})
-	if eng.LastError != nil {
-		return PrimitiveResult{}, eng.LastError
 	}
 	rowName := request.GetString("resultRow")
 	row := store.Get(rowName)
@@ -111,4 +145,19 @@ func executePrimitive(store *unit.Store, requestName, slot string) (PrimitiveRes
 		return PrimitiveResult{}, fmt.Errorf("utility primitive did not complete")
 	}
 	return PrimitiveResult{Request: requestName, Row: rowName, Result: row.GetBool("result") || row.GetBool("applicable")}, nil
+}
+
+func runPrimitiveTask(store *unit.Store, requestName, slot string) error {
+	ag := agenda.New()
+	eng := engine.New(store, ag)
+	eng.Out, eng.VM.Out = io.Discard, io.Discard
+	eng.MutConfig.Enabled = false
+	if err := eng.VM.InitError(); err != nil {
+		return err
+	}
+	eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: requestName, SlotName: slot})
+	if eng.LastError != nil {
+		return eng.LastError
+	}
+	return nil
 }

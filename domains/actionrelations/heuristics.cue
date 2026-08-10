@@ -520,6 +520,29 @@ units: [
 			"""#
 	},
 	{
+		name: "AR-H-SearchTransition"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Execute one explicitly supplied enabled search transition"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arSearchApply" =
+			"CurUnit" @ "ActionRelationTransitionRequest" isa? and
+			"CurUnit" @ "terminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "state" get-slot
+			"request" @ "occurrence" get-slot
+			"request" @ "applicabilityRow" get-slot
+			"AR.Search.Transition." "request" @ concat
+			"AR.Search.State." "request" @ concat ar-apply "result" !
+			"result" @ 0 list-get "request" @ "transitionRow" set-slot
+			"result" @ 1 list-get "request" @ "outputState" set-slot
+			"completed" "request" @ "terminal" set-slot
+			"""#
+	},
+	{
 		name: "AR-H-StaticFootprint"
 		worth: 700
 		isA: ["Heuristic", "Anything"]

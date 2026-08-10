@@ -42,6 +42,7 @@ units: [
 	{name: "ActionRelationCertificateRequest", worth: 650, isA: ["Anything"]},
 	{name: "ActionRelationSearchNode", worth: 600, isA: ["Anything"]},
 	{name: "ActionRelationSearchRequest", worth: 600, isA: ["Anything"]},
+	{name: "ActionRelationTransitionRequest", worth: 600, isA: ["Anything"]},
 	{name: "ActionStaticFootprintRequest", worth: 600, isA: ["Anything"]},
 	{name: "ActionStaticFootprintRow", worth: 550, isA: ["Anything"]},
 	{name: "ActionCertificateCacheRequest", worth: 600, isA: ["Anything"]},

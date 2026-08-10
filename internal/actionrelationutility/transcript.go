@@ -119,12 +119,16 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 		return digest(record.Outputs[index]), nil
 	}
 	switch code {
-	case 12:
+	case 11, 12:
 		row, err := canonicalRow(firstOutput(record), 6)
 		if err != nil || stringAt(row, 0) != "action-transition-row/v1" {
-			return call, fmt.Errorf("invalid certificate transition")
+			return call, fmt.Errorf("invalid utility transition")
 		}
-		call.Payload = []any{"certificate-apply", stringAt(row, 1), stringAt(row, 2), stringAt(row, 3)}
+		tag := "certificate-apply"
+		if code == 11 {
+			tag = "utility-apply"
+		}
+		call.Payload = []any{tag, stringAt(row, 1), stringAt(row, 2), stringAt(row, 3)}
 		for index := range record.Outputs {
 			value, _ := output(index)
 			call.OutputDigests = append(call.OutputDigests, value)
@@ -145,6 +149,17 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 		call.Payload = []any{"certificate-equality", stringAt(row, 1), stringAt(row, 2)}
 		value, _ := output(0)
 		call.OutputDigests = []string{value}
+	case 16:
+		if len(record.Inputs) != 3 || len(record.Outputs) != 1 {
+			return call, fmt.Errorf("invalid search node lookup")
+		}
+		row, err := canonicalRow(record.Outputs[0], 4)
+		if err != nil || stringAt(row, 0) != "sleep-search-node/v1" || stringAt(row, 1) != string(record.Inputs[0]) || stringAt(row, 2) != string(record.Inputs[1]) || stringAt(row, 3) != string(record.Inputs[2]) {
+			return call, fmt.Errorf("invalid search node output")
+		}
+		call.Payload = []any{"search-node-lookup", string(record.Inputs[0]), string(record.Inputs[1]), string(record.Inputs[2])}
+		value, _ := output(0)
+		call.OutputDigests = []string{value}
 	case 18:
 		if len(record.Inputs) != 5 || len(record.Outputs) > 1 || record.Status == 3 && len(record.Outputs) != 1 || record.Status == 1 && len(record.Outputs) != 0 {
 			return call, fmt.Errorf("invalid certificate cache lookup")
@@ -158,6 +173,21 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 			value, _ := output(0)
 			call.OutputDigests = []string{value}
 		}
+	case 19:
+		if len(record.Inputs) != 3 || len(record.Outputs) != 1 {
+			return call, fmt.Errorf("invalid terminal construction")
+		}
+		var applicabilityDigests []string
+		if json.Unmarshal(record.Inputs[2], &applicabilityDigests) != nil {
+			return call, fmt.Errorf("invalid terminal applicability vector")
+		}
+		call.Payload = []any{"terminal-construct", string(record.Inputs[0]), string(record.Inputs[1]), applicabilityDigests}
+		row, err := canonicalRow(record.Outputs[0], 4)
+		if err != nil || stringAt(row, 0) != "action-terminal/v1" {
+			return call, fmt.Errorf("invalid terminal behavior")
+		}
+		value, _ := output(0)
+		call.OutputDigests = []string{value}
 	case 23:
 		if len(record.Inputs) != 5 {
 			return call, fmt.Errorf("invalid search applicability context")

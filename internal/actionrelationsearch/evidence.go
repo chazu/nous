@@ -79,19 +79,30 @@ func BuildSearchEdge(parentNodeDigest, takenOccurrenceDigest string, propagation
 }
 
 func BuildTerminalBehavior(state actionrelations.State, remaining []actionrelations.Occurrence) (EvidenceObject, error) {
+	applicability := make([]bool, len(remaining))
+	for index, occurrence := range remaining {
+		value, err := actionrelations.Applicable(state, occurrence.Action)
+		if err != nil {
+			return EvidenceObject{}, err
+		}
+		applicability[index] = value
+	}
+	return BuildTerminalBehaviorFromApplicability(state, remaining, applicability)
+}
+
+func BuildTerminalBehaviorFromApplicability(state actionrelations.State, remaining []actionrelations.Occurrence, applicability []bool) (EvidenceObject, error) {
 	stateJSON, err := state.CanonicalJSON()
-	if err != nil {
-		return EvidenceObject{}, err
+	if err != nil || len(applicability) != len(remaining) {
+		return EvidenceObject{}, fmt.Errorf("invalid terminal applicability authority")
+	}
+	for _, value := range applicability {
+		if value {
+			return EvidenceObject{}, fmt.Errorf("remaining occurrence is not deadlocked")
+		}
 	}
 	terminal := "complete"
 	if len(remaining) > 0 {
 		terminal = "deadlock"
-		for _, occurrence := range remaining {
-			applicable, err := actionrelations.Applicable(state, occurrence.Action)
-			if err != nil || applicable {
-				return EvidenceObject{}, fmt.Errorf("remaining occurrence is not deadlocked")
-			}
-		}
 	}
 	return evidenceWire([]any{"action-terminal/v1", json.RawMessage(stateJSON), occurrenceDigests(remaining), terminal}), nil
 }

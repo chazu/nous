@@ -52,7 +52,8 @@ func TestOrdinaryCUESearchPrimitivesAreContextBoundAndCharged(t *testing.T) {
 	meterToken := "utility-primitives"
 	plan := []dsl.ActionRelationMeterPlanEntry{
 		{Code: 23, SourceTaskDigest: strings.Repeat("1", 64)},
-		{Code: 24, SourceTaskDigest: strings.Repeat("2", 64)},
+		{Code: 11, SourceTaskDigest: strings.Repeat("2", 64)},
+		{Code: 24, SourceTaskDigest: strings.Repeat("3", 64)},
 	}
 	if err := dsl.RegisterActionRelationMeterPlan(meterToken, plan); err != nil {
 		t.Fatal(err)
@@ -62,6 +63,10 @@ func TestOrdinaryCUESearchPrimitivesAreContextBoundAndCharged(t *testing.T) {
 	if err != nil || !applicable.Result || actionrelationexp.ValidateObject(38, []byte(store.Get(applicable.Row).GetString("canonicalObject"))) != nil {
 		t.Fatalf("applicable=%+v err=%v", applicable, err)
 	}
+	transition, err := SearchApply(store, meterToken, applicable.Row, state, occurrences[0], "transition")
+	if err != nil || transition.Outcome != "applied" || transition.OutputState == "" || actionrelationexp.ValidateObject(39, []byte(store.Get(transition.Row).GetString("canonicalObject"))) != nil {
+		t.Fatalf("transition=%+v err=%v", transition, err)
+	}
 	footprint, err := StaticFootprint(store, meterToken, node.Name, worldDigest, state, occurrences[0], occurrences[1], "footprint")
 	if err != nil || !footprint.Result || actionrelationexp.ValidateObject(48, []byte(store.Get(footprint.Row).GetString("canonicalObject"))) != nil {
 		t.Fatalf("footprint=%+v err=%v", footprint, err)
@@ -70,7 +75,7 @@ func TestOrdinaryCUESearchPrimitivesAreContextBoundAndCharged(t *testing.T) {
 		t.Fatal(err)
 	}
 	records, _ := dsl.ActionRelationMeterSnapshot(meterToken)
-	if len(records) != 2 || records[0].Code != 23 || records[1].Code != 24 || records[0].SourceTaskDigest != plan[0].SourceTaskDigest || records[1].SourceTaskDigest != plan[1].SourceTaskDigest {
+	if len(records) != 3 || records[0].Code != 23 || records[1].Code != 11 || records[2].Code != 24 || records[0].SourceTaskDigest != plan[0].SourceTaskDigest || records[1].SourceTaskDigest != plan[1].SourceTaskDigest || records[2].SourceTaskDigest != plan[2].SourceTaskDigest {
 		t.Fatalf("records=%#v", records)
 	}
 }

@@ -199,6 +199,8 @@ func actionRelationPhaseCode(vm *VM, training, certificate, learned, fallback ui
 			return certificate
 		case "arMatch":
 			return learned
+		case "arSearchApply":
+			return learned
 		}
 	}
 	return fallback
