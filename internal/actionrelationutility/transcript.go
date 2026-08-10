@@ -119,6 +119,25 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 		return digest(record.Outputs[index]), nil
 	}
 	switch code {
+	case 9:
+		row, err := canonicalRow(firstOutput(record), 12)
+		if err != nil || stringAt(row, 0) != "action-relation-match-row/v1" {
+			return call, fmt.Errorf("invalid learned relation match")
+		}
+		var literals []string
+		if json.Unmarshal(row[9], &literals) != nil {
+			return call, fmt.Errorf("invalid learned relation literal vector")
+		}
+		call.Payload = []any{"relation-match", stringAt(row, 1), stringAt(row, 2), stringAt(row, 3), stringAt(row, 4), stringAt(row, 5), stringAt(row, 6), literals}
+		value, _ := output(0)
+		call.OutputDigests = []string{value}
+	case 10:
+		if len(record.Inputs) != 2 || len(record.Outputs) != 1 {
+			return call, fmt.Errorf("invalid artifact load")
+		}
+		call.Payload = []any{"artifact-load", string(record.Inputs[0]), string(record.Inputs[1])}
+		value, _ := output(0)
+		call.OutputDigests = []string{value}
 	case 11, 12:
 		row, err := canonicalRow(firstOutput(record), 6)
 		if err != nil || stringAt(row, 0) != "action-transition-row/v1" {
@@ -147,6 +166,16 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 			return call, fmt.Errorf("invalid certificate equality")
 		}
 		call.Payload = []any{"certificate-equality", stringAt(row, 1), stringAt(row, 2)}
+		value, _ := output(0)
+		call.OutputDigests = []string{value}
+	case 15:
+		row, err := canonicalRow(firstOutput(record), 8)
+		if err != nil || stringAt(row, 0) != "action-literal-evaluation-row/v1" {
+			return call, fmt.Errorf("invalid learned literal")
+		}
+		var polarity bool
+		_ = json.Unmarshal(row[5], &polarity)
+		call.Payload = []any{"learned-literal", stringAt(row, 1), stringAt(row, 2), stringAt(row, 3), stringAt(row, 4), polarity}
 		value, _ := output(0)
 		call.OutputDigests = []string{value}
 	case 16:
@@ -199,6 +228,14 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 		if err != nil || stringAt(row, 0) != "action-terminal/v1" {
 			return call, fmt.Errorf("invalid terminal behavior")
 		}
+		value, _ := output(0)
+		call.OutputDigests = []string{value}
+	case 21:
+		row, err := canonicalRow(firstOutput(record), 5)
+		if err != nil || stringAt(row, 0) != "action-applicability-row/v1" {
+			return call, fmt.Errorf("invalid learned relation-instance applicability")
+		}
+		call.Payload = []any{"relation-instance-applicable", stringAt(row, 1), stringAt(row, 2)}
 		value, _ := output(0)
 		call.OutputDigests = []string{value}
 	case 23:

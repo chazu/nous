@@ -23,6 +23,10 @@ type Result struct {
 }
 
 func Execute(store *unit.Store, artifactName string, state actionrelations.State, a, b actionrelations.Occurrence, token string) (Result, error) {
+	return ExecuteMetered(store, artifactName, state, a, b, token, "")
+}
+
+func ExecuteMetered(store *unit.Store, artifactName string, state actionrelations.State, a, b actionrelations.Occurrence, token, meterToken string) (Result, error) {
 	artifact := store.Get(artifactName)
 	if artifact == nil || !store.IsA(artifact.Name, "GuardedActionArtifact") {
 		return Result{}, fmt.Errorf("invalid artifact unit")
@@ -58,6 +62,9 @@ func Execute(store *unit.Store, artifactName string, state actionrelations.State
 	request.Set("state", string(stateJSON))
 	request.Set("aOccurrence", string(aJSON))
 	request.Set("bOccurrence", string(bJSON))
+	if meterToken != "" {
+		request.Set("meterToken", meterToken)
+	}
 	store.Put(request)
 	ag := agenda.New()
 	eng := engine.New(store, ag)

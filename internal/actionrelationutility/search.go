@@ -9,6 +9,7 @@ import (
 
 	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationledger"
+	"github.com/chazu/nous/internal/actionrelationmatch"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/seed"
@@ -38,11 +39,6 @@ func ExecutePolicy(domainsDir string, world actionrelations.World, policy action
 	if err != nil {
 		return SearchRun{}, err
 	}
-	worldDigest, _ := normalized.Digest()
-	runID, err := actionrelationledger.UtilityRunID(panel, authority, curriculum, string(policy), worldOrdinal, worldDigest)
-	if err != nil {
-		return SearchRun{}, err
-	}
 	store := unit.NewStore()
 	previous := seed.DomainsDir
 	seed.DomainsDir = domainsDir
@@ -51,13 +47,43 @@ func ExecutePolicy(domainsDir string, world actionrelations.World, policy action
 	if err != nil {
 		return SearchRun{}, err
 	}
-	session, err := BeginSession(store, runID, "utility-search:"+token, 0, cap)
+	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, 0, cap, token, "", "")
+}
+
+func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal, initialTotal, cap int, token string) (SearchRun, error) {
+	if policy != actionrelationsearch.NousSleep && policy != actionrelationsearch.NoGuardSleep {
+		return SearchRun{}, fmt.Errorf("unsupported learned utility policy %q", policy)
+	}
+	artifact, boundary := store.Get(artifactName), store.Get(boundaryName)
+	if artifact == nil || boundary == nil || !store.IsA(artifact.Name, "GuardedActionArtifact") || !store.IsA(boundary.Name, "ActionStoreBoundary") {
+		return SearchRun{}, fmt.Errorf("invalid learned utility authority")
+	}
+	normalized, err := world.Normalize()
+	if err != nil {
+		return SearchRun{}, err
+	}
+	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, initialTotal, cap, token, artifactName, boundaryName)
+}
+
+func executePolicyOnStore(store *unit.Store, normalized actionrelations.NormalizedWorld, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal, initialTotal, cap int, token, artifactName, boundaryName string) (SearchRun, error) {
+	worldDigest, _ := normalized.Digest()
+	runID, err := actionrelationledger.UtilityRunID(panel, authority, curriculum, string(policy), worldOrdinal, worldDigest)
+	if err != nil {
+		return SearchRun{}, err
+	}
+	session, err := BeginSession(store, runID, "utility-search:"+token, initialTotal, cap)
 	if err != nil {
 		return SearchRun{}, err
 	}
 	runner := completeRunner{
 		session: session, worldDigest: worldDigest, policy: string(policy), searchPolicy: policy,
-		memo: map[string]completeVisit{}, evidence: map[string]bool{}, token: token, cache: NewCertificateCache(),
+		memo: map[string]completeVisit{}, evidence: map[string]bool{}, token: token, cache: NewCertificateCache(), artifactName: artifactName,
+	}
+	if artifactName != "" {
+		if err := runner.chargeArtifactLoad(boundaryName, artifactName); err != nil {
+			session.Abort()
+			return SearchRun{}, err
+		}
 	}
 	summary, err := runner.visit(normalized.State, normalized.Occurrences, nil)
 	if err != nil {
@@ -65,7 +91,7 @@ func ExecutePolicy(domainsDir string, world actionrelations.World, policy action
 		return SearchRun{}, err
 	}
 	runner.result.Policy = policy
-	runner.result.CertificateEvidenceBound = policy == actionrelationsearch.StaticSleep || policy == actionrelationsearch.DynamicSleep
+	runner.result.CertificateEvidenceBound = policy == actionrelationsearch.StaticSleep || policy == actionrelationsearch.DynamicSleep || policy == actionrelationsearch.NousSleep || policy == actionrelationsearch.NoGuardSleep
 	runner.result.RootNodeDigest = summary.node.Digest
 	runner.result.RootSubtree = summary.subtree
 	runner.result.TerminalSet = summary.terminalSet
@@ -107,6 +133,7 @@ type completeRunner struct {
 	memo         map[string]completeVisit
 	evidence     map[string]bool
 	cache        *CertificateCache
+	artifactName string
 }
 
 func (r *completeRunner) visit(state actionrelations.State, remaining []actionrelations.Occurrence, proofs []actionrelationsearch.ProofEntry) (completeVisit, error) {
@@ -209,7 +236,7 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 			return completeVisit{}, err
 		}
 		var candidateDigests []string
-		if r.searchPolicy == actionrelationsearch.StaticSleep || r.searchPolicy == actionrelationsearch.DynamicSleep {
+		if r.searchPolicy == actionrelationsearch.StaticSleep || r.searchPolicy == actionrelationsearch.DynamicSleep || r.searchPolicy == actionrelationsearch.NousSleep || r.searchPolicy == actionrelationsearch.NoGuardSleep {
 			candidateDigests = append(proofSleeperDigests(proofs), occurrenceDigests(earlier)...)
 			slices.Sort(candidateDigests)
 			candidateDigests = slices.Compact(candidateDigests)
@@ -309,9 +336,54 @@ func (r *completeRunner) eligibility(nodeName, nodeDigest string, state actionre
 		row := r.session.Store.Get(result.Row)
 		witness, _ := json.Marshal([]any{"static-witness/v1", row.GetString("objectDigest")})
 		return true, witness, operationStart, nil
+	case actionrelationsearch.NousSleep, actionrelationsearch.NoGuardSleep:
+		r.result.EligibilityChecks++
+		operationStart := r.session.Sequence
+		artifact := r.session.Store.Get(r.artifactName)
+		if artifact == nil {
+			return false, nil, operationStart, fmt.Errorf("missing learned artifact")
+		}
+		codes := []uint8{21, 21}
+		for _, relationName := range artifact.GetStrings("relationUnits") {
+			relation := r.session.Store.Get(relationName)
+			if relation == nil {
+				return false, nil, operationStart, fmt.Errorf("missing learned relation")
+			}
+			for range relation.GetStrings("atoms") {
+				codes = append(codes, 15)
+			}
+			codes = append(codes, 9)
+		}
+		takenDigest, _ := taken.Digest()
+		candidateDigest, _ := candidate.Digest()
+		if err := r.reserveTask("learned-match", []any{nodeDigest, takenDigest, candidateDigest, artifact.GetString("objectDigest")}, codes); err != nil {
+			return false, nil, operationStart, err
+		}
+		result, err := actionrelationmatch.ExecuteMetered(r.session.Store, r.artifactName, state, taken, candidate, fmt.Sprintf("%s.%05d", r.token, r.session.Sequence), r.session.MeterToken)
+		if err != nil || result.Terminal != "completed" || !result.Matched {
+			return false, nil, operationStart, err
+		}
+		barrier := r.session.Store.Get(result.Barrier)
+		if barrier == nil {
+			return false, nil, operationStart, fmt.Errorf("learned match lacks unanimous barrier")
+		}
+		witness, _ := json.Marshal([]any{"learned-witness/v1", barrier.GetString("objectDigest")})
+		return true, witness, operationStart, nil
 	default:
 		return false, nil, -1, nil
 	}
+}
+
+func (r *completeRunner) chargeArtifactLoad(boundaryName, artifactName string) error {
+	boundary, artifact := r.session.Store.Get(boundaryName), r.session.Store.Get(artifactName)
+	if boundary == nil || artifact == nil {
+		return fmt.Errorf("missing artifact load authority")
+	}
+	boundaryDigest, artifactDigest := boundary.GetString("objectDigest"), artifact.GetString("objectDigest")
+	if err := r.reserveTask("artifact-load", []any{boundaryDigest, artifactDigest}, []uint8{10}); err != nil {
+		return err
+	}
+	return dsl.ChargeActionRelationMeter(r.session.MeterToken, 10, 7, "artifact-load", [][]byte{[]byte(boundaryDigest), []byte(artifactDigest)}, [][]byte{[]byte(artifact.GetString("canonicalObject"))})
 }
 
 func (r *completeRunner) chargeProofLookup(parentNodeDigest, proofMapDigest, sleeperDigest, propagationDigest string) error {
