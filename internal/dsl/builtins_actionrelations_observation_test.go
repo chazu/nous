@@ -142,8 +142,11 @@ func TestCertificateAssemblerRequiresCompleteExplicitDiamond(t *testing.T) {
 	if err := bARCertificateAssemble(vm); err != nil {
 		t.Fatal(err)
 	}
-	certificateName := vm.pop().AsString()
-	if certificate := store.Get(certificateName); certificate == nil || certificate.GetString("representativeDigest") == "" {
+	attempt := store.Get(vm.pop().AsString())
+	if attempt == nil || attempt.GetString("result") != "certified" {
+		t.Fatalf("attempt=%#v", attempt)
+	}
+	if certificate := store.Get(attempt.GetString("certificateUnit")); certificate == nil || certificate.GetString("representativeDigest") == "" {
 		t.Fatalf("certificate=%#v", certificate)
 	}
 	vm.stack = []Value{
@@ -151,8 +154,12 @@ func TestCertificateAssemblerRequiresCompleteExplicitDiamond(t *testing.T) {
 		StringVal(aInitial), StringVal(bInitial), StringVal(""), StringVal(aAfterB), StringVal(equality),
 		StringVal(string(aJSON)), StringVal(operationRoot), StringVal("AR.Certificate.Forged"),
 	}
-	if err := bARCertificateAssemble(vm); err != nil || !vm.pop().IsNil() || store.Has("AR.Certificate.Forged") {
-		t.Fatal("certificate accepted omitted crossed transition")
+	if err := bARCertificateAssemble(vm); err != nil {
+		t.Fatal(err)
+	}
+	forged := store.Get(vm.pop().AsString())
+	if forged == nil || forged.GetString("result") != "invalid" || forged.GetString("certificateUnit") != "" {
+		t.Fatal("omitted crossed transition did not produce an invalid attempt")
 	}
 }
 

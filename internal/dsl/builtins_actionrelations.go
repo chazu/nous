@@ -12,6 +12,8 @@ import (
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
+const actionRelationZeroDigest = "0000000000000000000000000000000000000000000000000000000000000000"
+
 // These words expose only one-object or one-step operations. In particular,
 // none classifies a pair or executes both orders of a diamond.
 func init() {
@@ -106,7 +108,7 @@ func bARApplicable(vm *VM) error {
 	}
 	stateDigest, _ := state.Digest()
 	occurrenceDigest, _ := occurrence.Digest()
-	wire, _ := json.Marshal([]any{"action-applicability-row/v1", stateDigest, occurrenceDigest, applicable})
+	wire, _ := json.Marshal([]any{"action-applicability-row/v1", stateDigest, occurrenceDigest, applicable, "valid"})
 	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionApplicabilityRow", wire, map[string]any{
 		"stateDigest": stateDigest, "occurrenceDigest": occurrenceDigest, "applicable": applicable,
 	})
@@ -157,7 +159,11 @@ func bARApply(vm *VM) error {
 		}
 	}
 	applicabilityDigest := applicability.GetString("objectDigest")
-	wire, _ := json.Marshal([]any{"action-transition-row/v1", stateDigest, occurrenceDigest, applicabilityDigest, outcome, outputDigest})
+	resultStateDigest := outputDigest
+	if resultStateDigest == "" {
+		resultStateDigest = actionRelationZeroDigest
+	}
+	wire, _ := json.Marshal([]any{"action-transition-row/v1", stateDigest, occurrenceDigest, applicabilityDigest, resultStateDigest, outcome})
 	transitionName, err := arStoreCanonical(vm, transitionRequest.AsString(), "ActionTransitionRow", wire, map[string]any{
 		"stateDigest": stateDigest, "occurrenceDigest": occurrenceDigest, "applicabilityRow": applicability.Name, "outcome": outcome, "outputState": outputName, "outputStateDigest": outputDigest,
 	})
@@ -200,7 +206,7 @@ func bARStateEqual(vm *VM) error {
 	equal := bytes.Equal(a, b)
 	leftDigest, _ := left.Digest()
 	rightDigest, _ := right.Digest()
-	wire, _ := json.Marshal([]any{"action-state-equality-row/v1", leftDigest, rightDigest, equal})
+	wire, _ := json.Marshal([]any{"action-state-equality-row/v1", leftDigest, rightDigest, equal, "valid"})
 	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionStateEqualityRow", wire, map[string]any{
 		"leftStateDigest": leftDigest, "rightStateDigest": rightDigest, "equal": equal,
 	})
@@ -407,15 +413,21 @@ func bARGuardMatch(vm *VM) error {
 	}
 	result := value == polarityValue.AsBool()
 	guardDigest, _ := guard.Digest()
-	wire, _ := json.Marshal([]any{"action-guard-literal-row/v1", guardDigest, observation.GetString("objectDigest"), leftUnit.GetString("objectDigest"), rightUnit.GetString("objectDigest"), literal.Atom, literal.Polarity, result})
-	name, storeErr := arStoreCanonical(vm, requestedValue.AsString(), "ActionGuardLiteralRow", wire, map[string]any{
+	code := actionRelationPhaseCode(vm, 7, 15, 15, 7)
+	category := "ActionGuardLiteralRow"
+	wireRow := []any{"action-guard-literal-row/v1", guardDigest, observation.GetString("objectDigest"), leftUnit.GetString("objectDigest"), rightUnit.GetString("objectDigest"), literal.Atom, literal.Polarity, result}
+	if code == 15 {
+		category = "ActionLiteralEvaluationRow"
+		wireRow = []any{"action-literal-evaluation-row/v1", left.StateDigest, leftUnit.GetString("objectDigest"), rightUnit.GetString("objectDigest"), literal.Atom, literal.Polarity, result, "valid"}
+	}
+	wire, _ := json.Marshal(wireRow)
+	name, storeErr := arStoreCanonical(vm, requestedValue.AsString(), category, wire, map[string]any{
 		"guardDigest": guardDigest, "observationDigest": observation.GetString("objectDigest"), "aFactsDigest": leftUnit.GetString("objectDigest"), "bFactsDigest": rightUnit.GetString("objectDigest"), "atom": literal.Atom, "polarity": literal.Polarity, "result": result,
 	})
 	if storeErr != nil {
 		vm.push(Nil())
 		return nil
 	}
-	code := actionRelationPhaseCode(vm, 7, 15, 15, 7)
 	counter := uint8(5)
 	if code == 15 {
 		counter = 10

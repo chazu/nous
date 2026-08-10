@@ -353,11 +353,12 @@ units: [
 					"abState" @ "baState" @ "Cert.Equality." "request" @ concat ar-state-equal? "equality" !
 				then
 			then
-			"state" @ "a" @ "b" @ "request" @ "witness" get-slot "aInitial" @ "bInitial" @ "bAfterA" @ "aAfterB" @ "equality" @ "a" @ "request" @ "operationRoot" get-slot "AR.Certificate." "request" @ concat ar-certificate-assemble "certificate" !
-			"certificate" @ nil !=
+			"state" @ "a" @ "b" @ "request" @ "witness" get-slot "aInitial" @ "bInitial" @ "bAfterA" @ "aAfterB" @ "equality" @ "a" @ "request" @ "operationRoot" get-slot "AR.CertificateAttempt." "request" @ concat ar-certificate-assemble "attempt" !
+			"attempt" @ nil !=
 			if
-				"certificate" @ "request" @ "certificateUnit" set-slot
-				"certified" "request" @ "certificateTerminal" set-slot
+				"attempt" @ "request" @ "certificateAttemptUnit" set-slot
+				"attempt" @ "certificateUnit" get-slot "request" @ "certificateUnit" set-slot
+				"attempt" @ "result" get-slot "request" @ "certificateTerminal" set-slot
 			else "failed" "request" @ "certificateTerminal" set-slot then
 			"""#
 	},

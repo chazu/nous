@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
+	"github.com/chazu/nous/internal/actionrelationwire"
 	"github.com/chazu/nous/internal/unit"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
@@ -56,15 +57,19 @@ func bARPatternMatch(vm *VM) error {
 		}
 		row := vm.Store.Get(rowValue.AsString())
 		literal := relation.Guard.Literals[index]
-		if row == nil || !vm.Store.IsA(row.Name, "ActionGuardLiteralRow") || row.GetString("guardDigest") != guardDigest || row.GetString("atom") != literal.Atom || row.GetBool("polarity") != literal.Polarity || !row.GetBool("result") {
+		if row == nil || !vm.Store.IsA(row.Name, "ActionLiteralEvaluationRow") || row.GetString("guardDigest") != guardDigest || row.GetString("atom") != literal.Atom || row.GetBool("polarity") != literal.Polarity || !row.GetBool("result") {
 			guardTrue = false
 			continue
 		}
 		rowDigests[index] = row.GetString("objectDigest")
 	}
 	result := validInputs && guardTrue
-	wire, _ := json.Marshal([]any{"action-relation-match/v1", relationUnit.GetString("objectDigest"), stateDigest, aFacts.GetString("objectDigest"), bFacts.GetString("objectDigest"), aApp.GetString("objectDigest"), bApp.GetString("objectDigest"), rowDigests, result})
-	name, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationMatchRow", wire, map[string]any{"relation": relationUnit.Name, "result": result, "stateDigest": stateDigest, "literalRows": valuesToStrings(rows)})
+	traceAdmissible := len(state.Events) <= 6
+	patternResult := patternErr == nil && bytes.Equal(patternJSON, relationPatternJSON)
+	wire, _ := json.Marshal([]any{"action-relation-match-row/v1", relationUnit.GetString("objectDigest"), stateDigest, aFacts.GetString("objectDigest"), bFacts.GetString("objectDigest"), aApp.GetString("objectDigest"), bApp.GetString("objectDigest"), traceAdmissible, patternResult, rowDigests, result, "valid"})
+	name, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationMatchRow", wire, map[string]any{
+		"relation": relationUnit.Name, "result": result, "stateDigest": stateDigest, "aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "literalRows": valuesToStrings(rows),
+	})
 	if err != nil {
 		vm.push(Nil())
 		return nil
@@ -89,6 +94,7 @@ func bARCloseRelationUse(vm *VM) error {
 	}
 	all := true
 	digests := make([]string, len(rowsValue.AsList()))
+	stateDigest, aDigest, bDigest := "", "", ""
 	for index, value := range rowsValue.AsList() {
 		row := vm.Store.Get(value.AsString())
 		if value.Kind() != VString || row == nil || !vm.Store.IsA(row.Name, "ActionRelationMatchRow") || row.GetString("relation") != artifact.GetStrings("relationUnits")[index] {
@@ -96,10 +102,21 @@ func bARCloseRelationUse(vm *VM) error {
 			return nil
 		}
 		digests[index] = row.GetString("objectDigest")
+		if index == 0 {
+			stateDigest, aDigest, bDigest = row.GetString("stateDigest"), row.GetString("aOccurrenceDigest"), row.GetString("bOccurrenceDigest")
+		} else if row.GetString("stateDigest") != stateDigest || row.GetString("aOccurrenceDigest") != aDigest || row.GetString("bOccurrenceDigest") != bDigest {
+			vm.push(Nil())
+			return nil
+		}
 		all = all && row.GetBool("result")
 	}
-	wire, _ := json.Marshal([]any{"action-relation-use-barrier/v1", artifact.GetString("objectDigest"), digests, all})
-	name, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationUseBarrier", wire, map[string]any{"artifact": artifact.Name, "matchRows": valuesToStrings(rowsValue.AsList()), "result": all})
+	matchRoot, err := actionrelationwire.RootDigest("unanimous-relation-matches", digests)
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	wire, _ := json.Marshal([]any{"action-unanimous-use/v1", artifact.GetString("objectDigest"), stateDigest, aDigest, bDigest, matchRoot, all, "valid"})
+	name, err := arStoreCanonical(vm, requested.AsString(), "ActionUnanimousUse", wire, map[string]any{"artifact": artifact.Name, "matchRows": valuesToStrings(rowsValue.AsList()), "relationMatchRoot": matchRoot, "result": all})
 	if err != nil {
 		vm.push(Nil())
 		return nil

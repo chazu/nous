@@ -1,6 +1,8 @@
 package dsl
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
@@ -46,22 +48,88 @@ func bARCertificateAssemble(vm *VM) error {
 		return nil
 	}
 	label, abDigest, baDigest, valid := reconstructObservation(aInitial, bInitial, bAfterA, aAfterB, equality, aDigest, bDigest)
-	if !valid || label != "commutes" {
+	witnessCanonical, _ := json.Marshal(witness)
+	if string(witnessCanonical) != witnessValue.AsString() {
 		vm.push(Nil())
 		return nil
 	}
-	wire, _ := json.Marshal([]any{actionrelations.CertificateVersion, stateDigest, aDigest, bDigest, witness, abDigest, baDigest, true, aDigest, operationRootValue.AsString()})
-	name, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationCertificate", wire, map[string]any{
-		"stateDigest": stateDigest, "aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "witness": witnessValue.AsString(),
-		"abStateDigest": abDigest, "baStateDigest": baDigest, "representativeDigest": aDigest, "operationRoot": operationRootValue.AsString(),
-		"aInitialRow": aInitial.name, "bInitialRow": bInitial.name, "bAfterARow": bAfterA.name, "aAfterBRow": aAfterB.name, "equalityRow": equalityValue.AsString(),
+	witnessRaw := sha256.Sum256(witnessCanonical)
+	witnessDigest := hex.EncodeToString(witnessRaw[:])
+	certificateName, certificateDigest := "", actionRelationZeroDigest
+	result, status := "not-certified", "valid"
+	if valid && label == "commutes" {
+		wire, _ := json.Marshal([]any{actionrelations.CertificateVersion, stateDigest, aDigest, bDigest, witnessDigest, abDigest, baDigest, true, aDigest, operationRootValue.AsString()})
+		name, err := arStoreCanonical(vm, requested.AsString()+".Certificate", "ActionRelationCertificate", wire, map[string]any{
+			"stateDigest": stateDigest, "aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "witness": witnessValue.AsString(), "witnessDigest": witnessDigest,
+			"abStateDigest": abDigest, "baStateDigest": baDigest, "representativeDigest": aDigest, "operationRoot": operationRootValue.AsString(),
+			"aInitialRow": aInitial.name, "bInitialRow": bInitial.name, "bAfterARow": bAfterA.name, "aAfterBRow": aAfterB.name, "equalityRow": equalityValue.AsString(),
+		})
+		if err != nil {
+			vm.push(Nil())
+			return nil
+		}
+		certificateName = name
+		certificateDigest = vm.Store.Get(name).GetString("objectDigest")
+		result = "certified"
+	} else if !valid {
+		result, status = "invalid", "invalid-input"
+	}
+	operationRows, err := certificateOperationRows(vm, aInitial, bInitial, bAfterA, aAfterB, equalityValue.AsString())
+	if err != nil {
+		vm.push(Nil())
+		return nil
+	}
+	attemptWire, _ := json.Marshal([]any{"local-diamond-certificate-attempt/v2", stateDigest, aDigest, bDigest, witnessDigest, operationRows, operationRootValue.AsString(), result, certificateDigest, status})
+	attemptName, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationCertificateAttempt", attemptWire, map[string]any{
+		"stateDigest": stateDigest, "aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "witnessDigest": witnessDigest, "operationRows": operationRows,
+		"operationRoot": operationRootValue.AsString(), "result": result, "certificateDigest": certificateDigest, "certificateUnit": certificateName, "status": status,
 	})
 	if err != nil {
 		vm.push(Nil())
 		return nil
 	}
-	vm.push(StringVal(name))
+	vm.push(StringVal(attemptName))
 	return nil
+}
+
+func certificateOperationRows(vm *VM, aInitial, bInitial arTransitionEvidence, bAfterA, aAfterB *arTransitionEvidence, equalityName string) ([]string, error) {
+	transitionDigest := func(value arTransitionEvidence) (string, string, error) {
+		transition := vm.Store.Get(value.name)
+		if transition == nil {
+			return "", "", actionrelations.ErrInvalid
+		}
+		applicability := vm.Store.Get(transition.GetString("applicabilityRow"))
+		if applicability == nil {
+			return "", "", actionrelations.ErrInvalid
+		}
+		return applicability.GetString("objectDigest"), transition.GetString("objectDigest"), nil
+	}
+	aApp, aTransition, err := transitionDigest(aInitial)
+	if err != nil {
+		return nil, err
+	}
+	bApp, bTransition, err := transitionDigest(bInitial)
+	if err != nil {
+		return nil, err
+	}
+	result := []string{aApp, bApp, aTransition, bTransition}
+	for _, optional := range []*arTransitionEvidence{bAfterA, aAfterB} {
+		if optional != nil {
+			app, transition, err := transitionDigest(*optional)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, app, transition)
+		}
+	}
+	if equalityName != "" {
+		equality := vm.Store.Get(equalityName)
+		if equality == nil {
+			return nil, actionrelations.ErrInvalid
+		}
+		result = append(result, equality.GetString("objectDigest"))
+	}
+	return result, nil
 }
 
 func parseARWitness(data []byte) ([]any, error) {

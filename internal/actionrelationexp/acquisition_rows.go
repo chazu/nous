@@ -319,7 +319,7 @@ func encodeOperationRow(wire []byte) ([]byte, error) {
 	record[0], record[2] = 1, 1
 	switch row[0] {
 	case "action-applicability-row/v1":
-		if len(row) != 4 || !putDigest(record[4:36], anyString(row[1])) || !putDigest(record[36:68], anyString(row[2])) {
+		if len(row) != 5 || anyString(row[4]) != "valid" || !putDigest(record[4:36], anyString(row[1])) || !putDigest(record[36:68], anyString(row[2])) {
 			return nil, fmt.Errorf("invalid applicability wire")
 		}
 		record[1] = 1
@@ -333,19 +333,19 @@ func encodeOperationRow(wire []byte) ([]byte, error) {
 			return nil, fmt.Errorf("invalid transition wire")
 		}
 		record[1] = 2
-		outcome := anyString(row[4])
+		outcome := anyString(row[5])
 		if outcome == "applied" {
 			record[3] = 1
-			if !putDigest(record[68:100], anyString(row[5])) {
+			if !putDigest(record[68:100], anyString(row[4])) {
 				return nil, fmt.Errorf("invalid applied output")
 			}
-		} else if outcome == "inapplicable" && anyString(row[5]) == "" {
+		} else if outcome == "inapplicable" && anyString(row[4]) == zeroIfEmpty("") {
 			record[3] = 2
 		} else {
 			return nil, fmt.Errorf("invalid transition outcome")
 		}
 	case "action-state-equality-row/v1":
-		if len(row) != 4 || !putDigest(record[4:36], anyString(row[1])) || !putDigest(record[36:68], anyString(row[2])) {
+		if len(row) != 5 || anyString(row[4]) != "valid" || !putDigest(record[4:36], anyString(row[1])) || !putDigest(record[36:68], anyString(row[2])) {
 			return nil, fmt.Errorf("invalid equality wire")
 		}
 		record[1] = 3

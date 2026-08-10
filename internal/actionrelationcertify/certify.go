@@ -18,6 +18,7 @@ type Result struct {
 	Request     string
 	Terminal    string
 	Certificate string
+	Attempt     string
 }
 
 func Execute(store *unit.Store, state actionrelations.State, a, b actionrelations.Occurrence, witness []byte, operationRoot, token string) (Result, error) {
@@ -58,5 +59,5 @@ func Execute(store *unit.Store, state actionrelations.State, a, b actionrelation
 	if eng.LastError != nil {
 		return Result{}, eng.LastError
 	}
-	return Result{Request: request.Name, Terminal: request.GetString("certificateTerminal"), Certificate: request.GetString("certificateUnit")}, nil
+	return Result{Request: request.Name, Terminal: request.GetString("certificateTerminal"), Certificate: request.GetString("certificateUnit"), Attempt: request.GetString("certificateAttemptUnit")}, nil
 }
