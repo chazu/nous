@@ -22,6 +22,9 @@ func TestDevelopmentTerminalAndPublicationUseExactZeroReceiptAuthority(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	if parsed, err := ParseTerminalReceipt(receipt.Canonical); err != nil || parsed.Digest != receipt.Digest {
+		t.Fatalf("parse receipt: %v", err)
+	}
 	receiptRef, _ := Reference(".nous/actionrelations-v1-development-terminal-receipt.json", receipt.Canonical)
 	structural := make([]AuthorityRef, 16)
 	for index := range structural {
@@ -37,6 +40,9 @@ func TestDevelopmentTerminalAndPublicationUseExactZeroReceiptAuthority(t *testin
 	if err != nil || VerifyPublication(publication) != nil {
 		t.Fatal(err)
 	}
+	if parsed, err := ParsePublication("development", publication.Canonical); err != nil || parsed.Digest != publication.Digest {
+		t.Fatalf("parse publication: %v", err)
+	}
 	corrupt := publication
 	corrupt.ClaimReceipt = &publication.PlanReview
 	if VerifyPublication(corrupt) == nil {
@@ -49,9 +55,15 @@ func TestProtectedClaimRunningTransitionClosesCommitment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if parsed, err := ParseClaim(claim.Canonical); err != nil || parsed.Digest != claim.Digest {
+		t.Fatalf("parse claim: %v", err)
+	}
 	running, err := BuildRunning(Running{Panel: "validation", ClaimReceiptDigest: claim.Digest, ClaimCommit: fmt.Sprintf("%040d", 2), SourceRoot: claim.SourceRoot, AttemptCommitment: shaHex([]byte("attempt"))})
 	if err != nil || VerifyRunning(running) != nil {
 		t.Fatal(err)
+	}
+	if parsed, err := ParseRunning(running.Canonical); err != nil || parsed.Digest != running.Digest {
+		t.Fatalf("parse running: %v", err)
 	}
 	secret := shaHex([]byte("secret path"))
 	if _, err := BuildRunning(Running{Panel: "validation", ClaimReceiptDigest: claim.Digest, ClaimCommit: fmt.Sprintf("%040d", 2), SourceRoot: claim.SourceRoot, AttemptCommitment: shaHex([]byte("attempt")), SecretLocationDigest: &secret}); err == nil {

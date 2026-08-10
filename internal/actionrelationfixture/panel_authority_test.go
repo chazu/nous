@@ -6,7 +6,7 @@ import (
 )
 
 func TestDevelopmentPanelFixtureHasOneExactRootAndAllCurricula(t *testing.T) {
-	attempts, fixture, err := GeneratePublicPanel("development")
+	attempts, fixture, err := GenerateDevelopmentPanel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,11 +31,15 @@ func TestLockedCurriculumSeedIsExactHMACContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	context := DrawContext{Panel: "locked", Authority: authority, Curriculum: 3, CurriculumSeed: seed, Attempt: 0}
-	if _, err := PrecommitDraws(context); err != nil {
+	if _, err := precommitDraws(context); err != nil {
 		t.Fatal(err)
 	}
 	context.CurriculumSeed = authority
-	if _, err := PrecommitDraws(context); err == nil {
+	if _, err := precommitDraws(context); err == nil {
 		t.Fatal("accepted an arbitrary locked seed digest")
+	}
+	context.CurriculumSeed = seed
+	if _, err := PrecommitDraws(context); err == nil {
+		t.Fatal("public draw API accepted locked construction")
 	}
 }

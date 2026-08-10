@@ -46,7 +46,7 @@ type SkeletonCatalogs struct {
 }
 
 func BuildCurriculum(context DrawContext) (Curriculum, error) {
-	draws, err := PrecommitDraws(context)
+	draws, err := precommitDraws(context)
 	if err != nil {
 		return Curriculum{}, err
 	}
@@ -85,7 +85,7 @@ func BuildCurriculumFromCatalogs(context DrawContext, draws DrawBlock, catalogs 
 	if err := validateDrawContext(context); err != nil || !equalDrawContexts(draws.Context, context) {
 		return Curriculum{}, fmt.Errorf("invalid measured curriculum context")
 	}
-	wantDraws, err := PrecommitDraws(context)
+	wantDraws, err := precommitDraws(context)
 	if err != nil || !equalDrawBlocks(draws, wantDraws) {
 		return Curriculum{}, fmt.Errorf("measured curriculum changed draw block")
 	}

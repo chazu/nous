@@ -55,6 +55,75 @@ type Report struct {
 	Digest          string
 }
 
+func ParseReport(data []byte) (Report, error) {
+	var fields []json.RawMessage
+	if len(data) > MaximumReportBytes || json.Unmarshal(data, &fields) != nil || len(fields) != 21 {
+		return Report{}, fmt.Errorf("invalid report wire")
+	}
+	var version string
+	value := Report{Canonical: bytes.Clone(data), Digest: digest(data)}
+	if json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-report/v3" || json.Unmarshal(fields[1], &value.Panel) != nil || json.Unmarshal(fields[2], &value.Authority) != nil || json.Unmarshal(fields[3], &value.ManifestDigest) != nil || json.Unmarshal(fields[10], &value.Refs.CurriculumRowsRoot) != nil || json.Unmarshal(fields[19], &value.Classification) != nil {
+		return Report{}, fmt.Errorf("invalid report fields")
+	}
+	var err error
+	refs := []*AuthorityRef{&value.Refs.PlanReview, &value.Refs.ImplementationReview, &value.Refs.BuildAuthority, &value.Refs.Competence, &value.Refs.FixtureRoot}
+	for index, target := range refs {
+		*target, err = parseReportRef(fields[4+index])
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	if bytes.Equal(fields[9], []byte(`"`+zeroDigest+`"`)) {
+		value.Refs.RunningReceipt = nil
+	} else {
+		running, parseErr := parseReportRef(fields[9])
+		if parseErr != nil {
+			return Report{}, parseErr
+		}
+		value.Refs.RunningReceipt = &running
+	}
+	if value.MechanicalGates, err = parseMechanicalGates(fields[11]); err != nil {
+		return Report{}, err
+	}
+	if value.Inference.PrimarySearchRatio, err = parseFraction(fields[12]); err != nil {
+		return Report{}, err
+	}
+	if value.Inference.LifecycleRatio, err = parseFraction(fields[13]); err != nil {
+		return Report{}, err
+	}
+	if value.Inference.AmortizationRows, err = parseAmortizationRows(fields[14]); err != nil {
+		return Report{}, err
+	}
+	var interval []json.RawMessage
+	if json.Unmarshal(fields[15], &interval) != nil || len(interval) != 2 {
+		return Report{}, fmt.Errorf("invalid report confidence interval")
+	}
+	for index := range interval {
+		value.Inference.ConfidenceInterval[index], err = parseFraction(interval[index])
+		if err != nil {
+			return Report{}, err
+		}
+	}
+	if value.Inference.RandomizationP, err = parseFraction(fields[16]); err != nil {
+		return Report{}, err
+	}
+	value.Inference.RandomizationExtreme = value.Inference.RandomizationP.Numerator - 1
+	if value.Inference.SavingCoverage, err = parseFraction(fields[17]); err != nil {
+		return Report{}, err
+	}
+	if value.Inference.Power, err = parseFraction(fields[18]); err != nil {
+		return Report{}, err
+	}
+	if value.Panel == "development" {
+		value.Inference.PowerSuccesses = value.Inference.Power.Numerator
+	}
+	value.Refs.EvidencePayload, err = parseReportRef(fields[20])
+	if err != nil || VerifyReport(value) != nil {
+		return Report{}, fmt.Errorf("report does not reconstruct")
+	}
+	return value, nil
+}
+
 func CurriculumPolicyRowsRoot(rows []CurriculumPolicyRow) (string, error) {
 	if len(rows) == 0 {
 		return "", fmt.Errorf("empty curriculum row root")
@@ -255,4 +324,57 @@ func verifyReportInference(panel string, inference Inference) error {
 		return fmt.Errorf("development power does not reconstruct")
 	}
 	return nil
+}
+
+func parseReportRef(data json.RawMessage) (AuthorityRef, error) {
+	var fields []json.RawMessage
+	var value AuthorityRef
+	if json.Unmarshal(data, &fields) != nil || len(fields) != 3 || json.Unmarshal(fields[0], &value.Path) != nil || json.Unmarshal(fields[1], &value.Digest) != nil || json.Unmarshal(fields[2], &value.Mode) != nil || value.Verify() != nil {
+		return AuthorityRef{}, fmt.Errorf("invalid report authority reference")
+	}
+	return value, nil
+}
+
+func parseMechanicalGates(data json.RawMessage) (MechanicalGates, error) {
+	var fields []json.RawMessage
+	var version string
+	var values [8]bool
+	if json.Unmarshal(data, &fields) != nil || len(fields) != 9 || json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-mechanical-gates/v1" {
+		return MechanicalGates{}, fmt.Errorf("invalid mechanical gates wire")
+	}
+	for index := range values {
+		if json.Unmarshal(fields[index+1], &values[index]) != nil {
+			return MechanicalGates{}, fmt.Errorf("invalid mechanical gate")
+		}
+	}
+	return MechanicalGates{values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7]}, nil
+}
+
+func parseFraction(data json.RawMessage) (Fraction, error) {
+	var values []int
+	if json.Unmarshal(data, &values) != nil || len(values) != 2 {
+		return Fraction{}, fmt.Errorf("invalid fraction wire")
+	}
+	return Fraction{values[0], values[1]}, nil
+}
+
+func parseAmortizationRows(data json.RawMessage) ([]AmortizationRow, error) {
+	var wires [][]json.RawMessage
+	if json.Unmarshal(data, &wires) != nil {
+		return nil, fmt.Errorf("invalid amortization rows wire")
+	}
+	rows := make([]AmortizationRow, len(wires))
+	for index, wire := range wires {
+		var version string
+		var saving int
+		if len(wire) != 10 || json.Unmarshal(wire[0], &version) != nil || version != "actionrelation-amortization/v1" || json.Unmarshal(wire[1], &rows[index].Panel) != nil || json.Unmarshal(wire[2], &rows[index].Curriculum) != nil || json.Unmarshal(wire[3], &rows[index].Family) != nil || json.Unmarshal(wire[4], &rows[index].Acquisition) != nil || json.Unmarshal(wire[5], &rows[index].NousSearch) != nil || json.Unmarshal(wire[6], &rows[index].DynamicSearch) != nil || json.Unmarshal(wire[7], &saving) != nil || json.Unmarshal(wire[9], &rows[index].Status) != nil || saving != rows[index].DynamicSearch-rows[index].NousSearch {
+			return nil, fmt.Errorf("invalid amortization row %d", index)
+		}
+		if bytes.Equal(wire[8], []byte(`"infinite"`)) {
+			rows[index].Infinite = true
+		} else if json.Unmarshal(wire[8], &rows[index].Batches) != nil {
+			return nil, fmt.Errorf("invalid amortization batches")
+		}
+	}
+	return rows, nil
 }

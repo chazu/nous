@@ -18,22 +18,17 @@ type PanelFixture struct {
 	Digest          string
 }
 
-func GeneratePublicPanel(panel string) ([]GeneratedAttempt, PanelFixture, error) {
-	authority, start, count := "", 0, 0
-	switch panel {
-	case "development":
-		authority, start, count = "development-public-v1", 851001, 16
-	case "validation":
-		authority, start, count = "validation-public-v1", 852001, 24
-	default:
-		return nil, PanelFixture{}, fmt.Errorf("public generator cannot construct panel %q", panel)
-	}
+func GenerateDevelopmentPanel() ([]GeneratedAttempt, PanelFixture, error) {
+	return generatePublicPanel("development", "development-public-v1", 851001, 16)
+}
+
+func generatePublicPanel(panel, authority string, start, count int) ([]GeneratedAttempt, PanelFixture, error) {
 	attempts := make([]GeneratedAttempt, count)
 	for curriculum := 0; curriculum < count; curriculum++ {
 		var prior []AttemptLedger
 		for attempt := 0; attempt < 32; attempt++ {
 			context := DrawContext{Panel: panel, Authority: authority, Curriculum: curriculum, CurriculumSeed: start + curriculum, Attempt: attempt}
-			generated, err := GenerateAttempt(context, prior)
+			generated, err := generateAttempt(context, prior)
 			if err == nil {
 				attempts[curriculum] = generated
 				break

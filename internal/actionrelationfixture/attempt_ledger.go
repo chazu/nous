@@ -67,7 +67,7 @@ func VerifyAttemptLedger(ledger AttemptLedger) error {
 	if err := validateDrawContext(ledger.Context); err != nil || !equalDrawContexts(ledger.Draws.Context, ledger.Context) {
 		return fmt.Errorf("invalid attempt-ledger context")
 	}
-	wantDraws, err := PrecommitDraws(ledger.Context)
+	wantDraws, err := precommitDraws(ledger.Context)
 	if err != nil || !equalDrawBlocks(ledger.Draws, wantDraws) {
 		return fmt.Errorf("attempt ledger changed frozen draws")
 	}

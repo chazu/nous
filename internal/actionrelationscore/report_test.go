@@ -31,6 +31,13 @@ func TestV3ReportUsesExactRefsRatiosAndStageClassification(t *testing.T) {
 	if report.Classification != "interim-power-authorized" || VerifyReport(report) != nil || !bytes.HasPrefix(report.Canonical, []byte(`["actionrelation-report/v3"`)) {
 		t.Fatalf("report = %+v", report)
 	}
+	parsed, err := ParseReport(report.Canonical)
+	if err != nil || parsed.Digest != report.Digest {
+		t.Fatalf("parse report: %v", err)
+	}
+	if _, err := ParseReport(append(append([]byte{}, report.Canonical...), '\n')); err == nil {
+		t.Fatal("accepted trailing report bytes")
+	}
 	unauthorized := inference
 	unauthorized.Power = Fraction{1599, 2000}
 	unauthorized.PowerSuccesses = 1599

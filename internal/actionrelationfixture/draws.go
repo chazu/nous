@@ -37,6 +37,13 @@ type DrawBlock struct {
 }
 
 func PrecommitDraws(context DrawContext) (DrawBlock, error) {
+	if context.Panel != "development" {
+		return DrawBlock{}, fmt.Errorf("protected draw construction requires guarded capability")
+	}
+	return precommitDraws(context)
+}
+
+func precommitDraws(context DrawContext) (DrawBlock, error) {
 	if err := validateDrawContext(context); err != nil {
 		return DrawBlock{}, err
 	}

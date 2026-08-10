@@ -15,6 +15,16 @@ type Claim struct {
 	Digest     string
 }
 
+func ParseClaim(data []byte) (Claim, error) {
+	var fields []json.RawMessage
+	var version, state string
+	value := Claim{Canonical: bytes.Clone(data), Digest: shaHex(data)}
+	if len(data) > 4096 || json.Unmarshal(data, &fields) != nil || len(fields) != 6 || json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-claim/v1" || json.Unmarshal(fields[1], &value.Panel) != nil || json.Unmarshal(fields[2], &state) != nil || state != "claimed" || json.Unmarshal(fields[3], &value.BaseCommit) != nil || json.Unmarshal(fields[4], &value.SourceRoot) != nil || json.Unmarshal(fields[5], &value.Authority) != nil || VerifyClaim(value) != nil {
+		return Claim{}, fmt.Errorf("invalid claim wire")
+	}
+	return value, nil
+}
+
 func BuildClaim(value Claim) (Claim, error) {
 	value.Canonical, value.Digest = nil, ""
 	if value.Panel != "validation" && value.Panel != "locked" || !commitText(value.BaseCommit) || !digestText(value.SourceRoot) || !validPanelAuthority(value.Panel, value.Authority) {
@@ -51,6 +61,26 @@ type Running struct {
 	SecretLocationDigest *string
 	Canonical            []byte
 	Digest               string
+}
+
+func ParseRunning(data []byte) (Running, error) {
+	var fields []json.RawMessage
+	var version, state string
+	value := Running{Canonical: bytes.Clone(data), Digest: shaHex(data)}
+	if len(data) > 4096 || json.Unmarshal(data, &fields) != nil || len(fields) != 8 || json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-running/v1" || json.Unmarshal(fields[1], &value.Panel) != nil || json.Unmarshal(fields[2], &state) != nil || state != "running" || json.Unmarshal(fields[3], &value.ClaimReceiptDigest) != nil || json.Unmarshal(fields[4], &value.ClaimCommit) != nil || json.Unmarshal(fields[5], &value.SourceRoot) != nil || json.Unmarshal(fields[6], &value.AttemptCommitment) != nil {
+		return Running{}, fmt.Errorf("invalid running wire")
+	}
+	if !bytes.Equal(fields[7], []byte("null")) {
+		var secret string
+		if json.Unmarshal(fields[7], &secret) != nil {
+			return Running{}, fmt.Errorf("invalid running secret location")
+		}
+		value.SecretLocationDigest = &secret
+	}
+	if VerifyRunning(value) != nil {
+		return Running{}, fmt.Errorf("invalid running authority")
+	}
+	return value, nil
 }
 
 func BuildRunning(value Running) (Running, error) {
@@ -101,6 +131,36 @@ type TerminalReceipt struct {
 	Reason            string
 	Canonical         []byte
 	Digest            string
+}
+
+func ParseTerminalReceipt(data []byte) (TerminalReceipt, error) {
+	var fields []json.RawMessage
+	var version string
+	value := TerminalReceipt{Canonical: bytes.Clone(data), Digest: shaHex(data)}
+	if len(data) > 8192 || json.Unmarshal(data, &fields) != nil || len(fields) != 10 || json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-terminal-receipt/v2" || json.Unmarshal(fields[1], &value.Panel) != nil || json.Unmarshal(fields[2], &value.State) != nil || json.Unmarshal(fields[4], &value.SourceRoot) != nil || json.Unmarshal(fields[6], &value.AttemptCommitment) != nil || json.Unmarshal(fields[9], &value.Reason) != nil {
+		return TerminalReceipt{}, fmt.Errorf("invalid terminal receipt wire")
+	}
+	if !bytes.Equal(fields[3], []byte(`"`+zeroAuthorityDigest+`"`)) {
+		running, err := parseAuthorityRef(fields[3])
+		if err != nil {
+			return TerminalReceipt{}, err
+		}
+		value.RunningReceipt = &running
+	}
+	var err error
+	if value.FixtureRoot, err = parseAuthorityRef(fields[5]); err != nil {
+		return TerminalReceipt{}, err
+	}
+	if value.Report, err = parseAuthorityRef(fields[7]); err != nil {
+		return TerminalReceipt{}, err
+	}
+	if value.EvidencePayload, err = parseAuthorityRef(fields[8]); err != nil {
+		return TerminalReceipt{}, err
+	}
+	if VerifyTerminalReceipt(value) != nil {
+		return TerminalReceipt{}, fmt.Errorf("terminal receipt does not reconstruct")
+	}
+	return value, nil
 }
 
 func BuildTerminalReceipt(value TerminalReceipt) (TerminalReceipt, error) {
@@ -167,6 +227,69 @@ type Publication struct {
 	TerminalReceipt      AuthorityRef
 	Canonical            []byte
 	Digest               string
+}
+
+func ParsePublication(panel string, data []byte) (Publication, error) {
+	var fields []json.RawMessage
+	var version string
+	value := Publication{Panel: panel, Canonical: bytes.Clone(data), Digest: shaHex(data)}
+	if len(data) > 8192 || json.Unmarshal(data, &fields) != nil || len(fields) != 17 || json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-publication/v3" {
+		return Publication{}, fmt.Errorf("invalid publication wire")
+	}
+	refs := []*AuthorityRef{&value.PlanReview, &value.ImplementationReview, &value.BuildAuthority, &value.Competence}
+	for index, target := range refs {
+		parsed, err := parseAuthorityRef(fields[index+1])
+		if err != nil {
+			return Publication{}, err
+		}
+		*target = parsed
+	}
+	if !bytes.Equal(fields[5], []byte(`"`+zeroAuthorityDigest+`"`)) {
+		claim, err := parseAuthorityRef(fields[5])
+		if err != nil {
+			return Publication{}, err
+		}
+		value.ClaimReceipt = &claim
+	}
+	if !bytes.Equal(fields[6], []byte(`"`+zeroAuthorityDigest+`"`)) {
+		running, err := parseAuthorityRef(fields[6])
+		if err != nil {
+			return Publication{}, err
+		}
+		value.RunningReceipt = &running
+	}
+	remaining := []*AuthorityRef{&value.PrimaryExecution, &value.AuditExecution, &value.AuditAttestation, &value.RunEvidence}
+	for index, target := range remaining {
+		parsed, err := parseAuthorityRef(fields[index+7])
+		if err != nil {
+			return Publication{}, err
+		}
+		*target = parsed
+	}
+	var structural []json.RawMessage
+	if json.Unmarshal(fields[11], &structural) != nil {
+		return Publication{}, fmt.Errorf("invalid publication structural maps")
+	}
+	value.StructuralMaps = make([]AuthorityRef, len(structural))
+	for index := range structural {
+		parsed, err := parseAuthorityRef(structural[index])
+		if err != nil {
+			return Publication{}, err
+		}
+		value.StructuralMaps[index] = parsed
+	}
+	tail := []*AuthorityRef{&value.FixtureRoot, &value.ExecutionCore, &value.EvidencePayload, &value.Report, &value.TerminalReceipt}
+	for index, target := range tail {
+		parsed, err := parseAuthorityRef(fields[index+12])
+		if err != nil {
+			return Publication{}, err
+		}
+		*target = parsed
+	}
+	if VerifyPublication(value) != nil {
+		return Publication{}, fmt.Errorf("publication does not reconstruct")
+	}
+	return value, nil
 }
 
 func BuildPublication(value Publication) (Publication, error) {

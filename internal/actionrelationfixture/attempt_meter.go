@@ -21,7 +21,7 @@ type AttemptMeter struct {
 }
 
 func BeginAttemptMeter(context DrawContext) (*AttemptMeter, error) {
-	draws, err := PrecommitDraws(context)
+	draws, err := precommitDraws(context)
 	if err != nil {
 		return nil, err
 	}

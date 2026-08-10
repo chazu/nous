@@ -4,7 +4,7 @@ import "testing"
 
 func TestAttemptLedgerRecomputesDrawsAndClosesPhaseAuthority(t *testing.T) {
 	context := DrawContext{Panel: "development", Authority: "development-public-v1", Curriculum: 3, CurriculumSeed: 851004, Attempt: 0}
-	draws, err := PrecommitDraws(context)
+	draws, err := precommitDraws(context)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestAttemptLedgerRecomputesDrawsAndClosesPhaseAuthority(t *testing.T) {
 
 func TestAttemptLedgerStopsAtFirstFailedPredicate(t *testing.T) {
 	context := DrawContext{Panel: "validation", Authority: "validation-public-v1", Curriculum: 2, CurriculumSeed: 852003, Attempt: 4}
-	draws, err := PrecommitDraws(context)
+	draws, err := precommitDraws(context)
 	if err != nil {
 		t.Fatal(err)
 	}

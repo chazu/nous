@@ -19,6 +19,13 @@ type GeneratedAttempt struct {
 }
 
 func GenerateAttempt(context DrawContext, prior []AttemptLedger) (GeneratedAttempt, error) {
+	if context.Panel != "development" {
+		return GeneratedAttempt{}, fmt.Errorf("protected attempt construction requires guarded capability")
+	}
+	return generateAttempt(context, prior)
+}
+
+func generateAttempt(context DrawContext, prior []AttemptLedger) (GeneratedAttempt, error) {
 	result := GeneratedAttempt{Context: context}
 	if len(prior) != context.Attempt || context.Attempt > 31 {
 		return result, fmt.Errorf("prior attempt sequence does not match context")

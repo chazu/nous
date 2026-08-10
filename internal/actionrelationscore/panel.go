@@ -43,7 +43,7 @@ func ExecuteDevelopmentPanel(domainsDir string, prepare func(actionrelationfixtu
 	if prepare == nil || consume == nil {
 		return PanelSummary{}, fmt.Errorf("development panel requires preparation and evidence consumers")
 	}
-	attempts, fixture, err := actionrelationfixture.GeneratePublicPanel("development")
+	attempts, fixture, err := actionrelationfixture.GenerateDevelopmentPanel()
 	if err != nil {
 		return PanelSummary{}, err
 	}
