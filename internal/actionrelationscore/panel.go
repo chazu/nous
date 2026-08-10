@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/chazu/nous/internal/actionrelationcap"
 	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationfixture"
 )
@@ -47,23 +48,50 @@ func ExecuteDevelopmentPanel(domainsDir string, prepare func(actionrelationfixtu
 	if err != nil {
 		return PanelSummary{}, err
 	}
+	return executeGeneratedPanel(domainsDir, "development", "development-public-v1", attempts, fixture, prepare, consume)
+}
+
+// ExecuteProtectedPanel is the sole direct caller of protected fixture
+// construction. It does not accept panel names, seeds, or authorities apart
+// from the opaque capability consumed by the fixture package.
+func ExecuteProtectedPanel(domainsDir string, token actionrelationcap.Token, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error) (PanelSummary, error) {
+	if prepare == nil || consume == nil {
+		return PanelSummary{}, fmt.Errorf("protected panel requires preparation and evidence consumers")
+	}
+	panel, ok := token.Panel()
+	if !ok {
+		return PanelSummary{}, fmt.Errorf("protected panel requires authorization")
+	}
+	authority, ok := token.Authority()
+	if !ok {
+		return PanelSummary{}, fmt.Errorf("protected panel lacks attempt authority")
+	}
+	attempts, fixture, err := actionrelationfixture.GenerateProtectedPanel(token)
+	if err != nil {
+		return PanelSummary{}, err
+	}
+	return executeGeneratedPanel(domainsDir, panel, authority, attempts, fixture, prepare, consume)
+}
+
+func executeGeneratedPanel(domainsDir, panel, authority string, attempts []actionrelationfixture.GeneratedAttempt, fixture actionrelationfixture.PanelFixture, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error) (PanelSummary, error) {
 	if err := prepare(fixture); err != nil {
 		return PanelSummary{}, err
 	}
-	result := PanelSummary{Panel: "development", Authority: "development-public-v1", Fixture: fixture}
+	result := PanelSummary{Panel: panel, Authority: authority, Fixture: fixture}
+	var err error
 	var records []actionrelationexp.RunEvidenceRecord
 	for curriculum, generated := range attempts {
 		scored, err := ExecuteCurriculum(domainsDir, generated)
 		if err != nil {
-			return PanelSummary{}, fmt.Errorf("development curriculum %d: %w", curriculum, err)
+			return PanelSummary{}, fmt.Errorf("%s curriculum %d: %w", panel, curriculum, err)
 		}
 		evidence, err := BuildCurriculumEvidence(generated, scored)
 		if err != nil {
-			return PanelSummary{}, fmt.Errorf("development curriculum %d evidence: %w", curriculum, err)
+			return PanelSummary{}, fmt.Errorf("%s curriculum %d evidence: %w", panel, curriculum, err)
 		}
 		manifests, err := BuildCurriculumManifests(scored, evidence)
 		if err != nil {
-			return PanelSummary{}, fmt.Errorf("development curriculum %d manifests: %w", curriculum, err)
+			return PanelSummary{}, fmt.Errorf("%s curriculum %d manifests: %w", panel, curriculum, err)
 		}
 		chunk := PanelCurriculumEvidence{
 			Curriculum: curriculum, ManifestFiles: manifests.ManifestFiles, PackFiles: manifests.PackFiles,

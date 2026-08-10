@@ -42,6 +42,12 @@ func TestExecutionManifestsAndAuditAttestationBindIdenticalEvidence(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if parsed, err := ParseExecutionManifest(primary.Canonical); err != nil || parsed.Digest != primary.Digest {
+		t.Fatalf("parse primary: %v", err)
+	}
+	if _, err := ParseExecutionManifest(append(append([]byte(nil), primary.Canonical...), '\n')); err == nil {
+		t.Fatal("execution parser accepted trailing bytes")
+	}
 	primaryRef := ref(base + "authority/execution-primary.json")
 	primaryRef.Digest = primary.Digest
 	audit, err := BuildExecutionManifest(ExecutionManifest{
@@ -52,6 +58,9 @@ func TestExecutionManifestsAndAuditAttestationBindIdenticalEvidence(t *testing.T
 	if err != nil || EqualExecutionEvidence(primary, audit) != nil {
 		t.Fatalf("audit=%v equality=%v", err, EqualExecutionEvidence(primary, audit))
 	}
+	if parsed, err := ParseExecutionManifest(audit.Canonical); err != nil || parsed.Digest != audit.Digest {
+		t.Fatalf("parse audit: %v", err)
+	}
 	auditRef := ref(base + "authority/execution-audit.json")
 	auditRef.Digest = audit.Digest
 	attestation, err := BuildAuditAttestation(AuditAttestation{
@@ -61,6 +70,12 @@ func TestExecutionManifestsAndAuditAttestationBindIdenticalEvidence(t *testing.T
 	})
 	if err != nil || VerifyAuditAttestation(attestation) != nil {
 		t.Fatal(err)
+	}
+	if parsed, err := ParseAuditAttestation(attestation.Canonical); err != nil || parsed.Digest != attestation.Digest {
+		t.Fatalf("parse attestation: %v", err)
+	}
+	if _, err := ParseAuditAttestation(append(append([]byte(nil), attestation.Canonical...), '\n')); err == nil {
+		t.Fatal("attestation parser accepted trailing bytes")
 	}
 	attestationRef := ref(base + "authority/audit-attestation.json")
 	attestationRef.Digest = attestation.Digest
@@ -73,6 +88,12 @@ func TestExecutionManifestsAndAuditAttestationBindIdenticalEvidence(t *testing.T
 	})
 	if err != nil || VerifyExecutionCore(core) != nil {
 		t.Fatal(err)
+	}
+	if parsed, err := ParseExecutionCore(core.Canonical); err != nil || parsed.Digest != core.Digest {
+		t.Fatalf("parse core: %v", err)
+	}
+	if _, err := ParseExecutionCore(append(append([]byte(nil), core.Canonical...), '\n')); err == nil {
+		t.Fatal("execution-core parser accepted trailing bytes")
 	}
 	corrupt := audit
 	corrupt.ResultRowsRoot = testAuthorityDigest("changed")

@@ -128,7 +128,17 @@ func ExecuteDevelopment(ctx context.Context, repoRoot string, argv []string) (ac
 }
 
 func publishDevelopment(prerequisites panelPrerequisites, writer *panelWriter, summary actionrelationscore.PanelSummary) (actionrelationscore.Report, error) {
-	evidenceRoot, _ := actionrelationexp.EvidenceRoot("development")
+	return publishPanel(prerequisites, writer, summary, panelLifecycleAuthority{AttemptCommitment: strings.Repeat("0", 64)})
+}
+
+type panelLifecycleAuthority struct {
+	ClaimRef          *actionrelationexp.AuthorityRef
+	RunningRef        *actionrelationexp.AuthorityRef
+	AttemptCommitment string
+}
+
+func publishPanel(prerequisites panelPrerequisites, writer *panelWriter, summary actionrelationscore.PanelSummary, lifecycle panelLifecycleAuthority) (actionrelationscore.Report, error) {
+	evidenceRoot, _ := actionrelationexp.EvidenceRoot(summary.Panel)
 	authorityRoot := evidenceRoot + "/authority"
 	fixtureRef, _ := actionrelationexp.Reference(authorityRoot+"/fixture-root.json", summary.Fixture.Canonical)
 	runEvidenceRef, _ := actionrelationexp.Reference(evidenceRoot+"/manifests/run-evidence-root.json", summary.RunEvidence.Canonical)
@@ -150,8 +160,11 @@ func publishDevelopment(prerequisites panelPrerequisites, writer *panelWriter, s
 		TranscriptRowsRoot: summary.RunEvidence.TranscriptRowsRoot, ResultRowsRoot: summary.RunEvidence.ResultRowsRoot,
 		TotalRuns: len(summary.RunEvidence.Records), PriorExecution: &primaryRef,
 	})
-	if err != nil || actionrelationexp.EqualExecutionEvidence(primary, audit) != nil {
+	if err != nil {
 		return actionrelationscore.Report{}, fmt.Errorf("build audit execution: %w", err)
+	}
+	if err := actionrelationexp.EqualExecutionEvidence(primary, audit); err != nil {
+		return actionrelationscore.Report{}, fmt.Errorf("audit execution differs from primary: %w", err)
 	}
 	auditPath := authorityRoot + "/execution-audit.json"
 	auditRef, _ := actionrelationexp.Reference(auditPath, audit.Canonical)
@@ -170,7 +183,7 @@ func publishDevelopment(prerequisites panelPrerequisites, writer *panelWriter, s
 		PlanReview: prerequisites.PlanReviewRef, ImplementationReview: prerequisites.ImplementationRef,
 		BuildAuthority: prerequisites.BuildRef, Competence: prerequisites.CompetenceRef, Environment: slices.Clone(competenceEnvironment),
 		FixtureRoot: fixtureRef, PrimaryExecution: primaryRef, AuditExecution: auditRef, AuditAttestation: attestationRef,
-		RunEvidence: runEvidenceRef, StructuralMaps: summary.StructuralMaps,
+		RunEvidence: runEvidenceRef, StructuralMaps: summary.StructuralMaps, RunningReceipt: lifecycle.RunningRef,
 	})
 	if err != nil {
 		return actionrelationscore.Report{}, err
@@ -199,27 +212,28 @@ func publishDevelopment(prerequisites panelPrerequisites, writer *panelWriter, s
 	report, err := actionrelationscore.BuildReport(summary.Panel, summary.Authority, actionrelationscore.ReportAuthority{
 		PlanReview: prerequisites.PlanReviewRef, ImplementationReview: prerequisites.ImplementationRef,
 		BuildAuthority: prerequisites.BuildRef, Competence: prerequisites.CompetenceRef, FixtureRoot: fixtureRef,
-		CurriculumRowsRoot: summary.CurriculumRowsRoot, EvidencePayload: payloadRef,
+		RunningReceipt: lifecycle.RunningRef, CurriculumRowsRoot: summary.CurriculumRowsRoot, EvidencePayload: payloadRef,
 	}, gates, inference)
 	if err != nil {
 		return actionrelationscore.Report{}, err
 	}
-	reportPath := ".nous/actionrelations-v1-development-report.json"
+	reportPath := actionrelationexp.ExpectedAuthorityPath(summary.Panel, "report")
 	reportRef, _ := actionrelationexp.Reference(reportPath, report.Canonical)
 	receipt, err := actionrelationexp.BuildTerminalReceipt(actionrelationexp.TerminalReceipt{
 		Panel: summary.Panel, State: "published", SourceRoot: prerequisites.Build.SourceRoot, FixtureRoot: fixtureRef,
-		AttemptCommitment: strings.Repeat("0", 64), Report: reportRef, EvidencePayload: payloadRef, Reason: report.Classification,
+		RunningReceipt: lifecycle.RunningRef, AttemptCommitment: lifecycle.AttemptCommitment, Report: reportRef, EvidencePayload: payloadRef, Reason: report.Classification,
 	})
 	if err != nil {
 		return actionrelationscore.Report{}, err
 	}
-	receiptPath := ".nous/actionrelations-v1-development-terminal-receipt.json"
+	receiptPath := actionrelationexp.ExpectedAuthorityPath(summary.Panel, "terminal-receipt")
 	receiptRef, _ := actionrelationexp.Reference(receiptPath, receipt.Canonical)
 	publication, err := actionrelationexp.BuildPublication(actionrelationexp.Publication{
 		Panel: summary.Panel, PlanReview: prerequisites.PlanReviewRef, ImplementationReview: prerequisites.ImplementationRef,
 		BuildAuthority: prerequisites.BuildRef, Competence: prerequisites.CompetenceRef, PrimaryExecution: primaryRef,
 		AuditExecution: auditRef, AuditAttestation: attestationRef, RunEvidence: runEvidenceRef, StructuralMaps: summary.StructuralMaps,
-		FixtureRoot: fixtureRef, ExecutionCore: coreRef, EvidencePayload: payloadRef, Report: reportRef, TerminalReceipt: receiptRef,
+		ClaimReceipt: lifecycle.ClaimRef, RunningReceipt: lifecycle.RunningRef, FixtureRoot: fixtureRef, ExecutionCore: coreRef,
+		EvidencePayload: payloadRef, Report: reportRef, TerminalReceipt: receiptRef,
 	})
 	if err != nil {
 		return actionrelationscore.Report{}, err
@@ -238,10 +252,10 @@ func publishDevelopment(prerequisites panelPrerequisites, writer *panelWriter, s
 	if err := writeExclusiveAuthority(filepath.Join(prerequisites.Root, filepath.FromSlash(reportPath)), report.Canonical); err != nil {
 		return actionrelationscore.Report{}, err
 	}
-	if err := writeExclusiveAuthority(filepath.Join(prerequisites.Root, filepath.FromSlash(receiptPath)), receipt.Canonical); err != nil {
+	if err := writer.write(actionrelationexp.EvidenceFile{Path: authorityRoot + "/publication.json", Mode: "100644", Data: publication.Canonical}); err != nil {
 		return actionrelationscore.Report{}, err
 	}
-	if err := writer.write(actionrelationexp.EvidenceFile{Path: authorityRoot + "/publication.json", Mode: "100644", Data: publication.Canonical}); err != nil {
+	if err := writeExclusiveAuthority(filepath.Join(prerequisites.Root, filepath.FromSlash(receiptPath)), receipt.Canonical); err != nil {
 		return actionrelationscore.Report{}, err
 	}
 	return report, nil
@@ -271,8 +285,15 @@ func loadPanelPrerequisites(ctx context.Context, repoRoot string) (panelPrerequi
 	}
 	head := strings.TrimSpace(string(headBytes))
 	originBytes, err := git("rev-parse", "origin/main")
-	if err != nil || head != strings.TrimSpace(string(originBytes)) {
+	branchBytes, branchErr := git("symbolic-ref", "--short", "HEAD")
+	if err != nil || branchErr != nil || head != strings.TrimSpace(string(originBytes)) || strings.TrimSpace(string(branchBytes)) != "main" {
 		return panelPrerequisites{}, fmt.Errorf("panel requires clean HEAD at origin/main")
+	}
+	if _, err := git("diff", "--quiet", "HEAD", "--"); err != nil {
+		return panelPrerequisites{}, fmt.Errorf("panel requires no tracked working-tree changes")
+	}
+	if _, err := git("diff", "--cached", "--quiet", "HEAD", "--"); err != nil {
+		return panelPrerequisites{}, fmt.Errorf("panel requires no staged changes")
 	}
 	buildBytes, err := readCommittedWorking(root, git, head, actionrelationexp.BuildAuthorityPath)
 	if err != nil {
@@ -338,6 +359,10 @@ func loadPanelPrerequisites(ctx context.Context, repoRoot string) (panelPrerequi
 }
 
 func readCommittedWorking(root string, git func(...string) ([]byte, error), commit, path string) ([]byte, error) {
+	tree, err := git("ls-tree", "-z", commit, "--", path)
+	if err != nil || !bytes.HasSuffix(tree, append([]byte{'\t'}, append([]byte(path), 0)...)) || !bytes.HasPrefix(tree, []byte("100644 blob ")) || bytes.Count(tree, []byte{0}) != 1 {
+		return nil, fmt.Errorf("committed authority is not one mode-100644 blob: %s", path)
+	}
 	committed, err := git("cat-file", "blob", commit+":"+path)
 	if err != nil {
 		return nil, fmt.Errorf("read committed prerequisite %s: %w", path, err)

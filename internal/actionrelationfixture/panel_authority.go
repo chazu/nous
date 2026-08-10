@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/chazu/nous/internal/actionrelationcap"
 	"github.com/chazu/nous/internal/actionrelationwire"
 )
 
@@ -18,8 +19,53 @@ type PanelFixture struct {
 	Digest          string
 }
 
+func ParsePanelFixture(data []byte) (PanelFixture, error) {
+	var fields []json.RawMessage
+	var version string
+	value := PanelFixture{Canonical: bytes.Clone(data), Digest: digestBytes(data)}
+	if len(data) > 4096 || json.Unmarshal(data, &fields) != nil || len(fields) != 5 || json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-fixture-root/v2" || json.Unmarshal(fields[1], &value.Panel) != nil || json.Unmarshal(fields[2], &value.Authority) != nil || json.Unmarshal(fields[3], &value.CurriculumRoots) != nil || json.Unmarshal(fields[4], &value.ScorerRoot) != nil || VerifyPanelFixture(value) != nil {
+		return PanelFixture{}, fmt.Errorf("invalid panel fixture wire")
+	}
+	return value, nil
+}
+
 func GenerateDevelopmentPanel() ([]GeneratedAttempt, PanelFixture, error) {
 	return generatePublicPanel("development", "development-public-v1", 851001, 16)
+}
+
+// GenerateProtectedPanel is the sole protected fixture constructor. The token
+// has already consumed committed running authority and the local start marker.
+func GenerateProtectedPanel(token actionrelationcap.Token) ([]GeneratedAttempt, PanelFixture, error) {
+	panel, authority, ok := token.BeginConstruction()
+	if !ok {
+		return nil, PanelFixture{}, fmt.Errorf("protected fixture requires an unconsumed authorization")
+	}
+	count := map[string]int{"validation": 24, "locked": 32}[panel]
+	attempts := make([]GeneratedAttempt, count)
+	for curriculum := 0; curriculum < count; curriculum++ {
+		seed, valid := token.CurriculumSeed(curriculum)
+		if !valid {
+			return nil, PanelFixture{}, fmt.Errorf("protected curriculum %d lacks seed authority", curriculum)
+		}
+		var prior []AttemptLedger
+		for attempt := 0; attempt < 32; attempt++ {
+			context := DrawContext{Panel: panel, Authority: authority, Curriculum: curriculum, CurriculumSeed: seed, Attempt: attempt}
+			generated, err := generateAttempt(context, prior)
+			if err == nil {
+				attempts[curriculum] = generated
+				break
+			}
+			if generated.Ledger.Terminal != "rejected" {
+				return nil, PanelFixture{}, fmt.Errorf("curriculum %d attempt %d: %w", curriculum, attempt, err)
+			}
+			prior = append(prior, generated.Ledger)
+		}
+		if attempts[curriculum].Fixture.Digest == "" {
+			return nil, PanelFixture{}, fmt.Errorf("curriculum %d exhausted generator attempts", curriculum)
+		}
+	}
+	fixture, err := sealPanelFixture(panel, authority, attempts)
+	return attempts, fixture, err
 }
 
 func generatePublicPanel(panel, authority string, start, count int) ([]GeneratedAttempt, PanelFixture, error) {
@@ -42,11 +88,18 @@ func generatePublicPanel(panel, authority string, start, count int) ([]Generated
 			return nil, PanelFixture{}, fmt.Errorf("curriculum %d exhausted generator attempts", curriculum)
 		}
 	}
-	fixture, err := SealPanelFixture(panel, authority, attempts)
+	fixture, err := sealPanelFixture(panel, authority, attempts)
 	return attempts, fixture, err
 }
 
 func SealPanelFixture(panel, authority string, attempts []GeneratedAttempt) (PanelFixture, error) {
+	if panel != "development" {
+		return PanelFixture{}, fmt.Errorf("protected fixture sealing requires guarded capability")
+	}
+	return sealPanelFixture(panel, authority, attempts)
+}
+
+func sealPanelFixture(panel, authority string, attempts []GeneratedAttempt) (PanelFixture, error) {
 	wantCount, err := validatePanelFixtureAuthority(panel, authority)
 	if err != nil || len(attempts) != wantCount {
 		return PanelFixture{}, fmt.Errorf("invalid panel fixture cardinality")

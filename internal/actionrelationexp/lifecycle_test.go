@@ -70,3 +70,15 @@ func TestProtectedClaimRunningTransitionClosesCommitment(t *testing.T) {
 		t.Fatal("accepted validation secret location")
 	}
 }
+
+func TestLockedClaimRequiresDigestAuthority(t *testing.T) {
+	claim, err := BuildClaim(Claim{Panel: "locked", BaseCommit: fmt.Sprintf("%040d", 1), SourceRoot: shaHex([]byte("source")), Authority: shaHex([]byte("seedless claim authority"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := claim
+	corrupt.Authority = "locked-pending"
+	if _, err := BuildClaim(corrupt); err == nil {
+		t.Fatal("locked claim accepted non-digest authority")
+	}
+}

@@ -81,6 +81,14 @@ func TestDevelopmentRunEvidencePackHasExact240ByteRows(t *testing.T) {
 	if err := VerifyRunEvidencePack(value); err != nil {
 		t.Fatal(err)
 	}
+	if parsed, err := ParseRunEvidencePack("development", "development-public-v1", value.Canonical, value.File.Data); err != nil || parsed.Digest != value.Digest {
+		t.Fatalf("parse run evidence: %v", err)
+	}
+	corruptData := append([]byte(nil), value.File.Data...)
+	corruptData[len(corruptData)-1] ^= 1
+	if _, err := ParseRunEvidencePack("development", "development-public-v1", value.Canonical, corruptData); err == nil {
+		t.Fatal("run-evidence parser accepted changed pack bytes")
+	}
 	corrupt := value
 	corrupt.File.Data = bytes.Clone(value.File.Data)
 	corrupt.File.Data[6+208] = 1

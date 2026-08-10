@@ -50,6 +50,12 @@ func TestEvidencePayloadClosesEveryFrozenDevelopmentReferenceClass(t *testing.T)
 	if err != nil || VerifyEvidencePayload(payload) != nil {
 		t.Fatal(err)
 	}
+	if parsed, err := ParseEvidencePayload(value.Panel, value.Authority, payload.Canonical); err != nil || parsed.Digest != payload.Digest {
+		t.Fatalf("parse payload: %v", err)
+	}
+	if _, err := ParseEvidencePayload(value.Panel, value.Authority, append(append([]byte(nil), payload.Canonical...), '\n')); err == nil {
+		t.Fatal("payload parser accepted trailing bytes")
+	}
 	corrupt := payload
 	corrupt.StoreBoundaries = append([]StoreBoundaryRow(nil), payload.StoreBoundaries...)
 	corrupt.StoreBoundaries[1].Scope = "nous"

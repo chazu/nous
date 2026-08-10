@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/chazu/nous/internal/actionrelationrun"
+	"github.com/chazu/nous/internal/actionrelationscore"
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/causaldpproof"
 	"github.com/chazu/nous/internal/causalexpv2"
@@ -74,6 +75,7 @@ func actionRelationTrialsCmd(args []string) {
 	repoRoot := fs.String("repo-root", ".", "canonical repository root")
 	stage := fs.String("stage", "prepare", "prepare, competence, claim, or execute")
 	panel := fs.String("panel", "development", "development, validation, or locked")
+	_ = fs.String("unlock-token", "", "locked execute token actionrelations/v1:<exact-clean-HEAD>")
 	fs.Parse(args)
 	root, err := filepath.Abs(*repoRoot)
 	if err != nil {
@@ -83,17 +85,27 @@ func actionRelationTrialsCmd(args []string) {
 	var canonical []byte
 	switch *stage {
 	case "prepare":
-		value, runErr := actionrelationrun.PreparePrerequisites(context.Background(), root)
-		err, canonical = runErr, value.Canonical
+		if *panel == "development" {
+			value, runErr := actionrelationrun.PreparePrerequisites(context.Background(), root)
+			err, canonical = runErr, value.Canonical
+		} else {
+			value, runErr := actionrelationrun.PrepareProtected(context.Background(), root, *panel, os.Args)
+			err, canonical = runErr, value.Canonical
+		}
 	case "competence":
 		value, runErr := actionrelationrun.ExecuteCompetence(root, os.Args)
 		err, canonical = runErr, value.Canonical
+	case "claim":
+		value, runErr := actionrelationrun.ClaimProtected(context.Background(), root, *panel, os.Args)
+		err, canonical = runErr, value.Canonical
 	case "execute":
-		if *panel != "development" {
-			err = fmt.Errorf("%s execution is not prepared", *panel)
-			break
+		var value actionrelationscore.Report
+		var runErr error
+		if *panel == "development" {
+			value, runErr = actionrelationrun.ExecuteDevelopment(context.Background(), root, os.Args)
+		} else {
+			value, runErr = actionrelationrun.ExecuteProtected(context.Background(), root, *panel, os.Args)
 		}
-		value, runErr := actionrelationrun.ExecuteDevelopment(context.Background(), root, os.Args)
 		err, canonical = runErr, value.Canonical
 	default:
 		err = fmt.Errorf("unknown actionrelation stage %q", *stage)

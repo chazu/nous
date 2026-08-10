@@ -3,6 +3,8 @@ package actionrelationfixture
 import (
 	"bytes"
 	"testing"
+
+	"github.com/chazu/nous/internal/actionrelationcap"
 )
 
 func TestDevelopmentPanelFixtureHasOneExactRootAndAllCurricula(t *testing.T) {
@@ -12,6 +14,9 @@ func TestDevelopmentPanelFixtureHasOneExactRootAndAllCurricula(t *testing.T) {
 	}
 	if len(attempts) != 16 || len(fixture.CurriculumRoots) != 16 || len(fixture.Canonical) > 4096 || fixture.Digest == "" {
 		t.Fatalf("attempts=%d roots=%d bytes=%d digest=%q", len(attempts), len(fixture.CurriculumRoots), len(fixture.Canonical), fixture.Digest)
+	}
+	if parsed, err := ParsePanelFixture(fixture.Canonical); err != nil || parsed.Digest != fixture.Digest {
+		t.Fatalf("parse fixture: %v", err)
 	}
 	again, err := SealPanelFixture("development", "development-public-v1", attempts)
 	if err != nil || again.Digest != fixture.Digest || !bytes.Equal(again.Canonical, fixture.Canonical) {
@@ -24,22 +29,11 @@ func TestDevelopmentPanelFixtureHasOneExactRootAndAllCurricula(t *testing.T) {
 	}
 }
 
-func TestLockedCurriculumSeedIsExactHMACContext(t *testing.T) {
-	authority := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	seed, err := LockedCurriculumSeed(authority, 3)
-	if err != nil {
-		t.Fatal(err)
+func TestProtectedPanelAPIsRejectZeroCapability(t *testing.T) {
+	if _, _, err := GenerateProtectedPanel(actionrelationcap.Token{}); err == nil {
+		t.Fatal("protected generator accepted zero capability")
 	}
-	context := DrawContext{Panel: "locked", Authority: authority, Curriculum: 3, CurriculumSeed: seed, Attempt: 0}
-	if _, err := precommitDraws(context); err != nil {
-		t.Fatal(err)
-	}
-	context.CurriculumSeed = authority
-	if _, err := precommitDraws(context); err == nil {
-		t.Fatal("accepted an arbitrary locked seed digest")
-	}
-	context.CurriculumSeed = seed
-	if _, err := PrecommitDraws(context); err == nil {
-		t.Fatal("public draw API accepted locked construction")
+	if _, err := SealPanelFixture("locked", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil); err == nil {
+		t.Fatal("public fixture sealer accepted locked panel")
 	}
 }
