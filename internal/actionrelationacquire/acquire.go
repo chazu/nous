@@ -62,6 +62,9 @@ func Begin(domainsDir, token string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := installSemanticInputs(store, training); err != nil {
+		return nil, err
+	}
 	experiment := unit.New("AR.Experiment." + token)
 	experiment.Set("isA", []string{"ActionRelationExperiment", "Anything"})
 	experiment.Set("expectedObservationCount", len(training))
@@ -77,6 +80,7 @@ func Begin(domainsDir, token string) (*Session, error) {
 	pattern := actionrelations.Pattern{Kinds: []string{"add", "add"}, Roles: []int{0, -1, 1, -1}}
 	patternJSON, _ := pattern.CanonicalJSON()
 	experiment.Set("pattern", string(patternJSON))
+	experiment.Set("patternUnit", putCanonical(store, "ActionRelationPattern", patternJSON))
 	store.Put(experiment)
 	for _, testCase := range training {
 		name := fmt.Sprintf("AR.Training.%s.%02d", token, testCase.Ordinal)
@@ -307,5 +311,52 @@ func installPresentationViews(store *unit.Store, experiment *unit.Unit, training
 	experiment.Set("presentationViewUnits", presentationNames)
 	experiment.Set("normalizationProofUnits", proofNames)
 	experiment.Set("viewEvidenceRoot", rootDigest)
+	trainingWire, _ := json.Marshal([]any{"action-training-evidence/v1", semanticTrainingRoot, rootDigest})
+	experiment.Set("trainingEvidenceUnit", putCanonical(store, "ActionTrainingEvidence", trainingWire))
 	return nil
+}
+
+func installSemanticInputs(store *unit.Store, training []actionrelationfixturecore.Case) error {
+	for _, testCase := range training {
+		state, err := actionrelations.ParseState(testCase.State)
+		if err != nil {
+			return err
+		}
+		a, err := actionrelations.ParseOccurrence(testCase.AOccurrence)
+		if err != nil {
+			return err
+		}
+		b, err := actionrelations.ParseOccurrence(testCase.BOccurrence)
+		if err != nil {
+			return err
+		}
+		putCanonical(store, "FiniteActionState", testCase.State)
+		for _, occurrence := range []actionrelations.Occurrence{a, b} {
+			actionJSON, _ := occurrence.Action.CanonicalJSON()
+			occurrenceJSON, _ := occurrence.CanonicalJSON()
+			putCanonical(store, "FiniteSemanticAction", actionJSON)
+			putCanonical(store, "ActionOccurrence", occurrenceJSON)
+		}
+		world := actionrelations.NormalizedWorld{State: state, Actions: []actionrelations.SemanticAction{a.Action, b.Action}}
+		worldJSON, err := world.CanonicalJSON()
+		if err != nil {
+			return err
+		}
+		putCanonical(store, "FiniteActionWorldCore", worldJSON)
+	}
+	return nil
+}
+
+func putCanonical(store *unit.Store, category string, canonical []byte) string {
+	digestBytes := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(digestBytes[:])
+	name := "AR.Object." + category + "." + digest
+	if store.Get(name) == nil {
+		u := unit.New(name)
+		u.Set("isA", []string{category, "Anything"})
+		u.Set("canonicalObject", string(canonical))
+		u.Set("objectDigest", digest)
+		store.Put(u)
+	}
+	return name
 }

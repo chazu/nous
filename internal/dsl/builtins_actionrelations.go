@@ -233,6 +233,10 @@ func bARGuardRoot(vm *VM) error {
 	}
 	guard := actionrelations.Guard{}
 	data, _ := guard.CanonicalJSON()
+	if _, err := arStoreCanonical(vm, requestedValue.AsString()+".Guard", "ActionGuard", data, map[string]any{"guard": string(data)}); err != nil {
+		vm.push(Nil())
+		return nil
+	}
 	name, err := arStoreCandidate(vm, requestedValue.AsString(), pattern, guard, "", 0)
 	if err != nil {
 		vm.push(Nil())
@@ -266,6 +270,10 @@ func bARGuardExtend(vm *VM) error {
 	parentDigest, _ := guard.Digest()
 	childDigest, _ := child.Digest()
 	edgeWire, _ := json.Marshal([]any{"action-guard-refinement/v1", parentDigest, childDigest, atomValue.AsString(), polarityValue.AsBool(), ordinalValue.AsInt()})
+	if _, err := arStoreCanonical(vm, requestedValue.AsString()+".Guard", "ActionGuard", data, map[string]any{"guard": string(data)}); err != nil {
+		vm.push(Nil())
+		return nil
+	}
 	name, err := arStoreCanonical(vm, requestedValue.AsString(), "ActionGuardRefinement", edgeWire, map[string]any{
 		"parentGuard": string(mustCanonicalGuard(guard)), "childGuard": string(data), "atom": atomValue.AsString(), "polarity": polarityValue.AsBool(), "ordinal": ordinalValue.AsInt(),
 	})
