@@ -224,6 +224,29 @@ func VerifyRunEvidencePack(value RunEvidencePack) error {
 	return nil
 }
 
+// ChargedOutputsRoot reconstructs the frozen per-run result commitment from
+// the sequence-aligned detail packs. Rows are [sequence,[outputDigest...]].
+func ChargedOutputsRoot(transcript TranscriptBundle) (string, error) {
+	if err := VerifyTranscript(transcript); err != nil {
+		return "", err
+	}
+	rows := make([]any, transcript.DetailRoot.TotalRecords)
+	for shardOrdinal, file := range transcript.DetailFiles {
+		shard := transcript.DetailRoot.Shards[shardOrdinal]
+		for local := 0; local < shard.RecordCount; local++ {
+			sequence := int(shard.FirstSequence) + local
+			row := file.Data[len(DetailHeader)+local*DetailRowBytes:][:DetailRowBytes]
+			count := int(row[75])
+			outputs := make([]string, count)
+			for index := range outputs {
+				outputs[index] = hex.EncodeToString(row[128+index*32 : 160+index*32])
+			}
+			rows[sequence] = []any{sequence, outputs}
+		}
+	}
+	return actionrelationwire.RootDigest("run-charged-outputs", rows)
+}
+
 var panelNames = map[string]bool{"development": true, "validation": true, "locked": true}
 var panelRunCounts = map[string]int{"development": 704, "validation": 1056, "locked": 1408}
 

@@ -48,7 +48,46 @@ func VerifySearchRun(run SearchRun) error {
 	if run.PhysicalWork != len(run.Records) || run.PriorPhysical < 0 || run.PriorPhysical+run.PhysicalWork > physicalPolicyCap(run.Policy) {
 		return fmt.Errorf("utility physical work cap does not conserve")
 	}
+	if err := verifyStructuralOutputs(run); err != nil {
+		return err
+	}
 	return verifyCertificateAuthority(run)
+}
+
+func verifyStructuralOutputs(run SearchRun) error {
+	seen := map[string]bool{}
+	for _, object := range run.StructuralObjects {
+		if actionrelationexp.ValidateObject(object.Kind, object.Bytes) != nil {
+			return fmt.Errorf("invalid retained structural object")
+		}
+		key := fmt.Sprintf("%d:%s", object.Kind, digestBytesText(object.Bytes))
+		if seen[key] {
+			return fmt.Errorf("duplicate retained structural object")
+		}
+		seen[key] = true
+	}
+	require := func(kind uint16, canonical []byte) error {
+		if !seen[fmt.Sprintf("%d:%s", kind, digestBytesText(canonical))] {
+			return fmt.Errorf("missing structural kind %d", kind)
+		}
+		return nil
+	}
+	for _, row := range []struct {
+		kind   uint16
+		values []actionrelationsearch.EvidenceObject
+	}{{5, run.Search.RemainingSets}, {19, run.Search.ProofMaps}, {18, run.Search.Propagations}, {21, run.Search.SearchEdges}, {22, run.Search.CompletedSubtrees}, {24, run.Search.TerminalSets}, {25, run.Search.SubtreeRoots}} {
+		for _, object := range row.values {
+			if err := require(row.kind, object.Canonical); err != nil {
+				return err
+			}
+		}
+	}
+	for _, root := range append(slices.Clone(run.ProofRoots), run.RunRoot) {
+		if err := require(46, root.Canonical); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func verifyWorkTerminal(run SearchRun) error {

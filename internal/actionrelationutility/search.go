@@ -19,22 +19,23 @@ import (
 )
 
 type SearchRun struct {
-	RunID         string
-	WorldDigest   string
-	Policy        actionrelationsearch.Policy
-	Store         *unit.Store
-	Search        actionrelationsearch.Result
-	Records       []dsl.ActionRelationMeterRecord
-	Transcript    actionrelationexp.TranscriptBundle
-	RunRoot       actionrelationexp.OperationRoot
-	Terminal      string
-	WorkTerminal  WorkTerminal
-	WorkVector    [12]int
-	InitialWork   [12]int
-	WorkTotal     int
-	ProofRoots    []actionrelationexp.OperationRoot
-	PhysicalWork  int
-	PriorPhysical int
+	RunID             string
+	WorldDigest       string
+	Policy            actionrelationsearch.Policy
+	Store             *unit.Store
+	Search            actionrelationsearch.Result
+	Records           []dsl.ActionRelationMeterRecord
+	Transcript        actionrelationexp.TranscriptBundle
+	RunRoot           actionrelationexp.OperationRoot
+	Terminal          string
+	WorkTerminal      WorkTerminal
+	WorkVector        [12]int
+	InitialWork       [12]int
+	WorkTotal         int
+	ProofRoots        []actionrelationexp.OperationRoot
+	PhysicalWork      int
+	PriorPhysical     int
+	StructuralObjects []actionrelationexp.ObjectRecord
 }
 
 type WorkBudget struct {
@@ -124,7 +125,7 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 	}
 	runner := completeRunner{
 		session: session, worldDigest: worldDigest, policy: string(policy), searchPolicy: policy,
-		memo: map[string]completeVisit{}, evidence: map[string]bool{}, token: token, cache: NewCertificateCache(), artifactName: artifactName, proofRootSeen: map[string]bool{},
+		memo: map[string]completeVisit{}, evidence: map[string]bool{}, token: token, cache: NewCertificateCache(), artifactName: artifactName, proofRootSeen: map[string]bool{}, structuralSeen: map[string]bool{},
 	}
 	if artifactName != "" {
 		if err := runner.chargeArtifactLoad(boundaryName, artifactName); err != nil {
@@ -141,7 +142,7 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 				session.Abort()
 				return SearchRun{}, terminalErr
 			}
-			return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, "budget-exhausted", terminal)
+			return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, runner.structural, "budget-exhausted", terminal)
 		}
 		session.Abort()
 		return SearchRun{}, err
@@ -157,10 +158,10 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 		session.Abort()
 		return SearchRun{}, err
 	}
-	return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, "completed", WorkTerminal{})
+	return finishSearchRun(session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, runner.structural, "completed", WorkTerminal{})
 }
 
-func finishSearchRun(session *Session, runID, worldDigest string, policy actionrelationsearch.Policy, priorPhysical int, result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
+func finishSearchRun(session *Session, runID, worldDigest string, policy actionrelationsearch.Policy, priorPhysical int, result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, extraStructural []actionrelationexp.ObjectRecord, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
 	initialWork := session.InitialWork
 	records, err := session.Close()
 	if err != nil {
@@ -181,7 +182,11 @@ func finishSearchRun(session *Session, runID, worldDigest string, policy actionr
 	for index := range workVector {
 		workVector[index] += initialWork[index]
 	}
-	run := SearchRun{RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots), PhysicalWork: len(records), PriorPhysical: priorPhysical}
+	structural, err := collectStructuralObjects(result, proofRoots, runRoot, extraStructural)
+	if err != nil {
+		return SearchRun{}, err
+	}
+	run := SearchRun{RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots), PhysicalWork: len(records), PriorPhysical: priorPhysical, StructuralObjects: structural}
 	if err := VerifySearchRun(run); err != nil {
 		return SearchRun{}, err
 	}
@@ -209,18 +214,20 @@ type completeVisit struct {
 }
 
 type completeRunner struct {
-	session       *Session
-	worldDigest   string
-	policy        string
-	searchPolicy  actionrelationsearch.Policy
-	token         string
-	result        actionrelationsearch.Result
-	memo          map[string]completeVisit
-	evidence      map[string]bool
-	cache         *CertificateCache
-	artifactName  string
-	proofRoots    []actionrelationexp.OperationRoot
-	proofRootSeen map[string]bool
+	session        *Session
+	worldDigest    string
+	policy         string
+	searchPolicy   actionrelationsearch.Policy
+	token          string
+	result         actionrelationsearch.Result
+	memo           map[string]completeVisit
+	evidence       map[string]bool
+	cache          *CertificateCache
+	artifactName   string
+	proofRoots     []actionrelationexp.OperationRoot
+	proofRootSeen  map[string]bool
+	structural     []actionrelationexp.ObjectRecord
+	structuralSeen map[string]bool
 }
 
 type budgetExhaustedError struct {
@@ -362,6 +369,28 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 			if err != nil {
 				return completeVisit{}, err
 			}
+			if !decision.CacheHit {
+				cacheRow := r.session.Store.Get(decision.CacheRow)
+				if cacheRow == nil {
+					return completeVisit{}, fmt.Errorf("fresh certificate decision lacks cache row")
+				}
+				attempt := r.session.Store.Get(cacheRow.GetString("attemptUnit"))
+				if attempt == nil {
+					return completeVisit{}, fmt.Errorf("fresh certificate decision lacks attempt preimage")
+				}
+				if err := r.recordStructuralUnit(44, attempt); err != nil {
+					return completeVisit{}, err
+				}
+				if decision.Certified {
+					certificate := r.unitByDigest(decision.CertificateDigest)
+					if certificate == nil {
+						return completeVisit{}, fmt.Errorf("certified decision lacks certificate preimage")
+					}
+					if err := r.recordStructuralUnit(17, certificate); err != nil {
+						return completeVisit{}, err
+					}
+				}
+			}
 			if !decision.Certified {
 				r.recordProofRoot(decision.OperationRoot)
 				continue
@@ -418,6 +447,98 @@ func (r *completeRunner) recordProofRoot(root actionrelationexp.OperationRoot) {
 	r.proofRoots = append(r.proofRoots, root)
 }
 
+func (r *completeRunner) recordStructuralBytes(kind uint16, canonical []byte) error {
+	if actionrelationexp.ValidateObject(kind, canonical) != nil {
+		return fmt.Errorf("invalid structural object kind %d", kind)
+	}
+	hash := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(hash[:])
+	key := fmt.Sprintf("%d:%s", kind, digest)
+	if !r.structuralSeen[key] {
+		r.structuralSeen[key] = true
+		r.structural = append(r.structural, actionrelationexp.ObjectRecord{Kind: kind, Bytes: slices.Clone(canonical)})
+	}
+	return nil
+}
+
+func (r *completeRunner) recordStructuralUnit(kind uint16, value *unit.Unit) error {
+	if value == nil {
+		return fmt.Errorf("missing structural object kind %d", kind)
+	}
+	canonical := []byte(value.GetString("canonicalObject"))
+	hash := sha256.Sum256(canonical)
+	if value.GetString("objectDigest") != hex.EncodeToString(hash[:]) {
+		return fmt.Errorf("structural object kind %d changed digest", kind)
+	}
+	return r.recordStructuralBytes(kind, canonical)
+}
+
+func (r *completeRunner) recordMatchStructural(result actionrelationmatch.Result) error {
+	request := r.session.Store.Get(result.Request)
+	if request == nil {
+		return fmt.Errorf("learned match lacks request")
+	}
+	for _, name := range []string{request.GetString("aFacts"), request.GetString("bFacts")} {
+		if err := r.recordStructuralUnit(8, r.session.Store.Get(name)); err != nil {
+			return err
+		}
+	}
+	return r.recordStructuralUnit(43, r.session.Store.Get(result.Barrier))
+}
+
+func (r *completeRunner) unitByDigest(digest string) *unit.Unit {
+	for _, name := range r.session.Store.All() {
+		value := r.session.Store.Get(name)
+		if value != nil && value.GetString("objectDigest") == digest {
+			return value
+		}
+	}
+	return nil
+}
+
+func collectStructuralObjects(result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, runRoot actionrelationexp.OperationRoot, extra []actionrelationexp.ObjectRecord) ([]actionrelationexp.ObjectRecord, error) {
+	objects := slices.Clone(extra)
+	appendEvidence := func(kind uint16, values []actionrelationsearch.EvidenceObject) {
+		for _, value := range values {
+			objects = append(objects, actionrelationexp.ObjectRecord{Kind: kind, Bytes: slices.Clone(value.Canonical)})
+		}
+	}
+	appendEvidence(5, result.RemainingSets)
+	appendEvidence(19, result.ProofMaps)
+	appendEvidence(18, result.Propagations)
+	appendEvidence(21, result.SearchEdges)
+	appendEvidence(22, result.CompletedSubtrees)
+	appendEvidence(24, result.TerminalSets)
+	appendEvidence(25, result.SubtreeRoots)
+	for _, root := range append(slices.Clone(proofRoots), runRoot) {
+		objects = append(objects, actionrelationexp.ObjectRecord{Kind: 46, Bytes: slices.Clone(root.Canonical)})
+	}
+	type keyed struct {
+		record actionrelationexp.ObjectRecord
+		digest string
+	}
+	unique := map[string]keyed{}
+	for _, object := range objects {
+		if actionrelationexp.ValidateObject(object.Kind, object.Bytes) != nil {
+			return nil, fmt.Errorf("invalid structural output kind %d", object.Kind)
+		}
+		hash := sha256.Sum256(object.Bytes)
+		digest := hex.EncodeToString(hash[:])
+		key := fmt.Sprintf("%05d:%s", object.Kind, digest)
+		unique[key] = keyed{object, digest}
+	}
+	keys := make([]string, 0, len(unique))
+	for key := range unique {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	resultObjects := make([]actionrelationexp.ObjectRecord, len(keys))
+	for index, key := range keys {
+		resultObjects[index] = unique[key].record
+	}
+	return resultObjects, nil
+}
+
 func (r *completeRunner) eligibility(nodeName, nodeDigest string, state actionrelations.State, taken, candidate actionrelations.Occurrence, candidateApplicabilityRow string) (bool, []byte, int, error) {
 	switch r.searchPolicy {
 	case actionrelationsearch.DynamicSleep:
@@ -427,6 +548,9 @@ func (r *completeRunner) eligibility(nodeName, nodeDigest string, state actionre
 			return false, nil, -1, fmt.Errorf("missing dynamic candidate row")
 		}
 		witness, _ := json.Marshal([]any{"dynamic-witness/v1", "all-pairs", row.GetString("objectDigest")})
+		if err := r.recordStructuralBytes(16, witness); err != nil {
+			return false, nil, -1, err
+		}
 		return true, witness, -1, nil
 	case actionrelationsearch.StaticSleep:
 		r.result.EligibilityChecks++
@@ -437,11 +561,26 @@ func (r *completeRunner) eligibility(nodeName, nodeDigest string, state actionre
 			return false, nil, operationStart, err
 		}
 		result, err := StaticFootprint(r.session.Store, r.session.MeterToken, nodeName, r.worldDigest, state, taken, candidate, fmt.Sprintf("%s.%05d", r.token, r.session.Sequence))
-		if err != nil || !result.Result {
+		if err != nil {
 			return false, nil, operationStart, err
 		}
 		row := r.session.Store.Get(result.Row)
+		if row == nil {
+			return false, nil, operationStart, fmt.Errorf("static footprint lacks row")
+		}
+		if err := r.recordStructuralUnit(8, r.session.Store.Get(row.GetString("aFacts"))); err != nil {
+			return false, nil, operationStart, err
+		}
+		if err := r.recordStructuralUnit(8, r.session.Store.Get(row.GetString("bFacts"))); err != nil {
+			return false, nil, operationStart, err
+		}
+		if !result.Result {
+			return false, nil, operationStart, nil
+		}
 		witness, _ := json.Marshal([]any{"static-witness/v1", row.GetString("objectDigest")})
+		if err := r.recordStructuralBytes(15, witness); err != nil {
+			return false, nil, operationStart, err
+		}
 		return true, witness, operationStart, nil
 	case actionrelationsearch.NousSleep, actionrelationsearch.NoGuardSleep:
 		r.result.EligibilityChecks++
@@ -468,6 +607,14 @@ func (r *completeRunner) eligibility(nodeName, nodeDigest string, state actionre
 		}
 		result, err := actionrelationmatch.ExecuteMetered(r.session.Store, r.artifactName, state, taken, candidate, fmt.Sprintf("%s.%05d", r.token, r.session.Sequence), r.session.MeterToken)
 		if err != nil || result.Terminal != "completed" || !result.Matched {
+			if err == nil && result.Request != "" {
+				if structuralErr := r.recordMatchStructural(result); structuralErr != nil {
+					return false, nil, operationStart, structuralErr
+				}
+			}
+			return false, nil, operationStart, err
+		}
+		if err := r.recordMatchStructural(result); err != nil {
 			return false, nil, operationStart, err
 		}
 		barrier := r.session.Store.Get(result.Barrier)
@@ -475,6 +622,9 @@ func (r *completeRunner) eligibility(nodeName, nodeDigest string, state actionre
 			return false, nil, operationStart, fmt.Errorf("learned match lacks unanimous barrier")
 		}
 		witness, _ := json.Marshal([]any{"learned-witness/v1", barrier.GetString("objectDigest")})
+		if err := r.recordStructuralBytes(14, witness); err != nil {
+			return false, nil, operationStart, err
+		}
 		return true, witness, operationStart, nil
 	default:
 		return false, nil, -1, nil

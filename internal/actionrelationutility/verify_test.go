@@ -35,3 +35,20 @@ func TestSearchRunVerifierRejectsForgedOperationRange(t *testing.T) {
 		t.Fatal("accepted a forged certificate operation range")
 	}
 }
+
+func TestSearchRunVerifierRejectsMissingStructuralPreimage(t *testing.T) {
+	run, err := ExecutePolicy("../../domains", independentUtilityWorld(), actionrelationsearch.Complete, "development", "authority", 12, 0, 4096, "verify-structural")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, object := range run.StructuralObjects {
+		if object.Kind == 5 {
+			run.StructuralObjects = append(run.StructuralObjects[:index], run.StructuralObjects[index+1:]...)
+			if err := VerifySearchRun(run); err == nil {
+				t.Fatal("accepted a missing remaining-set structural preimage")
+			}
+			return
+		}
+	}
+	t.Fatal("run had no remaining-set structural object")
+}

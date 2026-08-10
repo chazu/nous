@@ -3,8 +3,10 @@
 package actionrelationcertify
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -63,11 +65,51 @@ func Begin(store *unit.Store, state actionrelations.State, a, b actionrelations.
 	request.Set("aOccurrence", string(aJSON))
 	request.Set("bOccurrence", string(bJSON))
 	request.Set("witness", string(witness))
+	witnessUnit, err := retainWitness(store, witness)
+	if err != nil {
+		return "", err
+	}
+	request.Set("witnessUnit", witnessUnit)
 	if meterToken != "" {
 		request.Set("meterToken", meterToken)
 	}
 	store.Put(request)
 	return request.Name, nil
+}
+
+func retainWitness(store *unit.Store, canonical []byte) (string, error) {
+	var row []json.RawMessage
+	if store == nil || json.Unmarshal(canonical, &row) != nil || len(row) < 2 {
+		return "", fmt.Errorf("invalid certificate witness")
+	}
+	reencoded, _ := json.Marshal(row)
+	var tag string
+	if !bytes.Equal(reencoded, canonical) || json.Unmarshal(row[0], &tag) != nil {
+		return "", fmt.Errorf("invalid certificate witness")
+	}
+	category := map[string]string{
+		"learned-witness/v1": "ActionLearnedWitness",
+		"static-witness/v1":  "ActionStaticWitness",
+		"dynamic-witness/v1": "ActionDynamicWitness",
+	}[tag]
+	if category == "" {
+		return "", fmt.Errorf("unknown certificate witness")
+	}
+	hash := sha256.Sum256(canonical)
+	digest := hex.EncodeToString(hash[:])
+	name := "AR.Witness." + digest
+	if existing := store.Get(name); existing != nil {
+		if existing.GetString("objectDigest") != digest || existing.GetString("canonicalObject") != string(canonical) || !store.IsA(name, category) {
+			return "", fmt.Errorf("occupied certificate witness name")
+		}
+		return name, nil
+	}
+	u := unit.New(name)
+	u.Set("isA", []string{category, "Anything"})
+	u.Set("canonicalObject", string(canonical))
+	u.Set("objectDigest", digest)
+	store.Put(u)
+	return name, nil
 }
 
 func RunInitial(store *unit.Store, request string) error {

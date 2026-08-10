@@ -30,6 +30,15 @@ func TestCompleteUtilityDFSUsesOnlyReservedCUESemantics(t *testing.T) {
 	if run.Terminal != "completed" || run.WorkTotal != len(run.Records) {
 		t.Fatalf("complete utility work total=%d records=%d terminal=%s", run.WorkTotal, len(run.Records), run.Terminal)
 	}
+	structuralKinds := map[uint16]bool{}
+	for _, object := range run.StructuralObjects {
+		structuralKinds[object.Kind] = true
+	}
+	for _, kind := range []uint16{5, 19, 21, 22, 24, 25, 46} {
+		if !structuralKinds[kind] {
+			t.Fatalf("complete utility omitted structural kind %d", kind)
+		}
+	}
 	seen := map[uint16]bool{}
 	hit := false
 	for _, record := range run.Records {
@@ -113,6 +122,15 @@ func TestLearnedNousUtilityLoadsFrozenArtifactAndUsesCUEBarrierBeforeSleep(t *te
 	for _, code := range []uint16{9, 10, 21, 18, 25} {
 		if !seen[code] {
 			t.Fatalf("learned utility omitted operation %d", code)
+		}
+	}
+	structuralKinds := map[uint16]bool{}
+	for _, object := range run.StructuralObjects {
+		structuralKinds[object.Kind] = true
+	}
+	for _, kind := range []uint16{8, 14, 17, 19, 43, 44, 46} {
+		if !structuralKinds[kind] {
+			t.Fatalf("learned utility omitted structural kind %d", kind)
 		}
 	}
 	if len(run.Records) == 0 || run.Records[0].Code != 10 || firstPairApplicable < 0 || firstCacheLookup <= firstPairApplicable {

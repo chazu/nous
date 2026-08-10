@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/chazu/nous/internal/actionrelationwire"
 )
 
 func fortyFourRunIDs(prefix string) []string {
@@ -90,5 +92,24 @@ func TestDevelopmentRunEvidencePackHasExact240ByteRows(t *testing.T) {
 func TestRunEvidenceAuthorityMatchesFrozenPanelClass(t *testing.T) {
 	if validPanelAuthority("development", testDigest("authority")) || validPanelAuthority("validation", "development-public-v1") || validPanelAuthority("locked", "development-public-v1") || !validPanelAuthority("locked", testDigest("locked-root")) {
 		t.Fatal("panel authority class changed")
+	}
+}
+
+func TestChargedOutputsRootRetainsSequenceAndEmptyOutputRows(t *testing.T) {
+	calls := []ChargedCall{
+		{Phase: 2, Operation: 18, Status: 1, SourceTaskDigest: testDigest("source-0"), Payload: []any{"certificate-cache-lookup", testDigest("world"), "dynamic-diamond-sleep", testDigest("state"), testDigest("a"), testDigest("b")}},
+		{Phase: 2, Operation: 19, Status: 1, SourceTaskDigest: testDigest("source-1"), Payload: []any{"terminal-construct", testDigest("state"), testDigest("remaining"), []string{}}, OutputDigests: []string{testDigest("terminal")}},
+	}
+	transcript, err := BuildTranscript(testDigest("run")[:32], calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := ChargedOutputsRoot(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := actionrelationwire.RootDigest("run-charged-outputs", []any{[]any{0, []string{}}, []any{1, []string{testDigest("terminal")}}})
+	if root != want {
+		t.Fatalf("charged root=%s want=%s", root, want)
 	}
 }

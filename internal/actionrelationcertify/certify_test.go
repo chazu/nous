@@ -33,6 +33,11 @@ func TestOrdinaryCUECertificateTaskAcceptsOnlyCommutingDiamond(t *testing.T) {
 	if err != nil || result.Terminal != "certified" || result.Certificate == "" || result.Attempt == "" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
+	request := store.Get(result.Request)
+	witnessUnit := store.Get(request.GetString("witnessUnit"))
+	if witnessUnit == nil || !store.IsA(witnessUnit.Name, "ActionDynamicWitness") || witnessUnit.GetString("canonicalObject") != string(witness) {
+		t.Fatal("certificate did not retain its witness preimage")
+	}
 	if err := actionrelationexp.ValidateObject(17, []byte(store.Get(result.Certificate).GetString("canonicalObject"))); err != nil {
 		t.Fatal(err)
 	}
