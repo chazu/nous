@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 10.
+Status: provisional Part 3 Vocabulary 3 plan, revision 11.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -75,6 +75,14 @@ Revision 9 was committed at
 fixed-width tables, cross-binds static facts to their exact search context,
 retains competence row packs and per-run structural attribution, freezes run
 ID derivation, and gives competence and panel authority explicit byte caps.
+
+Revision 10 was committed at
+`705e5db6ec2e5d7454e1b0043d96b8ab2be0a3c7`. Architecture and action-semantics
+accepted it; experimental-validity rejected it because the panel fixture root
+lacked a retained authority location and audit isolation did not exclude every
+primary output. Revision 11 makes the fixture root a capped top-level ref and
+requires a capability-isolated full temporary audit namespace before any
+comparison or deduplication.
 
 This plan narrows and, in revision 5, explicitly amends the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). The
@@ -1533,7 +1541,6 @@ Object-index kind is a separate closed decoder enum:
 | 27 | compound-work-reservation wire |
 | 28 | acquisition barrier wire |
 | 29 | scorer-truth-shard wire |
-| 30 | `actionrelation-fixture-root/v1` |
 | 32 | `actionrelation-world-policy-row/v2` |
 | 33 | `actionrelation-curriculum-policy-row/v2` |
 | 35 | `action-store-boundary/v3` |
@@ -1848,12 +1855,21 @@ characters. Policy uses the frozen seven-policy spelling, world ordinal is
 `0..5`, and a collision is mechanical invalidity. Raw-byte and lowercase-hex
 ordering are identical. Each curriculum has exactly 44 IDs, so development,
 validation, and locked have exactly 704, 1,056, and 1,408 rows. Content-addressed
-semantic packs are retained once. Audit runs start without access to the
-primary run-evidence or structural-map packs, produce temporary copies, exit,
-and only then may the supervisor byte-compare them to the retained primary
-packs and issue the
-aggregate attestation. Any divergence is mechanical invalidity; a distinct
-retained audit pack is forbidden rather than silently unbudgeted.
+semantic packs are retained once only after audit comparison. The audit is a
+fresh process given read-only fixture/build/competence inputs and a newly
+created empty temporary evidence namespace. It has no path, open descriptor,
+environment reference, inherited directory capability, symlink/hardlink,
+cache, IPC handle, or other capability for any primary journal, input, detail,
+object, index, ARTB, structural-map, run-evidence, root manifest, or execution
+output. It independently replays every policy and writes the complete temporary
+counterpart of all those classes. It exits before the supervisor receives both
+namespace paths, verifies both independently, and byte-compares every canonical
+pack, manifest, map, run record, and logical root. Only then may the supervisor
+deduplicate content, retain the primary bytes once, and issue the role manifests
+and aggregate attestation. Scratch preflight reserves one additional full panel
+evidence cap but scratch bytes are deleted after comparison and never enter
+published-byte accounting. Any divergence or pre-exit primary capability is
+mechanical invalidity.
 
 Before any panel attempt, algebraic preflight uses this exhaustive per-
 curriculum capacity table:
@@ -1914,8 +1930,9 @@ At the locked maximum the retained run-evidence pack is
 `[a-z0-9._/-]` and are at most 192 bytes. Exact remaining caps are 8,192 bytes
 for its manifest, 4,096 each for claim and running, 32,768 for each execution
 manifest, 8,192 each for the aggregate audit attestation, execution core,
-terminal receipt, and publication, and 2,097,152 for the evidence payload.
-Together these use at most 2,549,766 bytes, 595,962 below the reserved 3 MiB.
+terminal receipt, and publication, 4,096 for the fixture-root document, and
+2,097,152 for the evidence payload. Together these use at most 2,553,862
+bytes, 591,866 below the reserved 3 MiB.
 
 Plan acceptances are committed in `docs/actionrelations-plan-reviews.json` and
 implementation acceptances in
@@ -2016,7 +2033,7 @@ execution manifests. Its `binaryDigest` equals build `binarySHA256`, execution
 core, and both execution manifests. Its `buildAuthorityRef` equals every
 downstream build ref.
 Only literal `passed` authorizes a panel. Review, build, competence, claim, running,
-execution-manifest, aggregate audit-attestation, execution-core, evidence-payload,
+fixture-root, execution-manifest, aggregate audit-attestation, execution-core, evidence-payload,
 report, receipt, and publication
 documents use their strict top-level decoders and are not object-index leaves.
 
@@ -2059,6 +2076,7 @@ paths are exactly:
 <A>/execution-primary.json
 <A>/execution-audit.json
 <A>/audit-attestation.json
+<A>/fixture-root.json
 <A>/execution-core.json
 <A>/evidence-payload.json
 <A>/publication.json
@@ -2078,19 +2096,19 @@ Canonical top-level wires are closed arrays, not extensible objects:
 ["actionrelation-curriculum-fixture/v1",panel,curriculum,family,
  acceptedAttempt,trainingCoreDigests,viewEvidenceDigests,
  sixWorldDigests,attemptLedgerDigests]
-["actionrelation-fixture-root/v1",panel,authority,curriculumRoots,scorerRoot]
+["actionrelation-fixture-root/v2",panel,authority,curriculumRoots,scorerRoot]
 [
  "actionrelation-claim/v1",panel,"claimed",baseCommit,sourceRoot,authority
 ]
 ["actionrelation-running/v1",panel,"running",claimReceiptDigest,
  claimCommit,sourceRoot,attemptCommitment,secretLocationDigestOrNull]
 ["actionrelation-execution-manifest/v2",role,panel,authority,sourceRoot,
- binaryDigest,environmentRows,fixtureRoot,runEvidenceRef,structuralMapRefs,
+ binaryDigest,environmentRows,fixtureRootRef,runEvidenceRef,structuralMapRefs,
  runIDsRoot,transcriptRowsRoot,resultRowsRoot,totalRuns,
  priorExecutionRefOrZero,"completed"]
 ["actionrelation-execution-core/v3",panel,authority,sourceRoot,binaryDigest,
  planReviewRef,implementationReviewRef,buildAuthorityRef,competenceRef,
- environmentRows,fixtureRoot,primaryExecutionRef,auditExecutionRef,
+ environmentRows,fixtureRootRef,primaryExecutionRef,auditExecutionRef,
  auditAttestationRef,runEvidenceRef,structuralMapRefs,runningReceiptRefOrZero]
 ["actionrelation-audit-attestation/v3",panel,authority,
  primaryExecutionRef,auditExecutionRef,runEvidenceRef,structuralMapRefs,
@@ -2105,34 +2123,40 @@ Canonical top-level wires are closed arrays, not extensible objects:
  acquisitionWorkTerminalDigestOrZero,
  sixOrderedWorldRowDigests,aggregateTerminal,searchWorkVector,searchTotal,
  lifecycleWorkVector,lifecycleTotal,behaviorEqual,budgetRemaining,operationRoot]
-["actionrelation-evidence-payload/v3",fixtureRoot,executionCoreRef,
+["actionrelation-evidence-payload/v3",fixtureRootRef,executionCoreRef,
  planReviewRef,implementationReviewRef,buildAuthorityRef,competenceRef,
  auditAttestationRef,runEvidenceRef,structuralMapRefs,storeBoundaryRows,
  objectPackRoots,journalPackRoots,inputPackRoots,detailPackRoots,
  acquisitionTableRoots,indexRoots,worldPolicyRowsRoot,curriculumPolicyRowsRoot]
 ["actionrelation-report/v3",panel,authority,manifestDigest,planReviewRef,
  implementationReviewRef,buildAuthorityRef,competenceRef,
- fixtureRoot,runningReceiptRefOrZero,curriculumPolicyRowsRoot,
+ fixtureRootRef,runningReceiptRefOrZero,curriculumPolicyRowsRoot,
  mechanicalGates,
  primarySearchRatio,lifecycleRatio,amortizationRows,confidenceInterval,
  randomizationP,savingCoverage,power,
  classification,evidencePayloadRef]
 ["actionrelation-terminal-receipt/v2",panel,state,runningReceiptRefOrZero,
- sourceRoot,fixtureRoot,attemptCommitment,reportRef,evidencePayloadRef,
+ sourceRoot,fixtureRootRef,attemptCommitment,reportRef,evidencePayloadRef,
  reason]
 ["actionrelation-publication/v3",planReviewRef,implementationReviewRef,
  buildAuthorityRef,competenceRef,claimReceiptRefOrZero,runningReceiptRefOrZero,
  primaryExecutionRef,auditExecutionRef,auditAttestationRef,runEvidenceRef,
- structuralMapRefs,executionCoreRef,
+ structuralMapRefs,fixtureRootRef,executionCoreRef,
  evidencePayloadRef,reportRef,terminalReceiptRef]
 ```
 
-Curriculum roots are kind-47 object digests in curriculum-ordinal order.
+Curriculum roots are kind-47 object digests in curriculum-ordinal order, each
+stored in that curriculum's structured `authority` object/index scope. Scorer
+shards are kind 29 in the same curriculum authority scope and are absent from
+policy-readable capabilities until termination. The v2 fixture-root document
+is at most 4,096 bytes and is the only panel-level fixture root; every
+`fixtureRootRef` is byte-identical to its authority ref.
 Training cores are the 16 committed-order digests, views are observation order
 then bank, worlds are slot `0..5`, and attempt ledgers are attempt order through
 the accepted attempt. `scorerRoot` is
 `JRoot("scorer-shards",[[worldDigest,shardOrdinal,shardDigest]...])`, ordered by
-world digest then ordinal and complete for every fixture world. `manifestDigest`
+world digest then ordinal and complete for every fixture world; every named
+shard resolves through the matching curriculum authority index. `manifestDigest`
 is SHA-256 of the exact canonical compact JSON object displayed under Frozen
 manifest; no prose defaults or additional key participate.
 
@@ -2399,8 +2423,10 @@ Before implementation review:
   preflight, structural bitmaps/run roots, curriculum/index-boundary equality, authority-ref path/mode
   closure, and path traversal attacks fail;
 - all expected utility/acquisition run IDs, collisions, raw ordering, fixed
-  run-evidence records, isolated audit comparisons, and authority-size
-  boundaries are golden-tested;
+  run-evidence records, full-namespace capability-isolated audit comparisons,
+  pre-exit leakage, and authority-size boundaries are golden-tested;
+- the sole panel fixture-root ref closes every curriculum/scorer shard through
+  curriculum authority indexes and no panel-wide object scope is accepted;
 - competence case/result packs retain every root preimage, enforce build/
   execution source and binary equality, and reject missing or cross-key rows;
 - fixture/scorer access traces prove truth is committed before policy and
