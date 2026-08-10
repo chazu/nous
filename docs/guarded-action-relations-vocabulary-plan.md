@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 2.
+Status: provisional Part 3 Vocabulary 3 plan, revision 3.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -12,6 +12,14 @@ baseline-specific eligibility witnesses, total action/observation/guard
 semantics, ordinary-CUE utility tasks, policy-blind fixture attempts and
 strata, exact baseline/cache/statistical algorithms, bounded ordered evidence
 journals, canonical report wires, and committed review/build/attempt authority.
+
+Revision 2 was committed at
+`69d92effdeb9f975e591a1eaa4f084080ea04216` and unanimously rejected. Revision
+3 removes two impossible digest cycles, uses a presentation-independent whole-
+world canonical labeling, freezes every generator and statistical draw,
+separates world from curriculum accounting, derives evidence capacity by leaf
+class, and narrows protected-panel authority to precommitted attempt identity
+and cooperative replay detection.
 
 This plan narrows the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) without
@@ -126,9 +134,9 @@ panel constructor is callable:
   "maximum_pack_bytes": 16777216,
   "maximum_pack_index_rows": 4096,
   "maximum_pack_index_bytes": 1048576,
-  "maximum_development_evidence_bytes": 268435456,
-  "maximum_validation_evidence_bytes": 402653184,
-  "maximum_locked_evidence_bytes": 536870912,
+  "maximum_development_evidence_bytes": 587202560,
+  "maximum_validation_evidence_bytes": 872415232,
+  "maximum_locked_evidence_bytes": 1157627904,
   "maximum_report_bytes": 16777216,
   "tie_policy": "maximum-positive-coverage-then-minimum-literals-retain-all-ties-unanimous-use",
   "mutation_enabled": false
@@ -169,12 +177,26 @@ contains the sorted semantic identities of all unconsumed action occurrences:
 occurrences remain but none is applicable. A sleep-set-blocked node is not a
 terminal behavior and contributes no behavior row.
 
-Every world supplies a canonical alpha map by sorting its declared cell names
-and replacing them with roles `c0`, `c1`, and `c2`. Cell names are presentation
-only after parsing. Every referenced cell must occur in the supplied state;
-the generator rejects a world that violates this invariant. Applying a valid
-action to any separately supplied state that lacks one of its cells returns
-`inapplicable`, never a partial update or `invalid-input`.
+Every world obtains its alpha map by enumerating all `n!` bijections from its
+one to three declared cells to roles `c0..c(n-1)`. For each bijection it
+normalizes the initial state and complete semantic action multiset, sorts equal
+actions with multiplicity preserved, and serializes:
+
+```text
+["finite-action-world-core/v1",normalizedInitialState,
+ sortedSemanticActionMultiset]
+```
+
+The lexicographically least canonical bytes win. If symmetric bijections tie,
+their normalized world bytes are already identical, so no presentation map is
+retained as a tiebreaker. All execution, occurrence assignment, pattern
+orientation, DFS ordering, and terminal construction use only this normalized
+world. Cell names are presentation only after parsing; arbitrary bijective
+renaming therefore cannot change semantic bytes. Every referenced cell must
+occur in the supplied state; the generator rejects a world that violates this
+invariant. Applying a valid action to any separately supplied state that lacks
+one of its cells returns `inapplicable`, never a partial update or
+`invalid-input`.
 
 ### Actions
 
@@ -207,9 +229,9 @@ After applying the world's alpha map, the name-free semantic wire is:
 An occurrence is
 `["action-occurrence/v1",semanticAction,ordinal]`. Within each equal-semantic
 group, ordinals are the consecutive integers starting at zero; no two
-occurrences may share an ordinal. Groups are sorted by semantic bytes before
-ordinals are assigned. Presentation names and declaration order are never
-inputs. Consequently cell renaming, action renaming, and declaration
+occurrences in the same equal-semantic group may share an ordinal. Groups are
+sorted by semantic bytes before ordinals are assigned. Presentation names and
+declaration order are never inputs. Consequently cell renaming, action renaming, and declaration
 permutation preserve semantic occurrence bytes. Canonical pair order is by
 occurrence bytes. Relation artifacts contain neither presentation names nor
 occurrence ordinals.
@@ -260,14 +282,17 @@ directional labels are diagnostics rather than learned capabilities.
 The exact observation wire is:
 
 ```text
-["action-pair-observation/v1",stateDigest,aOccurrenceDigest,bOccurrenceDigest,
+["action-pair-observation/v1",presentationViewDigest,stateDigest,
+ aOccurrenceDigest,bOccurrenceDigest,
  aInitialRowDigest,bInitialRowDigest,bAfterARowDigestOrNull,
  aAfterBRowDigestOrNull,abStateDigestOrNull,baStateDigestOrNull,label]
 ```
 
 Null positions correspond exactly to `n/a` cells in the table. Assemblers
 reject omitted required rows, non-null forbidden rows, a noncanonical pair
-orientation, or a label that does not reconstruct.
+orientation, or a label that does not reconstruct. The presentation-view
+digest commits original cell/action names and declaration order for transfer
+testing but is excluded from every semantic match and truth predicate.
 
 ### Pattern
 
@@ -532,15 +557,27 @@ Every failed, absent, stale, or ineligible certificate drops `u`; there is no
 inherit-by-default rule. Each retained `u` gets this durable oriented wire:
 
 ```text
-["sleep-propagation/v1",parentNodeDigest,takenOccurrenceDigest,
+["sleep-propagation-core/v1",parentNodeDigest,takenOccurrenceDigest,
  sleepingOccurrenceDigest,source,sourceProofOrExploredBranchDigest,
- localCertificateDigest,childNodeDigest]
+ localCertificateDigest,successorStateDigest,childRemainingDigest]
 ```
 
 `source` is exactly `earlier-sibling` or `prior-sleep`. The former must name a
 completed earlier representative subtree at the same parent. The latter must
-name the valid parent proof for that exact sleeper. `childNodeDigest` commits
-the successor state, remaining occurrences, and entire child proof-map root.
+name the valid parent proof for that exact sleeper. After all propagation cores
+are complete, they are sorted by sleeper occurrence and hashed into the child
+proof-map root. Only then is the final child constructed:
+
+```text
+["sleep-search-node/v1",successorStateDigest,childRemainingDigest,
+ childProofMapRoot]
+["sleep-search-edge/v1",parentNodeDigest,takenOccurrenceDigest,
+ propagationCoreDigests,childNodeDigest]
+```
+
+No propagation core names the final child node, so the evidence is an acyclic
+DAG. The edge is the sole object that binds the completed propagation map to
+the final child.
 A sleep-blocked node is legal only when every enabled sleeper has a recursively
 valid chain, through fresh local diamonds, to a completed earlier subtree.
 The verifier replays that adjacent-swap chain; a certificate about a canonical
@@ -607,16 +644,19 @@ may waste work or cause no reduction but can never yield an accepted skip.
 
 ## Fixture families and information rights
 
-The generator draws balanced curricula from eight learnable families:
+The generator uses eight learnable families. `ci` denotes canonical role `ci`;
+these templates are instantiated before presentation renaming:
 
-1. disjoint-cell updates;
-2. bounded additions on one shared cell;
-3. equal assignments on one shared cell;
-4. disjoint transfers;
-5. disjoint swaps and transfers;
-6. read-only checks with independent updates;
-7. identical observable emissions; and
-8. mixed longer histories embedding one learned motif among dependencies.
+| Index/name | Ordered motif pair | Latent guard |
+| --- | --- | --- |
+| 0 `disjoint-adds` | `add c0 +1`; `add c1 +1` | `read-write-disjoint` |
+| 1 `bounded-shared-adds` | `add c0 +1`; `add c0 +1` | `primary-same` and `combined-adds-in-bounds` |
+| 2 `equal-sets` | `set c0 1`; `set c0 1` | `primary-same` and `argument-equal` |
+| 3 `emit-independent-add` | `emit e1`; `add c0 +1` | `read-write-disjoint` |
+| 4 `repeated-swap` | `swap c0 c1`; `swap c0 c1` | root |
+| 5 `emit-independent-transfer` | `emit e2`; `transfer c0 c1 1` | `read-write-disjoint` |
+| 6 `identical-emits` | `emit e0`; `emit e0` | `symbol-equal` |
+| 7 `embedded-bounded-adds` | family 1 motif at non-root history depth | family 1 guard |
 
 Every family includes negative observations from alias collisions, bound
 failures, different assignments, competing transfers, event-symbol order,
@@ -629,8 +669,8 @@ uses exactly six fresh worlds with six to eight occurrences. They comprise two
 worlds in each policy-blind semantic stratum:
 
 - `positive-effect`: at least four reachable, true local commutations have the
-  latent training pattern and guard while failing static read/write
-  independence;
+  latent training pattern and guard; for overlap families 1, 2, 4, 6, and 7,
+  at least four must also fail static read/write independence;
 - `neutral`: no reachable nonterminal state has more than one applicable
   occurrence, and no reachable pair has the latent training pattern; and
 - `adverse`: at least four reachable true commutations lie outside the latent
@@ -641,11 +681,12 @@ precommitted latent motif. They cannot execute a policy or inspect a learned
 artifact, work, search history, certificate count, reduction, or effect size.
 The strata deliberately test helpful transfer, no-op transfer, and filtering
 whose opportunity cost favors the all-pairs baseline.
+Every accepted utility world additionally requires that every reachable match
+of the latent pattern and guard is a true commutation; this is a fixture-oracle
+predicate and prevents knowingly planting a false transferable rule.
 
-Curriculum construction tries attempts `0..31` in order. Attempt bytes are
-`SHA-256(canonical-json([seedAuthority,panel,panelAuthority,
-curriculumOrdinal,attempt,purpose]))`; subsequent draws use the frozen counter
-mapping below. Each attempt may consume at most 1,000,000 independent-generator
+Curriculum construction tries attempts `0..31` in order. Each attempt may
+consume at most 1,000,000 independent-generator
 operations, and the curriculum at most 32,000,000. It is accepted only if all
 eight training positives/negatives, alpha-renaming, all six fixed strata slots,
 identifiability, state/history ceilings, and evidence preflight pass. The
@@ -653,9 +694,75 @@ attempt ledger commits every rejection predicate and work total. No replacement
 seed is drawn. Exhausting attempt 31, either work cap, or any stratum slot makes
 the panel mechanically invalid before a policy runs.
 
-Family counts are exact: two curricula per family in development, three in
-validation, and four in locked. A committed policy-blind permutation assigns
-family and within-family ordinal before attempt generation.
+`Identifiable` has one exact meaning. Over the complete finite training
+observation universe, acquisition has at least one winner and every tied winner
+is extensionally equal to the family's pattern-plus-latent-guard truth table.
+For the root family, root is the expected winner. The finite admissible-context
+universe contains all `0..3` assignments to the template's canonical cells,
+event traces of zero through six `e3` symbols, and every canonical pair from
+the action alphabet below. Every semantic observation is expanded through the
+two fixed presentation banks below and includes their distinct view digest.
+Six is the largest trace with two occurrences still remaining in an initially
+empty, at-most-eight-occurrence utility world. The expanded observations are
+sorted by canonical bytes. Depth-first selection visits indices in ascending
+order, explores include before exclude, and prunes only when a positive/negative
+count exceeds eight or remaining rows cannot fill it. The selected result is
+the first complete set with exactly eight positive and eight negative labels,
+both presentation banks, all attainable directional labels, both
+inapplicability and conflict, an event-order conflict, and the identifiability predicate. Each
+visited combination costs one generator operation; exhaustion rejects the
+attempt. The two banks are `[x0,x1,x2]/[a0..a7]` and
+`[red,green,blue]/[job0..job7]`.
+
+Family assignment is nonrandom and exact:
+`familyIndex = curriculumOrdinal mod 8` and
+`withinFamilyOrdinal = floor(curriculumOrdinal/8)`. It yields two curricula per
+family in development, three in validation, and four in locked.
+
+### Deterministic draw and decoding schedule
+
+All JSON below is canonical compact UTF-8, all ordinals are zero-based, and all
+SHA-256 words are read as unsigned big-endian. Fixture draw `i` is:
+
+```text
+F(panel,authority,curriculum,curriculumSeed,attempt,namespace,i) =
+ first8(SHA-256(canonical-json(["actionrelation-fixture-draw/v1",
+panel,authority,curriculum,curriculumSeed,attempt,namespace,i])))
+```
+
+`pick(u,n) = floor(u*n/2^64)`. The action alphabet is the canonical-byte-sorted
+list of every valid semantic action over `c0,c1,c2`, arguments in the action
+table, and emit symbols `e0..e3`. A utility slot has three canonical cells,
+event trace empty, occurrence count `6 + pick(F(...,"occurrence-count",slot),3)`,
+initial cell `r` value `pick(F(...,"initial-value",3*slot+r),4)`, the motif pair
+in positive slots only, and remaining occurrences selected with replacement
+from the alphabet by `pick(F(...,"decoy-action",8*slot+k),len(alphabet))`, for
+`k=0..occurrenceCount-requiredCount-1`.
+Occurrence assignment and whole-world canonicalization then run as specified.
+
+Slots 0 and 1 target `positive-effect`, 2 and 3 `neutral`, and 4 and 5
+`adverse`; acceptance uses only the frozen semantic stratum predicates. Cell
+presentation names come from `x0,x1,x2`, action names from `a0..a7`, and both
+declaration lists are permuted by descending Fisher-Yates. For list length `n`,
+step `k=n-1..1` swaps `k` with
+`pick(F(...,"cell-permutation" or "action-permutation",8*slot+k),k+1)`.
+The cell-name bank is selected by
+`pick(F(...,"cell-name-bank",slot),4)` from
+`[[x0,x1,x2],[p,q,r],[red,green,blue],[u,v,w]]`; the action-name bank is
+selected by `pick(F(...,"action-name-bank",slot),4)` from four fixed `a*`,
+`op*`, `step*`, and `job*` banks.
+Store preoccupations are the first
+`pick(F(...,"store-preoccupation-count",slot),5)` names from the fixed list
+`AR.Candidate`, `AR.Edge`, `AR.Observation`, `AR.Relation`. There are no other
+generator draws. The attempt ledger records every `F` preimage and result.
+
+Development authority is literal `development-public-v1` and seed is
+`851001+curriculum`; validation uses `validation-public-v1` and
+`852001+curriculum`. Locked authority is the lowercase hex attempt-root
+commitment, and its curriculum seed is lowercase hex
+`HMAC-SHA256(root, canonical-json(["actionrelation-locked-curriculum/v1",
+curriculum]))`. These are the only interpretations of `authority` and
+`curriculumSeed` in `F`.
 
 Before a policy starts it may see canonical training state/action pairs,
 utility initial states and action occurrences, the action semantics, budget,
@@ -678,9 +785,9 @@ building the sealed fixture and in competence tests, never as a post-policy
 utility audit or hidden reducer.
 
 Development and validation generators use public frozen seed ranges. Locked
-generation uses a receipt-committed random 32-byte root and domain-separated
-HMAC seeds, erases the root before any policy runs, and reveals only its
-commitment. Rejected attempts remain within one derived curriculum seed and do
+generation uses a receipt-committed `SHA-256(root)` of a random 32-byte root and
+domain-separated HMAC seeds, erases the root before any policy runs, and reveals
+only its commitment. Rejected attempts remain within one derived curriculum seed and do
 not draw replacement seeds.
 
 ## Lifecycle-work ledger and budgets
@@ -731,15 +838,18 @@ Validity parsing, evidence serialization, CUE scheduling, and task-token
 movement are uncharged infrastructure and separately counted; they may not
 perform any operation named in the table. Each listed invocation emits exactly
 one operation and increments exactly one counter before semantic execution.
-Failure and rejection cost the same as success. A cache hit costs counter 11
-and cannot erase construction cost. A compound task publishes its complete
-ordered primitive reservation first; if the reservation would cross a cap,
-none executes and the terminal is `budget-exhausted`. The verifier derives each
+An invoked primitive's semantic failure or row rejection costs the same as
+success. A cache hit costs counter 11 and cannot erase construction cost. The
+last lifecycle unit is permanently reserved for code 19. A compound task
+publishes its complete ordered primitive reservation first; if it would use
+that terminal unit or cross another cap, no primitive executes, an uncharged
+infrastructure reservation-rejection row is written, and code 19 consumes the
+reserved unit as `budget-exhausted`. The verifier derives each
 counter from operation codes, rejects caller-supplied deltas, and proves
 `total = sum(vector)`.
 
 Each policy/curriculum has a 2,000,000-unit lifecycle cap, 65,536 complete-
-history cap, 20,000 attributed-unit cap, and 10,000 engine-cycle cap. Physical
+history cap. Physical
 operation-event caps are separate and fixed per curriculum: shared Nous
 acquisition 24,000; no-guard acquisition 128; complete 4,096; lexical 4,096;
 static 4,096; dynamic 8,192; Nous 8,192; no-guard 4,096; learned-no-use 4,096.
@@ -785,7 +895,7 @@ The transformation lane demonstrated that one Git file per semantic object is
 operationally unacceptable. This lane instead commits bounded content-addressed
 packs without weakening leaf verification.
 
-There are two pack classes. Object packs start with `AROP1\n`, followed by
+There are three pack classes. Object packs start with `AROP1\n`, followed by
 `uint32-big-endian length || canonical-record-bytes`; records are unique and
 sorted by `SHA-256(recordBytes)`. Operation-journal packs start with `ARJR1\n`
 and contain contiguous sequence-order records. Every journal record is exactly
@@ -798,21 +908,29 @@ zero bytes (4). Its call ID is `SHA-256(record)`. Sequence starts at zero and
 Input and output vectors point to individually canonical object records.
 Version is 1; phases are acquisition 1 and utility 2; operation codes are the
 numeric codes frozen in the ledger table; statuses
-are success 1, semantic-failure 2, reservation-rejected 3, and cache-hit 4;
+are success 1, semantic-failure-or-row-rejection 2, and cache-hit 3;
 counter is 1 through 12. All integers are unsigned and big-endian where wider
 than one byte. Compound reservations are canonical input objects rather than
 mutable journal header fields.
 
-Each index row is `[digest,offset,length,kind,sequenceOrNull]`. Object indexes
-are digest ordered; journal indexes are sequence ordered. An index has at most
-4,096 rows and 1 MiB. A logical object is at most 65,536 bytes. Any pack is at
-most 16 MiB; index shards and deterministic split points are named in a root
+Call-detail packs start with `ARCD1\n` and have one exactly 256-byte record per
+journal sequence. A detail contains its call ID, semantic leaf kind, source
+task digest, and up to six ordered object/proof digests, with unused bytes zero.
+Search nodes, edges, eligibility rows, certificate attempts, propagation cores,
+proof-map entries, terminal behaviors, and reservations use separate kind codes
+and therefore remain distinct logical leaves. A shard manifest fixes its
+inclusive sequence range. Journal and detail offsets are derived from fixed
+record sizes and sequence ranges; neither has a per-record index.
+
+An object-index row is exactly 96 bytes: digest (32), offset `uint64` (8),
+length `uint32` (4), kind `uint16` (2), pack ordinal `uint16` (2), and 48 zero
+bytes. Rows are digest ordered. A shard has at most 4,096 rows and 1 MiB. A
+small object is at most 1,024 bytes; a large object is at most 65,536 bytes.
+Any pack is at most 16 MiB; deterministic split points are named in a root
 manifest. The verifier checks headers, lengths, digests, canonical decoders,
-complete index coverage, object uniqueness, journal sequence/chain continuity,
-absence of trailing bytes, and root closure. Terminal behaviors, search nodes,
-search edges, eligibility rows, certificate attempts, propagations, proof-map
-entries, and work reservations are distinct logical leaves, never one summary
-blob.
+complete index coverage, object uniqueness, journal and detail sequence
+alignment, journal hash-chain continuity, zero padding, absence of trailing
+bytes, and root closure.
 
 The evidence graph lists only regular committed pack and index files plus the
 fixture root, execution manifests, review authority, competence root, and
@@ -832,14 +950,30 @@ trusting policy summaries. Primary and audit executions independently reload
 the committed fixture bytes and must produce identical semantic rows,
 transcript roots, artifacts, behaviors, and work.
 
-Before any panel attempt, an algebraic preflight reserves the worst-case bytes:
-the fixed per-curriculum event caps total 56,992 records, or 7,294,976 journal
-bytes; object payload and indexes/roots are each capped at 4,000,000 bytes.
-Including up to 1,482,240 bytes of pack headers and root manifests, the
-curriculum reservation is 16 MiB. Therefore development
-(16), validation (24), and locked (32) fit their exact 256, 384, and 512 MiB
-ceilings. This is one quarter of revision 1's locked cap. The preflight runs
-before fixture construction or policy work; a
+Before any panel attempt, algebraic preflight uses this exhaustive per-
+curriculum capacity table:
+
+| Class | Maximum | Bytes each | Maximum bytes |
+| --- | ---: | ---: | ---: |
+| operation journal | 60,992 | 128 | 7,806,976 |
+| call detail | 60,992 | 256 | 15,613,952 |
+| fixture state/action small object | 512 | 1,024 | 524,288 |
+| acquisition small object | 1,024 | 1,024 | 1,048,576 |
+| search/cache/proof small object | 2,048 | 1,024 | 2,097,152 |
+| terminal/statistics small object | 512 | 1,024 | 524,288 |
+| large barrier/artifact object | 32 | 65,536 | 2,097,152 |
+| large scorer-truth object | 32 | 65,536 | 2,097,152 |
+| object index | 4,160 | 96 | 399,360 |
+| all pack headers and manifests | fixed aggregate cap | n/a | 1,048,576 |
+
+The event count is exactly
+`24,000 + 128 + 5*4,096 + 2*8,192 = 60,992`. The table totals 33,257,472
+bytes, below the frozen 34 MiB curriculum reservation. The panel additionally
+reserves 16 MiB for its report, receipts, and publication manifest; hence the
+exact development, validation, and locked caps are respectively 560, 832, and
+1,104 MiB as frozen in the manifest. The locked cap is approximately half of
+revision 1's bound. Preflight runs before fixture construction or policy work;
+a
 logical record, pack, index shard, curriculum, or panel that cannot fit is
 mechanically invalid rather than truncated.
 
@@ -863,8 +997,10 @@ tracked Go/CUE/C/compiler input, module/toolchain file, command, test, plan and
 Part 3 umbrella input, the source-tree hash, `go version`, `mise.toml`,
 GOOS/GOARCH/CGO, build flags, produced binary SHA-256, and `go version -m`
 digest. Only the allowlisted `.nous/bin/actionrelation-nous-v1` may execute a
-panel; `go run`, overlays, build tags, `GOFLAGS`, `GOWORK`, and compiler inputs
-outside the manifest are rejected. Runtime environment is reduced to an
+panel; `go run`, overlays, build tags, nonempty `GOFLAGS`, any `GOWORK` other
+than literal `off`, and compiler inputs outside the manifest are rejected.
+Ignored local `go.work` and `go.work.sum` may exist but are recorded as
+non-inputs and never read. Runtime environment is reduced to an
 allowlist recorded in the execution manifest. Git replacement, alternates,
 shallow authority, unsafe config, hooks, in-progress operations, symlinks,
 dirty protected files, and untracked or ignored compiler inputs are rejected.
@@ -874,10 +1010,14 @@ Canonical panel paths are:
 ```text
 .nous/actionrelations-v1-development-report.json
 .nous/actionrelations-v1-development-evidence/
-.nous/actionrelations-v1-validation-receipt.json
+.nous/actionrelations-v1-validation-claim.json
+.nous/actionrelations-v1-validation-running.json
+.nous/actionrelations-v1-validation-terminal-receipt.json
 .nous/actionrelations-v1-validation-report.json
 .nous/actionrelations-v1-validation-evidence/
-.nous/actionrelations-v1-locked-receipt.json
+.nous/actionrelations-v1-locked-claim.json
+.nous/actionrelations-v1-locked-running.json
+.nous/actionrelations-v1-locked-terminal-receipt.json
 .nous/actionrelations-v1-locked-report.json
 .nous/actionrelations-v1-locked-evidence/
 ```
@@ -886,49 +1026,91 @@ Canonical top-level wires are closed arrays, not extensible objects:
 
 ```text
 ["actionrelation-fixture-root/v1",panel,authority,curriculumRoots,scorerRoot]
-["actionrelation-execution/v1",panel,authority,sourceRoot,binaryDigest,
- environmentRows,fixtureRoot,runIDs,evidenceRoot]
-["actionrelation-policy-row/v1",panel,curriculum,family,stratum,policy,
- acquisitionTerminal,searchTerminal,artifactDigest,workVector,totalWork,
+[
+ "actionrelation-claim/v1",panel,"claimed",baseCommit,sourceRoot,authority
+]
+["actionrelation-running/v1",panel,"running",claimReceiptDigest,
+ claimCommit,sourceRoot,attemptCommitment,secretLocationDigestOrNull]
+["actionrelation-execution-core/v1",panel,authority,sourceRoot,binaryDigest,
+ environmentRows,fixtureRoot,runIDs,runningReceiptDigest]
+["actionrelation-world-policy-row/v1",panel,curriculum,family,worldOrdinal,
+ stratum,worldDigest,policy,searchTerminal,utilityWorkVector,utilityTotal,
  matchCounts,certificateCounts,sleepCount,historyCount,terminalSetDigest,
  behaviorEqual,budgetRemaining,operationRoot]
-["actionrelation-evidence-graph/v1",fixtureRoot,executionDigest,
- objectPackRoots,journalPackRoots,indexRoots,policyRowRoot,reportDigest]
-["actionrelation-receipt/v1",panel,state,claimCommit,sourceRoot,
- fixtureCommitment,attemptRoot,reportDigest,evidenceRoot,reason]
+["actionrelation-curriculum-policy-row/v1",panel,curriculum,family,policy,
+ acquisitionTerminal,artifactDigest,acquisitionWorkVector,
+ sixOrderedWorldRowDigests,aggregateTerminal,curriculumWorkVector,
+ curriculumTotal,behaviorEqual,budgetRemaining,operationRoot]
+["actionrelation-evidence-payload/v1",fixtureRoot,executionCoreDigest,
+ objectPackRoots,journalPackRoots,detailPackRoots,indexRoots,
+ worldPolicyRowsRoot,curriculumPolicyRowsRoot]
 ["actionrelation-report/v1",panel,authority,manifestDigest,reviewDigests,
- buildDigest,fixtureRoot,receiptDigest,policyRowsRoot,mechanicalGates,
+ buildDigest,fixtureRoot,runningReceiptDigest,curriculumPolicyRowsRoot,
+ mechanicalGates,
  primaryRatio,confidenceInterval,randomizationP,savingCoverage,power,
- classification,evidenceRoot]
+ classification,evidencePayloadDigest]
+["actionrelation-terminal-receipt/v1",panel,state,runningReceiptDigest,
+ sourceRoot,fixtureRoot,attemptCommitment,reportDigest,evidencePayloadDigest,
+ reason]
+["actionrelation-publication/v1",planReviewDigest,implementationReviewDigest,
+ buildDigest,claimReceiptDigest,runningReceiptDigest,executionCoreDigest,
+ evidencePayloadDigest,reportDigest,terminalReceiptDigest]
 ```
 
 Arrays have exactly the displayed arity and canonical nested row order.
-Unknown, missing, duplicated, or reordered fields are invalid. Policy rows are
-ordered by curriculum, world stratum/ordinal, then frozen policy order. The
-evidence graph closes over every logical object and journal call; no referenced
-or unreferenced leaf may be missing or extra.
+Unknown, missing, duplicated, or reordered fields are invalid. World rows are
+ordered by curriculum, world ordinal, then policy; curriculum rows by
+curriculum then policy. Authority is the acyclic DAG
+`fixture -> execution core -> evidence payload -> report -> terminal receipt ->
+publication`; claim/running receipts enter as earlier prerequisites. The payload
+contains neither report nor terminal-receipt digests, and the execution core
+contains no payload digest. No referenced or unreferenced leaf may be missing
+or extra.
 
-Validation and locked use a committed two-phase preclaim. `-stage claim`
-creates a `claimed` receipt without constructing a seed; it must be committed
-and pushed on append-only `main`. `-stage execute` requires clean HEAD equal to
-`origin/main`, the exact claimed receipt at HEAD, and no previous attempt root,
-then atomically persists `running` before the seed constructor is callable.
-Every exit finalizes and requires publication as `published` or `invalid`;
-neither state can run again. This is a repository-level one-shot claim under
-the stated append-only-history authority, not protection against a malicious
-history rewrite. Development is repeatable only in a new absent evidence
-namespace and never overwrites an existing report.
+For every curriculum-policy pair,
+`curriculumWorkVector = acquisitionWorkVector + sum(six utilityWorkVectors)`
+componentwise and `curriculumTotal = sum(curriculumWorkVector)`. Acquisition is
+charged exactly once. Static/dynamic/complete/lexical acquisition vectors are
+zero; Nous and learned-no-use each reference and charge the same shared
+acquisition; no-guard references and charges its root-only acquisition. The
+aggregate terminal is `completed` when acquisition reaches `not-applicable`,
+`completed`, or honest `no-discovery` and all six searches complete; otherwise
+it is the first `budget-exhausted` or invalid terminal in acquisition then world
+ordinal order. Only curriculum totals enter inference.
+
+Validation and locked use three committed stages. `-stage claim` creates a
+`claimed` receipt without seed material and must be committed/pushed on `main`.
+`-stage prepare` requires that claim at clean `origin/main`, selects the one
+attempt root, writes its immutable commitment in `running`, and must itself be
+committed/pushed before any fixture constructor can derive or receive a seed.
+For locked, the 32-byte preimage is stored mode `0600` under the resolved Git
+common directory and its location string is committed only as a digest.
+`-stage execute` requires clean HEAD equal to `origin/main`, the exact running
+receipt, a matching preimage where applicable, no terminal receipt, and no
+local append-only start marker; it writes that marker before construction.
+Every exit produces `published` or `invalid` terminal evidence and never
+overwrites it.
+
+This is deliberately a cooperative, root-precommitted, replay-detecting
+protocol. It prevents result/seed shopping and ordinary overwrite under
+append-only operation, but does not claim repository-enforced one-shot behavior
+against deletion of local Git-common state or history rewriting. Development
+is repeatable only in a new absent evidence namespace and never overwrites an
+existing report.
 
 ## Reports, inference, and progression
 
-The policy-row wire above is authoritative; every aggregate in the report is
-recomputed from those leaves. Training precision/recall and per-stratum
-matched pairs are contained in `matchCounts`; attempted/successful/cached-
-success/cached-failure counts are in `certificateCounts`.
+The world- and curriculum-policy wires above are authoritative; every aggregate
+in the report is recomputed from those leaves. Training precision/recall and
+per-stratum matched pairs are contained in `matchCounts`; attempted/successful/
+cached-success/cached-failure counts are in `certificateCounts`. Bootstrap and
+randomization consume exactly the 16, 24, or 32 curriculum-policy totals, never
+world rows.
 
 Mechanical validity precedes empirical classification and requires:
 
-- exact manifest, review, fixture, source, pack, and evidence-graph authority;
+- exact manifest, review, fixture, source, pack, acyclic payload, receipt, and
+  publication authority;
 - primary/audit equality and independent replay;
 - production/oracle semantic and guard agreement;
 - exact work conservation and budget reservations;
@@ -958,14 +1140,25 @@ smaller denominator. A zero dynamic denominator is mechanical invalidity.
 Ratios and threshold comparisons use nonnegative arbitrary-precision integer
 cross-products; decimal renderings are diagnostics.
 
-All pseudo-random draws use
-`u = bigEndian(first8(SHA-256(canonical-json([seedAuthority,panel,
-authority,replicate,purpose,draw]))))`. An index into `n` rows is
-`floor(u*n/2^64)` (multiply-high); a randomization sign is `u & 1`. Bootstrap
-resamples within each family with the panel's exact count: 2 development, 3
-validation, or 4 locked rows per family. Its statistic is the ratio of summed
-work. The 10,000 sorted ratios use zero-based indices 249 and 9,749, breaking
-equal rational values by replicate index.
+Statistical draw is
+`S(namespace,fields...) = bigEndian(first8(SHA-256(canonical-json([
+"actionrelation-stat-draw/v1",panel,authority,namespace,[fields...]]))))`.
+The only legal namespaces and zero-based field tuples are:
+
+| Namespace | Fields | Range and use |
+| --- | --- | --- |
+| `bootstrap-family-row` | replicate, family, slot | replicate `0..9999`, family `0..7`, slot `0..m-1`; select one of that family's `m` panel rows |
+| `randomization-swap` | replicate, curriculum | replicate `0..9999`, curriculum in report order; low bit chooses swap |
+| `power-outer-family-row` | outer, family, slot | outer `0..1999`, family `0..7`, slot `0..3`; select one of two development rows |
+| `power-inner-bootstrap-row` | outer, inner, family, slot | inner `0..1999`; select one of four synthetic family rows |
+| `power-inner-randomization-swap` | outer, inner, syntheticCurriculum | inner `0..1999`; low bit chooses swap |
+
+Selection uses `pick(S(...),n) = floor(S(...)*n/2^64)`. No stream state,
+implicit increment, discarded draw, or other namespace exists. Bootstrap
+resamples within each family with the panel's exact `m`: 2 development, 3
+validation, or 4 locked curriculum rows. Its statistic is the ratio of summed
+curriculum totals. The 10,000 sorted ratios use zero-based indices 249 and
+9,749, breaking equal rational values by replicate index.
 
 The paired randomization statistic is
 `abs(sum_i(nousWork_i - dynamicWork_i))`. Each replicate independently swaps
@@ -973,11 +1166,12 @@ the two work values within every curriculum. A replicate is extreme when its
 statistic is greater than or equal to the observed statistic, including ties;
 `p = (1 + extremeCount) / 10001`.
 
-Development power draws 2,000 synthetic locked panels, each with four
-development curricula sampled with replacement from each of the eight family
-strata. Every synthetic panel recomputes all locked predicates using 2,000
-inner bootstrap and randomization replicates, whose interval indices are 49
-and 1,949 and whose p-value denominator is 2,001. Inherited mechanical
+Development power draws 2,000 synthetic locked panels using exactly the
+`power-outer-family-row` table, four development curricula with replacement per
+family. Every synthetic panel recomputes all locked predicates using the two
+`power-inner-*` namespaces and exactly 2,000 inner bootstrap and randomization
+replicates, whose interval indices are 49 and 1,949 and whose p-value
+denominator is 2,001. Inherited mechanical
 completion, behavior equality, and false-match status are required. Power is
 the fraction satisfying every locked positive predicate; progression needs at
 least 1,600 successes.
@@ -1004,7 +1198,7 @@ validation bundles plus an exact `actionrelations/v1:<clean-HEAD>` token.
 | action application | `applied`, `inapplicable`, `invalid-input` |
 | observation | `commutes`, `a-enables-b`, `b-enables-a`, `a-disables-b`, `b-disables-a`, `mutual-disables`, `inapplicable`, `conflicts`, `invalid` |
 | certificate | `certified`, `not-certified`, `invalid` |
-| acquisition | `completed`, `no-discovery`, `budget-exhausted` |
+| acquisition | `not-applicable`, `completed`, `no-discovery`, `budget-exhausted` |
 | utility search | `completed`, `budget-exhausted` |
 | execution | `mechanically-valid`, `invalid` |
 | development | `interim-power-authorized`, `interim-power-unauthorized`, `invalid` |
@@ -1037,7 +1231,8 @@ Before implementation review:
 - complete and certified sleep search agree on exhaustive tiny universes;
 - prior-sleep and earlier-sibling ownership chains, the exact child equation,
   cache success/failure reuse, dropped failed sleepers, and proof-map node
-  identities survive adversarial replay;
+  identities survive adversarial replay; propagation, node, and edge digests
+  form the frozen acyclic construction order;
 - local, propagated, stale-state, wrong-occurrence, wrong-artifact, and
   event-hidden certificate forgeries are rejected;
 - learned relation deletion removes its causal use; corruption cannot authorize
@@ -1051,13 +1246,17 @@ Before implementation review:
   family counts, exhaustion ledgers, and scorer mapping restrictions are
   mutation-tested;
 - exact SHA-256 draws, multiply-high indices, rational bootstrap bounds,
-  randomization ties, zero denominators, and nested power are golden-tested;
+  every namespace/index schedule, family/attempt decoding, randomization ties,
+  zero denominators, and nested power are golden-tested;
 - pack split, index, digest, truncation, duplicate, reordering, oversized-file,
   journal-chain, sequence, call-range, capacity-preflight, and path traversal
   attacks fail;
 - fixture/scorer access traces prove truth is committed before policy and
   unavailable until termination; utility validation cannot invoke the complete
   enumerator;
+- six world rows plus acquisition reconstruct each curriculum row exactly once;
+  evidence payload, report, terminal receipt, and publication hashes form an
+  acyclic construction order;
 - plan/implementation review rows, build binary and environment, claimed/running
   receipt transitions, dirty Git, and replayed protected attempts fail closed;
 - dependency and source-surface scans enforce every package boundary; and
