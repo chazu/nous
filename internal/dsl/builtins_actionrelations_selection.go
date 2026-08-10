@@ -75,6 +75,9 @@ func bARCandidateResult(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	if err := recordActionRelation(vm, 20, 5, "candidate-result", [][]byte{[]byte(candidate.GetString("canonicalObject"))}, [][]byte{wire}); err != nil {
+		return err
+	}
 	vm.push(StringVal(name))
 	return nil
 }
@@ -185,6 +188,9 @@ func bARFreezeRelation(vm *VM) error {
 	if err != nil {
 		vm.push(Nil())
 		return nil
+	}
+	if err := recordActionRelation(vm, 8, 6, "artifact-freeze", [][]byte{[]byte(barrier.GetString("canonicalObject"))}, [][]byte{canonical}); err != nil {
+		return err
 	}
 	vm.push(StringVal(name))
 	return nil

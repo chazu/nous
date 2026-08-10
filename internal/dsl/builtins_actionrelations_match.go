@@ -69,6 +69,9 @@ func bARPatternMatch(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	if err := recordActionRelation(vm, 9, 7, "relation-match", [][]byte{[]byte(relationUnit.GetString("canonicalObject")), []byte(stateValue.AsString())}, [][]byte{wire}); err != nil {
+		return err
+	}
 	vm.push(StringVal(name))
 	return nil
 }

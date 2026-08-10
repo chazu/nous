@@ -12,6 +12,7 @@ import (
 
 	"github.com/chazu/nous/internal/actionrelationfixturecore"
 	"github.com/chazu/nous/internal/agenda"
+	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/engine"
 	"github.com/chazu/nous/internal/seed"
 	"github.com/chazu/nous/internal/unit"
@@ -29,6 +30,7 @@ type Run struct {
 	CandidateResults int
 	Winners          int
 	Artifact         string
+	MeterRecords     []dsl.ActionRelationMeterRecord
 }
 
 func Execute(domainsDir, token string) (Run, error) {
@@ -47,6 +49,12 @@ func Execute(domainsDir, token string) (Run, error) {
 	experiment := unit.New("AR.Experiment." + token)
 	experiment.Set("isA", []string{"ActionRelationExperiment", "Anything"})
 	experiment.Set("expectedObservationCount", len(training))
+	meterToken := "arm:" + token
+	if err := dsl.RegisterActionRelationMeter(meterToken); err != nil {
+		return Run{}, err
+	}
+	defer dsl.UnregisterActionRelationMeter(meterToken)
+	experiment.Set("meterToken", meterToken)
 	pattern := actionrelations.Pattern{Kinds: []string{"add", "add"}, Roles: []int{0, -1, 1, -1}}
 	patternJSON, _ := pattern.CanonicalJSON()
 	experiment.Set("pattern", string(patternJSON))
@@ -81,11 +89,16 @@ func Execute(domainsDir, token string) (Run, error) {
 			return Run{}, fmt.Errorf("%s: %w", slot, eng.LastError)
 		}
 	}
+	meterRecords, err := dsl.ActionRelationMeterSnapshot(meterToken)
+	if err != nil {
+		return Run{}, err
+	}
 	run := Run{
 		Store: store, Experiment: experiment.Name,
 		Observations: len(experiment.GetStrings("observationUnits")), Candidates: len(experiment.GetStrings("candidateUnits")),
 		Edges: len(experiment.GetStrings("edgeUnits")), LiteralRows: len(experiment.GetStrings("literalRowUnits")), GuardResults: len(experiment.GetStrings("guardResultUnits")),
 		CandidateResults: len(experiment.GetStrings("candidateResultUnits")), Winners: len(experiment.GetStrings("winnerResultUnits")), Artifact: experiment.GetString("artifactUnit"),
+		MeterRecords: meterRecords,
 	}
 	if run.Observations != 16 || run.Candidates != 451 || run.Edges != 450 || run.LiteralRows != 13920 || run.GuardResults != 7216 || run.CandidateResults != 451 || run.Winners < 1 || run.Artifact == "" || experiment.GetString("terminal") != "completed" {
 		return run, fmt.Errorf("acquisition cardinality mismatch: %+v", run)

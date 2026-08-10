@@ -14,6 +14,13 @@ func TestCUEAcquisitionEvidenceCardinalities(t *testing.T) {
 	if run.Observations != 16 || run.Candidates != 451 || run.Edges != 450 || run.LiteralRows != 13920 || run.GuardResults != 7216 || run.CandidateResults != 451 || run.Winners < 1 || run.Artifact == "" {
 		t.Fatalf("run=%+v", run)
 	}
+	codes := map[uint16]int{}
+	for _, record := range run.MeterRecords {
+		codes[record.Code]++
+	}
+	if codes[1] != 1 || codes[2] != 450 || codes[3] != 450 || codes[7] != 13920 || codes[8] != 1 || codes[20] != 451 || codes[22] != 7216 {
+		t.Fatalf("meter code counts=%v", codes)
+	}
 	experiment := run.Store.Get(run.Experiment)
 	winner := run.Store.Get(experiment.GetStrings("winnerResultUnits")[0])
 	candidate := run.Store.Get(winner.GetString("candidate"))

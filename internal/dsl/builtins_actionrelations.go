@@ -34,6 +34,7 @@ func init() {
 		"ar-certificate-assemble": bARCertificateAssemble,
 		"ar-pattern-match":        bARPatternMatch,
 		"ar-close-relation-use":   bARCloseRelationUse,
+		"ar-meter":                bARMeter,
 	})
 }
 
@@ -113,6 +114,14 @@ func bARApplicable(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	code := actionRelationPhaseCode(vm, 5, 13, 21, 5)
+	counter := uint8(4)
+	if code != 5 {
+		counter = 10
+	}
+	if err := recordActionRelation(vm, code, counter, "applicable", [][]byte{[]byte(stateValue.AsString()), []byte(occurrenceValue.AsString())}, [][]byte{wire}); err != nil {
+		return err
+	}
 	vm.push(StringVal(name))
 	return nil
 }
@@ -156,6 +165,20 @@ func bARApply(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	code := actionRelationPhaseCode(vm, 4, 12, 11, 4)
+	outputs := [][]byte{wire}
+	if outputName != "" {
+		outputs = append(outputs, []byte(vm.Store.Get(outputName).GetString("canonicalObject")))
+	}
+	counter := uint8(3)
+	if code == 11 {
+		counter = 8
+	} else if code == 12 {
+		counter = 9
+	}
+	if err := recordActionRelation(vm, code, counter, "apply", [][]byte{[]byte(stateValue.AsString()), []byte(occurrenceValue.AsString())}, outputs); err != nil {
+		return err
+	}
 	vm.push(ListVal([]Value{StringVal(transitionName), StringVal(outputName)}))
 	return nil
 }
@@ -185,6 +208,14 @@ func bARStateEqual(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	code := actionRelationPhaseCode(vm, 6, 14, 14, 6)
+	counter := uint8(4)
+	if code != 6 {
+		counter = 10
+	}
+	if err := recordActionRelation(vm, code, counter, "state-equality", [][]byte{[]byte(leftValue.AsString()), []byte(rightValue.AsString())}, [][]byte{wire}); err != nil {
+		return err
+	}
 	vm.push(StringVal(name))
 	return nil
 }
@@ -206,6 +237,10 @@ func bARGuardRoot(vm *VM) error {
 	if err != nil {
 		vm.push(Nil())
 		return nil
+	}
+	candidate := vm.Store.Get(name)
+	if err := recordActionRelation(vm, 1, 1, "guard-root", [][]byte{[]byte(patternValue.AsString())}, [][]byte{data, []byte(candidate.GetString("canonicalObject"))}); err != nil {
+		return err
 	}
 	vm.push(ListVal([]Value{StringVal(string(data)), StringVal(name)}))
 	return nil
@@ -238,6 +273,9 @@ func bARGuardExtend(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	if err := recordActionRelation(vm, 3, 2, "guard-extend", [][]byte{mustCanonicalGuard(guard)}, [][]byte{data, edgeWire}); err != nil {
+		return err
+	}
 	vm.push(ListVal([]Value{StringVal(string(data)), StringVal(name)}))
 	return nil
 }
@@ -264,6 +302,9 @@ func bARCandidateAllocate(vm *VM) error {
 	if err != nil {
 		vm.push(Nil())
 		return nil
+	}
+	if err := recordActionRelation(vm, 2, 1, "candidate-allocate", [][]byte{[]byte(patternValue.AsString()), []byte(guardValue.AsString())}, [][]byte{[]byte(vm.Store.Get(name).GetString("canonicalObject"))}); err != nil {
+		return err
 	}
 	vm.push(StringVal(name))
 	return nil
@@ -366,6 +407,14 @@ func bARGuardMatch(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
+	code := actionRelationPhaseCode(vm, 7, 15, 15, 7)
+	counter := uint8(5)
+	if code == 15 {
+		counter = 10
+	}
+	if err := recordActionRelation(vm, code, counter, "guard-literal", [][]byte{[]byte(guardValue.AsString()), []byte(leftUnit.GetString("facts")), []byte(rightUnit.GetString("facts"))}, [][]byte{wire}); err != nil {
+		return err
+	}
 	vm.push(StringVal(name))
 	return nil
 }
@@ -407,6 +456,9 @@ func bARGuardResult(vm *VM) error {
 	if storeErr != nil {
 		vm.push(Nil())
 		return nil
+	}
+	if err := recordActionRelation(vm, 22, 5, "guard-result", [][]byte{[]byte(guardValue.AsString())}, [][]byte{wire}); err != nil {
+		return err
 	}
 	vm.push(StringVal(name))
 	return nil
