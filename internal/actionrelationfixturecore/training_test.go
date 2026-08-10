@@ -43,3 +43,20 @@ func TestTrainingHasFrozenBalanceAndDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryFamilyTrainingHasExactPositiveNegativeCardinality(t *testing.T) {
+	for family := range FamilyNames {
+		cases, err := TrainingFamily(family)
+		if err != nil {
+			t.Fatalf("family %d: %v", family, err)
+		}
+		if len(cases) != 16 {
+			t.Fatalf("family %d count=%d", family, len(cases))
+		}
+		for index, testCase := range cases {
+			if testCase.Ordinal != index || (index < 8) != (testCase.Label == "commutes") {
+				t.Fatalf("family %d case %d label=%s ordinal=%d", family, index, testCase.Label, testCase.Ordinal)
+			}
+		}
+	}
+}

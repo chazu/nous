@@ -1,8 +1,10 @@
 package actionrelationacquire
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/chazu/nous/internal/actionrelationfixturecore"
 	"github.com/chazu/nous/internal/actionrelationwire"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
@@ -67,5 +69,33 @@ func TestCUEAcquisitionEvidenceCardinalities(t *testing.T) {
 	}
 	if err := artifact.ValidateResolved(resolved); err != nil {
 		t.Fatalf("resolved artifact: %v", err)
+	}
+}
+
+func TestCUEAcquisitionLearnsEveryFrozenFamilyGuard(t *testing.T) {
+	wants := []string{"", "combined-adds-in-bounds", "argument-equal", "", "", "", "symbol-equal", "combined-adds-in-bounds"}
+	for family, wantAtom := range wants {
+		run, err := ExecuteFamily("../../domains", fmt.Sprintf("family-%d", family), family)
+		if err != nil {
+			t.Fatalf("family %d: %v", family, err)
+		}
+		experiment := run.Store.Get(run.Experiment)
+		winners := experiment.GetStrings("winnerResultUnits")
+		if len(winners) != 1 {
+			var guards []string
+			for _, winner := range winners {
+				candidate := run.Store.Get(run.Store.Get(winner).GetString("candidate"))
+				guards = append(guards, candidate.GetString("guard"))
+			}
+			t.Fatalf("family %d winners=%d guards=%v", family, len(winners), guards)
+		}
+		candidate := run.Store.Get(run.Store.Get(winners[0]).GetString("candidate"))
+		guard, err := actionrelations.ParseGuard([]byte(candidate.GetString("guard")))
+		if err != nil || wantAtom == "" && len(guard.Literals) != 0 || wantAtom != "" && (len(guard.Literals) != 1 || guard.Literals[0].Atom != wantAtom || !guard.Literals[0].Polarity) {
+			t.Fatalf("family %d guard=%+v want atom %q err=%v", family, guard, wantAtom, err)
+		}
+		if err := actionrelationfixturecore.VerifyFamilyGuard(family, guard); err != nil {
+			t.Fatalf("family %d extensional guard: %v", family, err)
+		}
 	}
 }

@@ -50,7 +50,11 @@ type Session struct {
 }
 
 func Begin(domainsDir, token string) (*Session, error) {
-	training, err := actionrelationfixturecore.Training()
+	return BeginFamily(domainsDir, token, 0)
+}
+
+func BeginFamily(domainsDir, token string, family int) (*Session, error) {
+	training, err := actionrelationfixturecore.TrainingFamily(family)
 	if err != nil {
 		return nil, err
 	}
@@ -77,10 +81,23 @@ func Begin(domainsDir, token string) (*Session, error) {
 		return nil, err
 	}
 	experiment.Set("meterToken", meterToken)
-	pattern := actionrelations.Pattern{Kinds: []string{"add", "add"}, Roles: []int{0, -1, 1, -1}}
+	firstA, err := actionrelations.ParseOccurrence(training[0].AOccurrence)
+	if err != nil {
+		return fail(err)
+	}
+	firstB, err := actionrelations.ParseOccurrence(training[0].BOccurrence)
+	if err != nil {
+		return fail(err)
+	}
+	pattern, err := actionrelations.PatternFor(firstA, firstB)
+	if err != nil {
+		return fail(err)
+	}
 	patternJSON, _ := pattern.CanonicalJSON()
 	experiment.Set("pattern", string(patternJSON))
 	experiment.Set("patternUnit", putCanonical(store, "ActionRelationPattern", patternJSON))
+	experiment.Set("family", family)
+	experiment.Set("familyName", actionrelationfixturecore.FamilyNames[family])
 	store.Put(experiment)
 	for _, testCase := range training {
 		name := fmt.Sprintf("AR.Training.%s.%02d", token, testCase.Ordinal)
@@ -194,7 +211,11 @@ func (s *Session) Abort() {
 // experiment execution uses Begin, builds the physical ARTB manifests, and
 // supplies their exact roots through BindEvidence.
 func Execute(domainsDir, token string) (Run, error) {
-	session, err := Begin(domainsDir, token)
+	return ExecuteFamily(domainsDir, token, 0)
+}
+
+func ExecuteFamily(domainsDir, token string, family int) (Run, error) {
+	session, err := BeginFamily(domainsDir, token, family)
 	if err != nil {
 		return Run{}, err
 	}
