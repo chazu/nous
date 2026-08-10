@@ -123,24 +123,19 @@ func VerifyExecutionManifest(value ExecutionManifest) error {
 func executionManifestCanonical(value ExecutionManifest) ([]byte, error) {
 	wantRuns := panelRunCounts[value.Panel]
 	wantMaps := wantRuns / 44
-	if !validPanelAuthority(value.Panel, value.Authority) || wantRuns == 0 || value.TotalRuns != wantRuns || len(value.StructuralMaps) != wantMaps || !digestText(value.SourceRoot) || !digestText(value.BinaryDigest) || !digestText(value.RunIDsRoot) || !digestText(value.TranscriptRowsRoot) || !digestText(value.ResultRowsRoot) || value.FixtureRoot.Verify() != nil || value.RunEvidence.Verify() != nil {
+	if !validPanelAuthority(value.Panel, value.Authority) || wantRuns == 0 || value.TotalRuns != wantRuns || len(value.StructuralMaps) != wantMaps || !digestText(value.SourceRoot) || !digestText(value.BinaryDigest) || !digestText(value.RunIDsRoot) || !digestText(value.TranscriptRowsRoot) || !digestText(value.ResultRowsRoot) || !referenceAt(value.FixtureRoot, ExpectedAuthorityPath(value.Panel, "fixture-root")) || !referenceAt(value.RunEvidence, ExpectedAuthorityPath(value.Panel, "run-evidence")) {
 		return nil, fmt.Errorf("invalid execution manifest authority")
 	}
 	if value.Role == "primary" {
 		if value.PriorExecution != nil {
 			return nil, fmt.Errorf("primary execution has prior authority")
 		}
-	} else if value.Role != "audit" || value.PriorExecution == nil || value.PriorExecution.Verify() != nil {
+	} else if value.Role != "audit" || value.PriorExecution == nil || !referenceAt(*value.PriorExecution, ExpectedAuthorityPath(value.Panel, "execution-primary")) {
 		return nil, fmt.Errorf("invalid execution role")
 	}
-	mapWires := make([]any, len(value.StructuralMaps))
-	previous := ""
-	for index, reference := range value.StructuralMaps {
-		if reference.Verify() != nil || index > 0 && reference.Path <= previous {
-			return nil, fmt.Errorf("invalid structural-map references")
-		}
-		mapWires[index] = reference.Wire()
-		previous = reference.Path
+	mapWires, err := structuralMapWires(value.Panel, value.StructuralMaps)
+	if err != nil {
+		return nil, err
 	}
 	environment, err := environmentWires(value.Environment)
 	if err != nil {
@@ -192,17 +187,12 @@ func VerifyAuditAttestation(value AuditAttestation) error {
 
 func auditAttestationCanonical(value AuditAttestation) ([]byte, error) {
 	wantRuns := panelRunCounts[value.Panel]
-	if !validPanelAuthority(value.Panel, value.Authority) || wantRuns == 0 || value.TotalRuns != wantRuns || len(value.StructuralMaps) != wantRuns/44 || value.PrimaryExecution.Verify() != nil || value.AuditExecution.Verify() != nil || value.RunEvidence.Verify() != nil || !digestText(value.RunIDsRoot) || !digestText(value.TranscriptRowsRoot) || !digestText(value.ResultRowsRoot) || value.PrimaryExecution.Path == value.AuditExecution.Path {
+	if !validPanelAuthority(value.Panel, value.Authority) || wantRuns == 0 || value.TotalRuns != wantRuns || len(value.StructuralMaps) != wantRuns/44 || !referenceAt(value.PrimaryExecution, ExpectedAuthorityPath(value.Panel, "execution-primary")) || !referenceAt(value.AuditExecution, ExpectedAuthorityPath(value.Panel, "execution-audit")) || !referenceAt(value.RunEvidence, ExpectedAuthorityPath(value.Panel, "run-evidence")) || !digestText(value.RunIDsRoot) || !digestText(value.TranscriptRowsRoot) || !digestText(value.ResultRowsRoot) {
 		return nil, fmt.Errorf("invalid audit attestation authority")
 	}
-	mapWires := make([]any, len(value.StructuralMaps))
-	previous := ""
-	for index, reference := range value.StructuralMaps {
-		if reference.Verify() != nil || index > 0 && reference.Path <= previous {
-			return nil, fmt.Errorf("invalid audit structural maps")
-		}
-		mapWires[index] = reference.Wire()
-		previous = reference.Path
+	mapWires, err := structuralMapWires(value.Panel, value.StructuralMaps)
+	if err != nil {
+		return nil, err
 	}
 	return json.Marshal([]any{"actionrelation-audit-attestation/v3", value.Panel, value.Authority, value.PrimaryExecution.Wire(), value.AuditExecution.Wire(), value.RunEvidence.Wire(), mapWires, value.RunIDsRoot, value.TranscriptRowsRoot, value.ResultRowsRoot, value.TotalRuns, "isolated-byte-identical"})
 }
@@ -271,14 +261,24 @@ func executionCoreCanonical(value ExecutionCore) ([]byte, error) {
 			return nil, fmt.Errorf("invalid execution core reference")
 		}
 	}
-	mapWires := make([]any, len(value.StructuralMaps))
-	previous := ""
-	for index, reference := range value.StructuralMaps {
-		if reference.Verify() != nil || index > 0 && reference.Path <= previous {
-			return nil, fmt.Errorf("invalid execution core structural maps")
+	paths := []struct {
+		ref  AuthorityRef
+		path string
+	}{
+		{value.PlanReview, ReviewManifestPath("plan")}, {value.ImplementationReview, ReviewManifestPath("implementation")},
+		{value.BuildAuthority, BuildAuthorityPath}, {value.Competence, "docs/actionrelations-competence-root.json"},
+		{value.FixtureRoot, ExpectedAuthorityPath(value.Panel, "fixture-root")}, {value.PrimaryExecution, ExpectedAuthorityPath(value.Panel, "execution-primary")},
+		{value.AuditExecution, ExpectedAuthorityPath(value.Panel, "execution-audit")}, {value.AuditAttestation, ExpectedAuthorityPath(value.Panel, "audit-attestation")},
+		{value.RunEvidence, ExpectedAuthorityPath(value.Panel, "run-evidence")},
+	}
+	for _, item := range paths {
+		if !referenceAt(item.ref, item.path) {
+			return nil, fmt.Errorf("noncanonical execution core authority path")
 		}
-		mapWires[index] = reference.Wire()
-		previous = reference.Path
+	}
+	mapWires, err := structuralMapWires(value.Panel, value.StructuralMaps)
+	if err != nil {
+		return nil, err
 	}
 	running := any(zeroAuthorityDigest)
 	if value.Panel == "development" {
@@ -286,7 +286,7 @@ func executionCoreCanonical(value ExecutionCore) ([]byte, error) {
 			return nil, fmt.Errorf("development core has running receipt")
 		}
 	} else {
-		if value.RunningReceipt == nil || value.RunningReceipt.Verify() != nil {
+		if value.RunningReceipt == nil || !referenceAt(*value.RunningReceipt, ExpectedAuthorityPath(value.Panel, "running")) {
 			return nil, fmt.Errorf("protected core lacks running receipt")
 		}
 		running = value.RunningReceipt.Wire()
@@ -296,4 +296,41 @@ func executionCoreCanonical(value ExecutionCore) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal([]any{"actionrelation-execution-core/v3", value.Panel, value.Authority, value.SourceRoot, value.BinaryDigest, value.PlanReview.Wire(), value.ImplementationReview.Wire(), value.BuildAuthority.Wire(), value.Competence.Wire(), environment, value.FixtureRoot.Wire(), value.PrimaryExecution.Wire(), value.AuditExecution.Wire(), value.AuditAttestation.Wire(), value.RunEvidence.Wire(), mapWires, running})
+}
+
+func ExpectedAuthorityPath(panel, name string) string {
+	root, err := EvidenceRoot(panel)
+	if err != nil {
+		return ""
+	}
+	switch name {
+	case "fixture-root", "execution-primary", "execution-audit", "audit-attestation", "execution-core", "evidence-payload", "publication":
+		return root + "/authority/" + name + ".json"
+	case "run-evidence":
+		return root + "/manifests/run-evidence-root.json"
+	case "report", "terminal-receipt", "claim", "running":
+		return ".nous/actionrelations-v1-" + panel + "-" + name + ".json"
+	}
+	return ""
+}
+
+func referenceAt(value AuthorityRef, path string) bool {
+	return path != "" && value.Path == path && value.Verify() == nil
+}
+
+func structuralMapWires(panel string, values []AuthorityRef) ([]any, error) {
+	want := panelRunCounts[panel] / 44
+	if want == 0 || len(values) != want {
+		return nil, fmt.Errorf("structural-map reference cardinality mismatch")
+	}
+	root, _ := EvidenceRoot(panel)
+	result := make([]any, len(values))
+	for index, reference := range values {
+		path := fmt.Sprintf("%s/manifests/curriculum-%04d/structural-output-map.json", root, index)
+		if !referenceAt(reference, path) {
+			return nil, fmt.Errorf("invalid structural-map reference %d", index)
+		}
+		result[index] = reference.Wire()
+	}
+	return result, nil
 }

@@ -27,12 +27,15 @@ type Fraction struct {
 func (f Fraction) Wire() []int { return []int{f.Numerator, f.Denominator} }
 
 type AmortizationRow struct {
+	Panel         string
 	Curriculum    int
+	Family        int
 	Acquisition   int
 	DynamicSearch int
 	NousSearch    int
 	Batches       int
 	Infinite      bool
+	Status        string
 }
 
 func (r AmortizationRow) wire() []any {
@@ -40,7 +43,7 @@ func (r AmortizationRow) wire() []any {
 	if r.Infinite {
 		batches = "infinite"
 	}
-	return []any{r.Curriculum, r.Acquisition, r.DynamicSearch, r.NousSearch, batches}
+	return []any{"actionrelation-amortization/v1", r.Panel, r.Curriculum, r.Family, r.Acquisition, r.NousSearch, r.DynamicSearch, r.DynamicSearch - r.NousSearch, batches, r.Status}
 }
 
 type Inference struct {
@@ -145,7 +148,7 @@ func inferPairs(panel, authority string, pairs []pairedCurriculum, replicates, l
 		nousLifecycle += pair.nous.LifecycleTotal
 		dynamicLifecycle += pair.dynamic.LifecycleTotal
 		difference := pair.dynamic.SearchTotal - pair.nous.SearchTotal
-		row := AmortizationRow{Curriculum: pair.curriculum, Acquisition: sum(pair.nous.AcquisitionWorkVector), DynamicSearch: pair.dynamic.SearchTotal, NousSearch: pair.nous.SearchTotal}
+		row := AmortizationRow{Panel: panel, Curriculum: pair.curriculum, Family: pair.family, Acquisition: sum(pair.nous.AcquisitionWorkVector), DynamicSearch: pair.dynamic.SearchTotal, NousSearch: pair.nous.SearchTotal, Status: "complete"}
 		if difference <= 0 {
 			row.Infinite = true
 		} else {

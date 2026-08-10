@@ -72,7 +72,8 @@ func main() {
 func actionRelationTrialsCmd(args []string) {
 	fs := flag.NewFlagSet("actionrelation-trials", flag.ExitOnError)
 	repoRoot := fs.String("repo-root", ".", "canonical repository root")
-	stage := fs.String("stage", "prepare", "prepare or competence")
+	stage := fs.String("stage", "prepare", "prepare, competence, claim, or execute")
+	panel := fs.String("panel", "development", "development, validation, or locked")
 	fs.Parse(args)
 	root, err := filepath.Abs(*repoRoot)
 	if err != nil {
@@ -86,6 +87,13 @@ func actionRelationTrialsCmd(args []string) {
 		err, canonical = runErr, value.Canonical
 	case "competence":
 		value, runErr := actionrelationrun.ExecuteCompetence(root, os.Args)
+		err, canonical = runErr, value.Canonical
+	case "execute":
+		if *panel != "development" {
+			err = fmt.Errorf("%s execution is not prepared", *panel)
+			break
+		}
+		value, runErr := actionrelationrun.ExecuteDevelopment(context.Background(), root, os.Args)
 		err, canonical = runErr, value.Canonical
 	default:
 		err = fmt.Errorf("unknown actionrelation stage %q", *stage)

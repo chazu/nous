@@ -168,12 +168,15 @@ type RunEvidenceRecord struct {
 }
 
 type RunEvidencePack struct {
-	Panel     string
-	Authority string
-	Records   []RunEvidenceRecord
-	File      EvidenceFile
-	Canonical []byte
-	Digest    string
+	Panel              string
+	Authority          string
+	Records            []RunEvidenceRecord
+	File               EvidenceFile
+	RunIDsRoot         string
+	TranscriptRowsRoot string
+	ResultRowsRoot     string
+	Canonical          []byte
+	Digest             string
 }
 
 func BuildRunEvidencePack(panel, authority string, records []RunEvidenceRecord) (RunEvidencePack, error) {
@@ -220,12 +223,12 @@ func BuildRunEvidencePack(panel, authority string, records []RunEvidenceRecord) 
 	file := EvidenceFile{Path: path, Mode: "100644", Data: data}
 	first, last := records[0].RunID, records[len(records)-1].RunID
 	canonical, _ := json.Marshal([]any{"actionrelation-run-evidence-root/v1", panel, authority, RunEvidenceRowSize, len(records), runIDsRoot, transcriptRoot, resultRoot, []any{[]any{0, path, first, last, len(records), len(data), shaHex(data)}}})
-	return RunEvidencePack{Panel: panel, Authority: authority, Records: records, File: file, Canonical: canonical, Digest: shaHex(canonical)}, nil
+	return RunEvidencePack{Panel: panel, Authority: authority, Records: records, File: file, RunIDsRoot: runIDsRoot, TranscriptRowsRoot: transcriptRoot, ResultRowsRoot: resultRoot, Canonical: canonical, Digest: shaHex(canonical)}, nil
 }
 
 func VerifyRunEvidencePack(value RunEvidencePack) error {
 	rebuilt, err := BuildRunEvidencePack(value.Panel, value.Authority, value.Records)
-	if err != nil || rebuilt.Digest != value.Digest || !bytes.Equal(rebuilt.Canonical, value.Canonical) || !equalFile(rebuilt.File, value.File) {
+	if err != nil || rebuilt.Digest != value.Digest || rebuilt.RunIDsRoot != value.RunIDsRoot || rebuilt.TranscriptRowsRoot != value.TranscriptRowsRoot || rebuilt.ResultRowsRoot != value.ResultRowsRoot || !bytes.Equal(rebuilt.Canonical, value.Canonical) || !equalFile(rebuilt.File, value.File) {
 		return fmt.Errorf("run-evidence pack mismatch")
 	}
 	return nil

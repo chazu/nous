@@ -3,15 +3,17 @@ package actionrelationscore
 import (
 	"bytes"
 	"testing"
+
+	"github.com/chazu/nous/internal/actionrelationexp"
 )
 
 func TestV3ReportUsesExactRefsRatiosAndStageClassification(t *testing.T) {
-	ref := func(name string) AuthorityRef {
-		return AuthorityRef{Path: ".nous/actionrelations-v1-development-evidence/authority/" + name + ".json", Digest: testDigest(name), Mode: "100644"}
+	ref := func(path string) AuthorityRef {
+		return AuthorityRef{Path: path, Digest: testDigest(path), Mode: "100644"}
 	}
 	refs := ReportAuthority{
-		PlanReview: ref("plan"), ImplementationReview: ref("implementation"), BuildAuthority: ref("build"),
-		Competence: ref("competence"), FixtureRoot: ref("fixture"), CurriculumRowsRoot: testDigest("rows"), EvidencePayload: ref("payload"),
+		PlanReview: ref(actionrelationexp.ReviewManifestPath("plan")), ImplementationReview: ref(actionrelationexp.ReviewManifestPath("implementation")), BuildAuthority: ref(actionrelationexp.BuildAuthorityPath),
+		Competence: ref("docs/actionrelations-competence-root.json"), FixtureRoot: ref(actionrelationexp.ExpectedAuthorityPath("development", "fixture-root")), CurriculumRowsRoot: testDigest("rows"), EvidencePayload: ref(actionrelationexp.ExpectedAuthorityPath("development", "evidence-payload")),
 	}
 	gates := MechanicalGates{true, true, true, true, true, true, true, true}
 	inference := Inference{
@@ -20,7 +22,7 @@ func TestV3ReportUsesExactRefsRatiosAndStageClassification(t *testing.T) {
 		RandomizationExtreme: 0, SavingCoverage: Fraction{16, 16}, Power: Fraction{1600, 2000}, PowerSuccesses: 1600,
 	}
 	for curriculum := 0; curriculum < 16; curriculum++ {
-		inference.AmortizationRows = append(inference.AmortizationRows, AmortizationRow{Curriculum: curriculum, Acquisition: 10, DynamicSearch: 100, NousSearch: 80, Batches: 1})
+		inference.AmortizationRows = append(inference.AmortizationRows, AmortizationRow{Panel: "development", Curriculum: curriculum, Family: curriculum % 8, Acquisition: 10, DynamicSearch: 100, NousSearch: 80, Batches: 1, Status: "complete"})
 	}
 	report, err := BuildReport("development", "development-public-v1", refs, gates, inference)
 	if err != nil {
@@ -52,7 +54,7 @@ func TestReportRejectsUnsafeRefsAndProtectedZeroRunningReceipt(t *testing.T) {
 		PrimarySearchRatio: Fraction{2720, 3200}, LifecycleRatio: Fraction{3360, 3200}, ConfidenceInterval: [2]Fraction{{1, 2}, {99, 100}}, RandomizationP: Fraction{499, 10001}, RandomizationExtreme: 498, SavingCoverage: Fraction{32, 32}, Power: Fraction{4, 5},
 	}
 	for curriculum := 0; curriculum < 32; curriculum++ {
-		locked.AmortizationRows = append(locked.AmortizationRows, AmortizationRow{Curriculum: curriculum, Acquisition: 20, DynamicSearch: 100, NousSearch: 85, Batches: 2})
+		locked.AmortizationRows = append(locked.AmortizationRows, AmortizationRow{Panel: "locked", Curriculum: curriculum, Family: curriculum % 8, Acquisition: 20, DynamicSearch: 100, NousSearch: 85, Batches: 2, Status: "complete"})
 	}
 	classification, err := reportClassification("locked", MechanicalGates{true, true, true, true, true, true, true, true}, locked)
 	if err != nil || classification != "valid-positive" {

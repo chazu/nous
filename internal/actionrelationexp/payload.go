@@ -102,7 +102,21 @@ func evidencePayloadCanonical(value EvidencePayload) ([]byte, error) {
 			return nil, fmt.Errorf("invalid evidence payload authority reference")
 		}
 	}
-	structural, err := authorityRefWires(value.Panel, value.StructuralMaps, curricula)
+	paths := []struct {
+		ref  AuthorityRef
+		path string
+	}{
+		{value.FixtureRoot, ExpectedAuthorityPath(value.Panel, "fixture-root")}, {value.ExecutionCore, ExpectedAuthorityPath(value.Panel, "execution-core")},
+		{value.PlanReview, ReviewManifestPath("plan")}, {value.ImplementationReview, ReviewManifestPath("implementation")},
+		{value.BuildAuthority, BuildAuthorityPath}, {value.Competence, "docs/actionrelations-competence-root.json"},
+		{value.AuditAttestation, ExpectedAuthorityPath(value.Panel, "audit-attestation")}, {value.RunEvidence, ExpectedAuthorityPath(value.Panel, "run-evidence")},
+	}
+	for _, item := range paths {
+		if !referenceAt(item.ref, item.path) {
+			return nil, fmt.Errorf("noncanonical evidence payload authority path")
+		}
+	}
+	structural, err := structuralMapWires(value.Panel, value.StructuralMaps)
 	if err != nil {
 		return nil, err
 	}

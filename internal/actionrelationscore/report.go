@@ -72,6 +72,23 @@ func CurriculumPolicyRowsRoot(rows []CurriculumPolicyRow) (string, error) {
 	return actionrelationwire.RootDigest("curriculum-policy-rows", digests)
 }
 
+func WorldPolicyRowsRoot(rows []WorldPolicyRow) (string, error) {
+	if len(rows) == 0 {
+		return "", fmt.Errorf("empty world row root")
+	}
+	digests := make([]string, len(rows))
+	previousCurriculum, previousWorld, previousPolicy := -1, -1, -1
+	for index, row := range rows {
+		policy := policyIndex(row.Policy)
+		if VerifyWorldPolicyRow(row) != nil || policy < 0 || index > 0 && (row.Curriculum < previousCurriculum || row.Curriculum == previousCurriculum && (row.WorldOrdinal < previousWorld || row.WorldOrdinal == previousWorld && policy <= previousPolicy)) {
+			return "", fmt.Errorf("world rows are not in canonical order")
+		}
+		digests[index] = row.Digest
+		previousCurriculum, previousWorld, previousPolicy = row.Curriculum, row.WorldOrdinal, policy
+	}
+	return actionrelationwire.RootDigest("world-policy-rows", digests)
+}
+
 func BuildReport(panel, authority string, refs ReportAuthority, gates MechanicalGates, inference Inference) (Report, error) {
 	manifestDigest := digest([]byte(actionrelationexp.PreregisteredManifestJSON))
 	classification, err := reportClassification(panel, gates, inference)
@@ -110,6 +127,21 @@ func VerifyReport(report Report) error {
 			return err
 		}
 	}
+	for _, item := range []struct {
+		ref  AuthorityRef
+		path string
+	}{
+		{report.Refs.PlanReview, actionrelationexp.ReviewManifestPath("plan")},
+		{report.Refs.ImplementationReview, actionrelationexp.ReviewManifestPath("implementation")},
+		{report.Refs.BuildAuthority, actionrelationexp.BuildAuthorityPath},
+		{report.Refs.Competence, "docs/actionrelations-competence-root.json"},
+		{report.Refs.FixtureRoot, actionrelationexp.ExpectedAuthorityPath(report.Panel, "fixture-root")},
+		{report.Refs.EvidencePayload, actionrelationexp.ExpectedAuthorityPath(report.Panel, "evidence-payload")},
+	} {
+		if item.ref.Path != item.path {
+			return fmt.Errorf("noncanonical report authority path")
+		}
+	}
 	if !digestText(report.Refs.CurriculumRowsRoot) {
 		return fmt.Errorf("invalid curriculum-policy rows root")
 	}
@@ -117,7 +149,7 @@ func VerifyReport(report Report) error {
 		if report.Refs.RunningReceipt != nil {
 			return fmt.Errorf("development report has a running receipt")
 		}
-	} else if report.Refs.RunningReceipt == nil || report.Refs.RunningReceipt.Verify() != nil {
+	} else if report.Refs.RunningReceipt == nil || report.Refs.RunningReceipt.Verify() != nil || report.Refs.RunningReceipt.Path != actionrelationexp.ExpectedAuthorityPath(report.Panel, "running") {
 		return fmt.Errorf("protected report lacks a running receipt")
 	}
 	classification, err := reportClassification(report.Panel, report.MechanicalGates, report.Inference)
@@ -198,7 +230,7 @@ func verifyReportInference(panel string, inference Inference) error {
 	nousSearch, dynamicSearch, nousLifecycle := 0, 0, 0
 	savings := 0
 	for curriculum, row := range inference.AmortizationRows {
-		if row.Curriculum != curriculum || row.Acquisition < 0 || row.DynamicSearch <= 0 || row.NousSearch < 0 {
+		if row.Panel != panel || row.Curriculum != curriculum || row.Family != curriculum%8 || row.Acquisition < 0 || row.DynamicSearch <= 0 || row.NousSearch < 0 || row.Status != "complete" {
 			return fmt.Errorf("invalid amortization row")
 		}
 		difference := row.DynamicSearch - row.NousSearch
