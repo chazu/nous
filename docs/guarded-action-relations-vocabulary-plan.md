@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 5.
+Status: provisional Part 3 Vocabulary 3 plan, revision 6.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -37,6 +37,13 @@ impossible, relation applicability lacked a ledger event, and table wire codes
 were incomplete. Revision 5 makes post-freeze search work the primary marginal
 endpoint, retains lifecycle payback as a secondary crossover, and closes those
 remaining event and byte wires.
+
+Revision 5 was committed at
+`943f06287cb67af3827c3cd567bb8603ac3d0e9e` and unanimously rejected only for
+remaining byte-wire ambiguity. Revision 6 separates object decoder kinds,
+fixes physical ARTB shard bytes and offsets, assigns every training-operation
+result code, and freezes amortization rows including infinity and incomplete
+cases.
 
 This plan narrows and, in revision 5, explicitly amends the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). The
@@ -334,6 +341,12 @@ alpha-normalized alias topology among `a.x`, `a.y`, `b.x`, and `b.y`. Missing
 operands occupy an explicit `none` role. Cell names are replaced by
 first-occurrence role integers. Numeric operands, symbols, action names, and
 occurrence ordinals are not pattern constants.
+
+Its wire is
+`["action-relation-pattern/v1",[aKind,bKind],
+[aPrimaryRole,aSecondaryRole,bPrimaryRole,bSecondaryRole]]`, after canonical
+pair ordering. A missing role is integer `-1`; present roles are consecutive
+integers from zero in first-occurrence order.
 
 ### Guard
 
@@ -1080,6 +1093,15 @@ The manifest wire is
 `["actionrelation-table-manifest/v1",kind,recordSize,count,
 [[packOrdinal,firstOrdinal,lastOrdinal,packDigest]...],merkleRoot]`; shard rows
 are ordinal ordered, contiguous, nonoverlapping, and cover `0..count-1`.
+For a manifest shard whose inclusive range is `firstOrdinal..lastOrdinal`, the
+physical pack bytes are exactly
+`ASCII("ARTB1\n") || record(firstOrdinal) || ... || record(lastOrdinal)`, with
+no length prefix, alignment padding, trailer, or additional header. The header
+is six bytes, so record ordinal `o` begins at byte offset
+`6 + (o-firstOrdinal)*recordSize`. `packDigest` is SHA-256 of those complete
+physical pack bytes. Verification rejects a nonexact header, a pack length
+other than `6 + (lastOrdinal-firstOrdinal+1)*recordSize`, an ordinal outside
+the shard range, or a digest mismatch.
 
 ARTB `kind` codes and big-endian fixed layouts are closed as follows. Every
 named digest is raw 32 bytes; Boolean bytes are 0 or 1; status is 1 valid or 2
@@ -1101,12 +1123,34 @@ a-disables-b 4, b-disables-a 5, mutual-disables 6, inapplicable 7, conflicts 8,
 invalid 9. Null-bitmap bits 0..5 correspond in order to a-initial, b-initial,
 b-after-a, a-after-b, ab-state, ba-state and require the associated digest be
 zero exactly when the bit is 1; bits 0 and 1 must be zero. View bank is 0 for
-the `xa/aa` bank and 1 for the `red/joba` bank. Training-operation kinds are applicability 1,
-apply 2, and equality 3. Candidate ordinal is 0..450 and edge ordinal 0..449;
+the `xa/aa` bank and 1 for the `red/joba` bank. Training-operation kinds are
+applicability 1, apply 2, and equality 3. Candidate ordinal is 0..450 and edge ordinal 0..449;
 the root candidate's parent digest is zero. Version bytes are 1. In row 105,
 bytes 1, 2, and 3 are label, status, and bitmap. In row 106, bytes 224..227
 are bank, cell count, action count, and status. In row 107, bytes 1..3 are kind,
-status, and Boolean/result code. Candidate literal count is 0..2.
+status, and result code. Candidate literal count is 0..2.
+
+Row 107 has this closed status/result matrix:
+
+| Kind | Status/result | Result-object digest |
+| --- | --- | --- |
+| applicability 1 | valid 1 / false 0 | zero |
+| applicability 1 | valid 1 / true 1 | zero |
+| applicability 1 | invalid 2 / invalid-input 2 | zero |
+| apply 2 | valid 1 / applied 1 | nonzero canonical resulting-state digest |
+| apply 2 | valid 1 / inapplicable 2 | zero |
+| apply 2 | invalid 2 / invalid-input 3 | zero |
+| equality 3 | valid 1 / unequal 0 | zero |
+| equality 3 | valid 1 / equal 1 | zero |
+| equality 3 | invalid 2 / invalid-input 2 | zero |
+
+For applicability and apply, `left/state` is the input state digest and
+`right/action` is the occurrence digest. For equality they are respectively
+the left-state and right-state digests. The input and output roots are the
+canonical ordered-vector roots for the aligned charged call; `call-root` is
+that call's journal call ID. Every status/result pairing not listed above,
+including valid apply with a zero result after `applied` or a nonzero result in
+any other row, is invalid.
 
 Merkle hashing is binary and domain-separated. A leaf preimage is hex bytes
 `41525442312d4c45414600 || kind:uint16 || ordinal:uint32 || record`; a parent
@@ -1114,10 +1158,76 @@ preimage is `41525442312d4e4f444500 || leftDigest || rightDigest`. Both use
 SHA-256; an odd final node is duplicated as both left and right. Counts are
 nonzero, so no empty-table root exists.
 
+Object-index kind is a separate closed decoder enum:
+
+| Code | Required canonical wire/decoder |
+| ---: | --- |
+| 1 | `finite-action-state/v1` |
+| 2 | `finite-action-semantic/v1` |
+| 3 | `action-occurrence/v1` |
+| 4 | `finite-action-world-core/v1` |
+| 5 | `remaining-occurrences/v1` |
+| 6 | `action-relation-pattern/v1` |
+| 7 | `action-guard/v1` |
+| 8 | alpha-normalized action-facts wire |
+| 9 | `guarded-action-relation/v1` |
+| 10 | `guarded-action-artifact/v1` |
+| 11 | `action-training-evidence/v1` |
+| 12 | `action-presentation-view/v1` |
+| 13 | `action-normalization-proof/v1` |
+| 14 | `learned-witness/v1` |
+| 15 | `static-witness/v1` |
+| 16 | `dynamic-witness/v1` |
+| 17 | `local-diamond-certificate/v1` |
+| 18 | `sleep-propagation-core/v1` |
+| 19 | `sleep-proof-map/v1` |
+| 20 | `sleep-search-node/v1` |
+| 21 | `sleep-search-edge/v1` |
+| 22 | `completed-subtree/v1` |
+| 23 | `action-terminal/v1` |
+| 24 | `sleep-terminal-set/v1` |
+| 25 | `sleep-subtree-root/v1` |
+| 26 | certificate-cache-row wire |
+| 27 | compound-work-reservation wire |
+| 28 | acquisition barrier wire |
+| 29 | scorer-truth-shard wire |
+| 30 | `actionrelation-fixture-root/v1` |
+| 31 | `actionrelation-execution-core/v1` |
+| 32 | `actionrelation-world-policy-row/v1` |
+| 33 | `actionrelation-curriculum-policy-row/v1` |
+| 34 | `actionrelation-evidence-payload/v1` |
+| 35 | canonical semantic Store snapshot wire |
+| 36 | generator-attempt-ledger wire |
+
+The descriptive wires in that table are exactly:
+
+```text
+["action-facts/v1",stateDigest,occurrenceDigest,patternDigest,
+ readRoleInts,writeRoleInts,atomTruthBitset]
+["certificate-cache-row/v1",stateDigest,minOccurrenceDigest,
+ maxOccurrenceDigest,result,orderedProofCallIDs]
+["compound-work-reservation/v1",runID,taskDigest,operationCodes,
+ totalBefore,totalAfter,status]
+["action-guard-search-barrier/v1",candidateDigests,edgeTableRoot,
+ evaluationTableRoots,winnerDigests,status]
+["action-scorer-truth-shard/v1",worldDigest,shardOrdinal,shardCount,
+ terminalDigestRows,pairLabelRows]
+["action-store-snapshot/v1",[[unitName,unitKind,[[slotName,valueDigest]...]]...]]
+["action-generator-attempt-ledger/v1",panel,curriculum,attempt,
+ [[phase,startWork,endWork,predicate,status]...],totalWork,terminal]
+```
+
+Role integers, operation codes, digests, units, slots, phase rows, terminal
+rows, and pair-label rows use the canonical ordering already frozen for their
+types. Bitset is a two-byte big-endian value with atoms 1..15 in bits 0..14 and
+bit 15 zero. `result` and every status/terminal use the closed taxonomies in
+this plan. No protected execution is authorized if any tracked producer can
+emit an object outside this table. A record must decode as exactly its named
+kind; zero, unknown, or cross-kind bytes are invalid.
+
 An object-index row is exactly 96 bytes: digest (32), offset `uint64` (8),
 length `uint32` (4), kind `uint16` (2), pack ordinal `uint16` (2), and 48 zero
 bytes. Rows are digest ordered. A shard has at most 4,096 rows and 1 MiB. A
-row's kind uses the same closed 1..32 enum as call detail. A
 small object is at most 1,024 bytes; a large object is at most 65,536 bytes.
 Any pack is at most 16 MiB; deterministic split points are named in a root
 manifest. The verifier checks headers, lengths, digests, canonical decoders,
@@ -1254,6 +1364,22 @@ Canonical top-level wires are closed arrays, not extensible objects:
  buildDigest,claimReceiptDigest,runningReceiptDigest,executionCoreDigest,
  evidencePayloadDigest,reportDigest,terminalReceiptDigest]
 ```
+
+Each amortization row is:
+
+```text
+["actionrelation-amortization/v1",panel,curriculum,family,
+ nousAcquisition,nousSearch,dynamicSearch,signedSaving,batches,status]
+```
+
+Rows are curriculum-ordinal ordered. On complete primary executions,
+`signedSaving = dynamicSearch-nousSearch`; `batches` is the nonnegative integer
+`ceil(nousAcquisition/signedSaving)` when saving is positive and literal string
+`"infinite"` otherwise; status is `complete`. If either execution is incomplete,
+the three recorded operands and signed saving remain exact partial totals,
+`batches` is `"infinite"`, status is `incomplete`, and the row enters no
+amortization summary. No JSON null, float, alternate infinity spelling, or
+omitted row is legal.
 
 Arrays have exactly the displayed arity and canonical nested row order.
 Unknown, missing, duplicated, or reordered fields are invalid. World rows are
