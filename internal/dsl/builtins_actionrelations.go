@@ -36,6 +36,8 @@ func init() {
 		"ar-certificate-assemble": bARCertificateAssemble,
 		"ar-pattern-match":        bARPatternMatch,
 		"ar-close-relation-use":   bARCloseRelationUse,
+		"ar-search-applicable?":   bARSearchApplicable,
+		"ar-static-footprint?":    bARStaticFootprint,
 		"ar-meter":                bARMeter,
 	})
 }

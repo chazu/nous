@@ -415,4 +415,59 @@ units: [
 			"matchRows" @ "request" @ "matchRows" set-slot
 			"""#
 	},
+	{
+		name: "AR-H-SearchApplicable"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Evaluate one explicitly supplied search-node occurrence"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arSearchApplicable" =
+			"CurUnit" @ "ActionRelationSearchRequest" isa? and
+			"CurUnit" @ "terminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "worldDigest" get-slot
+			"request" @ "policy" get-slot
+			"request" @ "nodeUnit" get-slot
+			"request" @ "state" get-slot
+			"request" @ "occurrence" get-slot
+			"AR.Search.Applicability." "request" @ concat ar-search-applicable? "row" !
+			"row" @ nil !=
+			if
+				"row" @ "request" @ "resultRow" set-slot
+				"completed" "request" @ "terminal" set-slot
+			else "failed" "request" @ "terminal" set-slot then
+			"""#
+	},
+	{
+		name: "AR-H-StaticFootprint"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Evaluate one explicitly supplied oriented static footprint pair"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arStaticFootprint" =
+			"CurUnit" @ "ActionStaticFootprintRequest" isa? and
+			"CurUnit" @ "terminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "state" get-slot "state" !
+			"request" @ "aOccurrence" get-slot "a" !
+			"request" @ "bOccurrence" get-slot "b" !
+			"state" @ "a" @ "AR.Static.Facts.A." "request" @ concat ar-action-facts "aFacts" !
+			"state" @ "b" @ "AR.Static.Facts.B." "request" @ concat ar-action-facts "bFacts" !
+			"request" @ "worldDigest" get-slot
+			"request" @ "nodeUnit" get-slot
+			"state" @ "a" @ "b" @ "aFacts" @ "bFacts" @
+			"AR.Static.Footprint." "request" @ concat ar-static-footprint? "row" !
+			"row" @ nil !=
+			if
+				"row" @ "request" @ "resultRow" set-slot
+				"completed" "request" @ "terminal" set-slot
+			else "failed" "request" @ "terminal" set-slot then
+			"""#
+	},
 ]
