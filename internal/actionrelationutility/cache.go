@@ -43,18 +43,22 @@ func CertifyCached(session *Session, cache *CertificateCache, worldDigest, polic
 	stateDigest, _ := state.Digest()
 	aDigest, _ := a.Digest()
 	bDigest, _ := b.Digest()
-	key := strings.Join([]string{worldDigest, policy, stateDigest, aDigest, bDigest}, ":")
+	minDigest, maxDigest := aDigest, bDigest
+	if minDigest > maxDigest {
+		minDigest, maxDigest = maxDigest, minDigest
+	}
+	key := strings.Join([]string{worldDigest, policy, stateDigest, minDigest, maxDigest}, ":")
 	lookupSequence := session.Sequence
-	lookupTask, _ := json.Marshal([]any{"actionrelation-cache-lookup-task/v1", session.RunID, worldDigest, policy, stateDigest, aDigest, bDigest})
+	lookupTask, _ := json.Marshal([]any{"actionrelation-cache-lookup-task/v1", session.RunID, worldDigest, policy, stateDigest, minDigest, maxDigest})
 	lookupHash := sha256.Sum256(lookupTask)
 	reservation, err := session.Reserve(hex.EncodeToString(lookupHash[:]), []uint8{18})
 	if err != nil || reservation.Status != "reserved" {
 		return CacheDecision{}, fmt.Errorf("reserve certificate cache lookup: %w", err)
 	}
-	inputs := [][]byte{[]byte(worldDigest), []byte(policy), []byte(stateDigest), []byte(aDigest), []byte(bDigest)}
+	inputs := [][]byte{[]byte(worldDigest), []byte(policy), []byte(stateDigest), []byte(minDigest), []byte(maxDigest)}
 	if rowName := cache.rows[key]; rowName != "" {
 		row := session.Store.Get(rowName)
-		if row == nil || !session.Store.IsA(row.Name, "ActionCertificateCacheRow") || row.GetString("worldDigest") != worldDigest || row.GetString("policy") != policy {
+		if row == nil || !session.Store.IsA(row.Name, "ActionCertificateCacheRow") || row.GetString("worldDigest") != worldDigest || row.GetString("policy") != policy || row.GetString("stateDigest") != stateDigest || row.GetString("minOccurrenceDigest") != minDigest || row.GetString("maxOccurrenceDigest") != maxDigest {
 			return CacheDecision{}, fmt.Errorf("invalid certificate cache entry")
 		}
 		if err := dsl.ChargeActionRelationMeterStatus(session.MeterToken, 18, 11, 3, "certificate-cache-lookup", inputs, [][]byte{[]byte(row.GetString("canonicalObject"))}); err != nil {
@@ -81,7 +85,7 @@ func CertifyCached(session *Session, cache *CertificateCache, worldDigest, polic
 	if attempt == nil || attempt.GetString("status") != "valid" {
 		return CacheDecision{}, fmt.Errorf("invalid certificate attempt is not cacheable")
 	}
-	finalizeTask, _ := json.Marshal([]any{"actionrelation-cache-finalize-task/v1", session.RunID, worldDigest, policy, stateDigest, aDigest, bDigest, missCallID, attempt.GetString("objectDigest"), certificate.OperationRoot.Digest})
+	finalizeTask, _ := json.Marshal([]any{"actionrelation-cache-finalize-task/v1", session.RunID, worldDigest, policy, stateDigest, minDigest, maxDigest, missCallID, attempt.GetString("objectDigest"), certificate.OperationRoot.Digest})
 	finalizeHash := sha256.Sum256(finalizeTask)
 	reservation, err = session.Reserve(hex.EncodeToString(finalizeHash[:]), []uint8{25})
 	if err != nil || reservation.Status != "reserved" {

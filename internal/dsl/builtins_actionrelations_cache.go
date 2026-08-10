@@ -23,6 +23,10 @@ func bARCacheFinalize(vm *VM) error {
 	stateDigest, _ := state.Digest()
 	aDigest, _ := a.Digest()
 	bDigest, _ := b.Digest()
+	minDigest, maxDigest := aDigest, bDigest
+	if minDigest > maxDigest {
+		minDigest, maxDigest = maxDigest, minDigest
+	}
 	if stateErr != nil || aErr != nil || bErr != nil || pairErr != nil || orderedA != a || orderedB != b ||
 		!actionrelationsDigest(worldValue.AsString()) || !actionrelationsDigest(missCallValue.AsString()) || !actionrelationsDigest(operationRootValue.AsString()) ||
 		!slicesContainsString(actionRelationSearchPolicies, policyValue.AsString()) || attempt == nil || !vm.Store.IsA(attempt.Name, "ActionRelationCertificateAttempt") ||
@@ -36,9 +40,10 @@ func bARCacheFinalize(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	wire, _ := json.Marshal([]any{"certificate-cache-row/v3", worldValue.AsString(), policyValue.AsString(), stateDigest, aDigest, bDigest, missCallValue.AsString(), attempt.GetString("objectDigest"), operationRootValue.AsString(), result, certificateDigest, "valid"})
+	wire, _ := json.Marshal([]any{"certificate-cache-row/v3", worldValue.AsString(), policyValue.AsString(), stateDigest, minDigest, maxDigest, missCallValue.AsString(), attempt.GetString("objectDigest"), operationRootValue.AsString(), result, certificateDigest, "valid"})
 	name, err := arStoreCanonical(vm, requested.AsString(), "ActionCertificateCacheRow", wire, map[string]any{
 		"worldDigest": worldValue.AsString(), "policy": policyValue.AsString(), "stateDigest": stateDigest,
+		"minOccurrenceDigest": minDigest, "maxOccurrenceDigest": maxDigest,
 		"aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "missLookupCallID": missCallValue.AsString(),
 		"attemptUnit": attempt.Name, "operationRoot": operationRootValue.AsString(), "result": result, "certificateDigest": certificateDigest,
 	})

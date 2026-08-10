@@ -21,6 +21,7 @@ import (
 type SearchRun struct {
 	RunID        string
 	WorldDigest  string
+	Policy       actionrelationsearch.Policy
 	Store        *unit.Store
 	Search       actionrelationsearch.Result
 	Records      []dsl.ActionRelationMeterRecord
@@ -29,7 +30,9 @@ type SearchRun struct {
 	Terminal     string
 	WorkTerminal WorkTerminal
 	WorkVector   [12]int
+	InitialWork  [12]int
 	WorkTotal    int
+	ProofRoots   []actionrelationexp.OperationRoot
 }
 
 func ExecuteComplete(domainsDir string, world actionrelations.World, panel, authority string, curriculum, worldOrdinal, cap int, token string) (SearchRun, error) {
@@ -86,7 +89,7 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 	}
 	runner := completeRunner{
 		session: session, worldDigest: worldDigest, policy: string(policy), searchPolicy: policy,
-		memo: map[string]completeVisit{}, evidence: map[string]bool{}, token: token, cache: NewCertificateCache(), artifactName: artifactName,
+		memo: map[string]completeVisit{}, evidence: map[string]bool{}, token: token, cache: NewCertificateCache(), artifactName: artifactName, proofRootSeen: map[string]bool{},
 	}
 	if artifactName != "" {
 		if err := runner.chargeArtifactLoad(boundaryName, artifactName); err != nil {
@@ -103,7 +106,7 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 				session.Abort()
 				return SearchRun{}, terminalErr
 			}
-			return finishSearchRun(session, runID, worldDigest, runner.result, "budget-exhausted", terminal)
+			return finishSearchRun(session, runID, worldDigest, policy, runner.result, runner.proofRoots, "budget-exhausted", terminal)
 		}
 		session.Abort()
 		return SearchRun{}, err
@@ -118,10 +121,10 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 		session.Abort()
 		return SearchRun{}, err
 	}
-	return finishSearchRun(session, runID, worldDigest, runner.result, "completed", WorkTerminal{})
+	return finishSearchRun(session, runID, worldDigest, policy, runner.result, runner.proofRoots, "completed", WorkTerminal{})
 }
 
-func finishSearchRun(session *Session, runID, worldDigest string, result actionrelationsearch.Result, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
+func finishSearchRun(session *Session, runID, worldDigest string, policy actionrelationsearch.Policy, result actionrelationsearch.Result, proofRoots []actionrelationexp.OperationRoot, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
 	initialWork := session.InitialWork
 	records, err := session.Close()
 	if err != nil {
@@ -142,7 +145,11 @@ func finishSearchRun(session *Session, runID, worldDigest string, result actionr
 	for index := range workVector {
 		workVector[index] += initialWork[index]
 	}
-	return SearchRun{RunID: runID, WorldDigest: worldDigest, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, WorkTotal: sumWorkVector(workVector)}, nil
+	run := SearchRun{RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots)}
+	if err := VerifySearchRun(run); err != nil {
+		return SearchRun{}, err
+	}
+	return run, nil
 }
 
 type completeVisit struct {
@@ -154,16 +161,18 @@ type completeVisit struct {
 }
 
 type completeRunner struct {
-	session      *Session
-	worldDigest  string
-	policy       string
-	searchPolicy actionrelationsearch.Policy
-	token        string
-	result       actionrelationsearch.Result
-	memo         map[string]completeVisit
-	evidence     map[string]bool
-	cache        *CertificateCache
-	artifactName string
+	session       *Session
+	worldDigest   string
+	policy        string
+	searchPolicy  actionrelationsearch.Policy
+	token         string
+	result        actionrelationsearch.Result
+	memo          map[string]completeVisit
+	evidence      map[string]bool
+	cache         *CertificateCache
+	artifactName  string
+	proofRoots    []actionrelationexp.OperationRoot
+	proofRootSeen map[string]bool
 }
 
 type budgetExhaustedError struct {
@@ -305,8 +314,10 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 				return completeVisit{}, err
 			}
 			if !decision.Certified {
+				r.recordProofRoot(decision.OperationRoot)
 				continue
 			}
+			r.recordProofRoot(decision.OperationRoot)
 			source, sourceAuthority := "prior-sleep", priorDigest
 			if sourceAuthority == "" {
 				source, sourceAuthority = "earlier-sibling", earlierSubtrees[candidateDigest]
@@ -347,6 +358,14 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 	summary := completeVisit{node: node, terminals: terminals, edgePreorder: edgePreorder, subtree: subtree, terminalSet: terminalSet}
 	r.memo[node.Digest] = summary
 	return summary, nil
+}
+
+func (r *completeRunner) recordProofRoot(root actionrelationexp.OperationRoot) {
+	if root.Digest == "" || r.proofRootSeen[root.Digest] {
+		return
+	}
+	r.proofRootSeen[root.Digest] = true
+	r.proofRoots = append(r.proofRoots, root)
 }
 
 func (r *completeRunner) eligibility(nodeName, nodeDigest string, state actionrelations.State, taken, candidate actionrelations.Occurrence, candidateApplicabilityRow string) (bool, []byte, int, error) {

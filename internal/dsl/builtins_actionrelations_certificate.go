@@ -113,15 +113,19 @@ func certificateOperationRows(vm *VM, aInitial, bInitial arTransitionEvidence, b
 		return nil, err
 	}
 	result := []string{aApp, bApp, aTransition, bTransition}
+	var crossApplicability, crossTransitions []string
 	for _, optional := range []*arTransitionEvidence{bAfterA, aAfterB} {
 		if optional != nil {
 			app, transition, err := transitionDigest(*optional)
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, app, transition)
+			crossApplicability = append(crossApplicability, app)
+			crossTransitions = append(crossTransitions, transition)
 		}
 	}
+	result = append(result, crossApplicability...)
+	result = append(result, crossTransitions...)
 	if equalityName != "" {
 		equality := vm.Store.Get(equalityName)
 		if equality == nil {

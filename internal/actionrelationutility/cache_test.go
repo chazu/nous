@@ -40,6 +40,10 @@ func TestCertificateCacheFinalizesAfterProofAndReusesBothAuthorityAndResult(t *t
 	if row == nil || actionrelationexp.ValidateObject(26, []byte(row.GetString("canonicalObject"))) != nil {
 		t.Fatal("cache finalization did not retain an exact kind-26 row")
 	}
+	var cacheWire []any
+	if json.Unmarshal([]byte(row.GetString("canonicalObject")), &cacheWire) != nil || len(cacheWire) != 12 || cacheWire[4].(string) > cacheWire[5].(string) {
+		t.Fatalf("cache row does not use min/max occurrence digests: %v", cacheWire)
+	}
 	var rootWire []any
 	if json.Unmarshal(first.OperationRoot.Canonical, &rootWire) != nil || len(rootWire) != 7 || rootWire[4] != float64(0) || rootWire[5] != float64(10) {
 		t.Fatalf("operation root=%v", rootWire)
