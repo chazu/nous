@@ -74,6 +74,13 @@ func TestDevelopmentCurriculumExecutesExactAcquisitionAndSixWorldPolicyRows(t *t
 			t.Fatalf("evidence path %q is outside canonical panel root %q", path, wantRoot)
 		}
 	}
+	manifests, err := BuildCurriculumManifests(result, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifests.ManifestFiles) != 155 || len(manifests.JournalRoots) != 44 || len(manifests.Tables) != 14 {
+		t.Fatalf("manifest cardinalities files=%d journals=%d tables=%d", len(manifests.ManifestFiles), len(manifests.JournalRoots), len(manifests.Tables))
+	}
 }
 
 func TestExportedCurriculumExecutorRejectsProtectedPanelsBeforeConstruction(t *testing.T) {
