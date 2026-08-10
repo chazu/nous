@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 6.
+Status: provisional Part 3 Vocabulary 3 plan, revision 7.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -44,6 +44,13 @@ remaining byte-wire ambiguity. Revision 6 separates object decoder kinds,
 fixes physical ARTB shard bytes and offsets, assigns every training-operation
 result code, and freezes amortization rows including infinity and incomplete
 cases.
+
+Revision 6 was committed at
+`9b375de606dfde37a4953366fd726ca39cb70815` and unanimously rejected. Revision
+7 separates single-action facts from pair-level guard facts, closes every
+utility evidence type, removes the final result/call digest cycle, replaces an
+oversized flat Store snapshot with a compact logical boundary, freezes object
+pack framing, and raises the no-guard event cap to its realizable maximum.
 
 This plan narrows and, in revision 5, explicitly amends the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). The
@@ -261,6 +268,26 @@ declaration order are never inputs. Consequently cell renaming, action renaming,
 permutation preserve semantic occurrence bytes. Canonical pair order is by
 occurrence bytes. Relation artifacts contain neither presentation names nor
 occurrence ordinals.
+
+The single-action fact operation emits only facts derivable from its explicit
+state and occurrence:
+
+```text
+["action-local-facts/v1",stateDigest,occurrenceDigest,kind,
+ primaryRole,secondaryRole,argumentPresent,argumentValue,symbol,
+ readRoleInts,writeRoleInts,primaryValue,secondaryValue,traceLength]
+```
+
+Missing roles and their values are integer `-1`. `argumentPresent` is Boolean;
+`argumentValue` is zero exactly when it is false. `symbol` is the empty string
+exactly when the action is not `emit`. Roles and footprints are sorted unique
+alpha-role integers, except that the event trace footprint is integer `-2`.
+Trace length is `0..8`. The row contains no pair pattern, relation, or pair atom.
+Given two such rows for the same state, the pair pattern and all 15 atom values
+are total deterministic functions of the two local rows under the formulae
+below. `ar-guard-match` must name both local-fact digests and independently
+reconstruct the requested signed literal; it cannot consume a precomputed
+pair-level truth bitset.
 
 Production semantics may parse/canonicalize one state or action, report one
 explicit action's local facts, test one action's applicability, apply one action,
@@ -522,18 +549,19 @@ writes at most the named output unit, and has the following Store effect:
 
 | Word | Input -> output | Store effect |
 | --- | --- | --- |
-| `ar-state-valid?`, `ar-action-valid?` | one byte object -> one validity row | append row |
-| `ar-action-facts` | state/action -> one alpha-normalized fact row | append row |
+| `ar-state-valid?`, `ar-action-valid?` | one byte object -> parsed object when valid plus one validity row | append parsed object when valid and row |
+| `ar-action-facts` | state/action -> one single-action local-facts row | append row |
 | `ar-applicable?` | state/action -> one applicability row | append row |
 | `ar-apply` | state/action/applicability -> one transition row | append state and row |
 | `ar-state-equal?` | two state digests -> one equality row | append row |
 | `ar-guard-root`, `ar-guard-extend` | explicit parent/literal -> one guard/edge | append candidate and edge |
-| `ar-guard-match` | one signed literal/fact rows -> one Boolean evaluation | append row |
+| `ar-guard-match` | signed literal/two local-facts rows -> one Boolean evaluation | append row |
 | `ar-observation-assemble` | required application rows/claimed label -> observation | append or reject |
 | `ar-candidate-allocate`, `ar-candidate-result` | guard/evaluation rows -> candidate row | append row |
 | `ar-close-guard-search` | complete ordered candidate roots -> barrier | append immutable barrier |
 | `ar-freeze-relation` | barrier/tied rows -> relation or artifact | append immutable object |
-| `ar-pattern-match` | one relation plus state/pair facts -> match row | append row |
+| `ar-pattern-match` | relation/state/two facts/two applicability rows -> relation-match row | append row |
+| `ar-close-relation-use` | artifact/complete ordered relation-match rows -> unanimous-use barrier and learned witness | append immutable rows |
 | `ar-certificate-assemble` | witness/application rows -> certificate attempt | append row |
 | `ar-certificate-attach` | node/edge/certificate/proof source -> propagation row | append row |
 | `ar-meter` | no input -> current adapter-owned counter vector | none; read-only |
@@ -541,12 +569,13 @@ writes at most the named output unit, and has the following Store effect:
 There is deliberately no whole-artifact Boolean word. During utility, the
 driver publishes one search task naming a node, taken occurrence, sleeper
 candidate, and policy witness variant. For a learned witness, CUE must write a
-pattern row for every retained relation, its individual literal rows, every
-relation-match row, a unanimous-use barrier, and only then a certificate
-request. Static and dynamic policies write their respective explicit witness
-row. Certificate construction likewise uses individual applicability, apply,
-and state-equality calls. The Go driver validates one row and advances one DFS
-edge; it cannot inspect an artifact and choose a pair on the policy's behalf.
+relation-match row for every retained relation, each naming its reconstructed
+pattern sub-result and individual literal rows, then close a unanimous-use
+barrier and learned witness before it requests a certificate. Static and
+dynamic policies write their respective explicit witness row. Certificate
+construction likewise uses individual applicability, apply, and state-equality
+calls. The Go driver validates one row and advances one DFS edge; it cannot
+inspect an artifact and choose a pair on the policy's behalf.
 
 Assembly words accept and validate explicitly supplied components; they do not
 derive missing states, labels, guards, winners, certificates, sleep sets, or
@@ -985,7 +1014,7 @@ certificate directly, and complete/lexical/learned-no-use do not relation-match.
 Each policy/curriculum has a 2,000,000-unit lifecycle cap, 65,536 complete-
 history cap. Physical
 operation-event caps are separate and fixed per curriculum: shared Nous
-acquisition 24,000; no-guard acquisition 128; complete 4,096; lexical 4,096;
+acquisition 24,000; no-guard acquisition 192; complete 4,096; lexical 4,096;
 static 4,096; dynamic 8,192; Nous 8,192; no-guard 4,096; learned-no-use 4,096.
 Crossing any cap yields the honest frozen terminal; it never licenses partial
 compound execution.
@@ -1115,7 +1144,7 @@ invalid; every `zero` range must contain zero:
 | 104 refinement-edge, 96 | parent `[0,32)`, child `[32,64)`, atom `uint16` `[64,66)`, polarity `[66,67)`, status `[67,68)`, ordinal `uint32` `[68,72)`, zero `[72,96)` |
 | 105 observation-core, 512 | version/label/status/null-bitmap `[0,4)`, state `[4,36)`, a `[36,68)`, b `[68,100)`, a-initial `[100,132)`, b-initial `[132,164)`, b-after-a `[164,196)`, a-after-b `[196,228)`, ab-state `[228,260)`, ba-state `[260,292)`, operation-root `[292,324)`, zero `[324,512)` |
 | 106 view-evidence, 512 | view `[0,32)`, observation `[32,64)`, semantic-world `[64,96)`, normalization-proof `[96,128)`, original-state `[128,160)`, original-actions-root `[160,192)`, occurrence-map-root `[192,224)`, bank/cell-count/action-count/status `[224,228)`, zero `[228,512)` |
-| 107 training-operation, 256 | version/kind/status/result `[0,4)`, left/state `[4,36)`, right/action `[36,68)`, result-object `[68,100)`, input-root `[100,132)`, output-root `[132,164)`, call-root `[164,196)`, zero `[196,256)` |
+| 107 training-operation, 256 | version/kind/status/result `[0,4)`, left/state `[4,36)`, right/action `[36,68)`, result-object `[68,100)`, zero `[100,256)` |
 
 Atom codes are the displayed guard-atom order 1..15; polarity 0 is negative and
 1 positive. Observation labels are commutes 1, a-enables-b 2, b-enables-a 3,
@@ -1146,11 +1175,21 @@ Row 107 has this closed status/result matrix:
 
 For applicability and apply, `left/state` is the input state digest and
 `right/action` is the occurrence digest. For equality they are respectively
-the left-state and right-state digests. The input and output roots are the
-canonical ordered-vector roots for the aligned charged call; `call-root` is
-that call's journal call ID. Every status/result pairing not listed above,
-including valid apply with a zero result after `applied` or a nonzero result in
-any other row, is invalid.
+the left-state and right-state digests. Every status/result pairing not listed
+above, including valid apply with a zero result after `applied` or a nonzero
+result in any other row, is invalid.
+
+Row 107 is the result core committed by, and therefore constructed before, its
+aligned call record; it contains no input-vector, output-vector, call-ID, or
+detail digest. For applicability and equality, call detail has input count 2
+and output count 1: digest slots 0 and 1 are the row's left/right objects and
+slot 2 is the row-107 leaf digest. For apply, input count is 3: slots 0 and 1
+are state and occurrence and slot 2 is the required applicability-row digest.
+An applied call has output count 2, with the resulting state in slot 3 and the
+row-107 leaf in slot 4; an inapplicable or invalid call has output count 1 and
+the row-107 leaf in slot 3. The journal hashes those exact detail slices only
+after the result core and any resulting state exist, so construction is
+acyclic and the producing call always commits its result.
 
 Merkle hashing is binary and domain-separated. A leaf preimage is hex bytes
 `41525442312d4c45414600 || kind:uint16 || ordinal:uint32 || record`; a parent
@@ -1169,7 +1208,7 @@ Object-index kind is a separate closed decoder enum:
 | 5 | `remaining-occurrences/v1` |
 | 6 | `action-relation-pattern/v1` |
 | 7 | `action-guard/v1` |
-| 8 | alpha-normalized action-facts wire |
+| 8 | `action-local-facts/v1` |
 | 9 | `guarded-action-relation/v1` |
 | 10 | `guarded-action-artifact/v1` |
 | 11 | `action-training-evidence/v1` |
@@ -1196,14 +1235,21 @@ Object-index kind is a separate closed decoder enum:
 | 32 | `actionrelation-world-policy-row/v1` |
 | 33 | `actionrelation-curriculum-policy-row/v1` |
 | 34 | `actionrelation-evidence-payload/v1` |
-| 35 | canonical semantic Store snapshot wire |
+| 35 | `action-store-boundary/v1` |
 | 36 | generator-attempt-ledger wire |
+| 37 | `action-validity-row/v1` |
+| 38 | `action-applicability-row/v1` |
+| 39 | `action-transition-row/v1` |
+| 40 | `action-state-equality-row/v1` |
+| 41 | `action-literal-evaluation-row/v1` |
+| 42 | `action-relation-match-row/v1` |
+| 43 | `action-unanimous-use/v1` |
+| 44 | `local-diamond-certificate-attempt/v1` |
+| 45 | `action-raw-input/v1` |
 
 The descriptive wires in that table are exactly:
 
 ```text
-["action-facts/v1",stateDigest,occurrenceDigest,patternDigest,
- readRoleInts,writeRoleInts,atomTruthBitset]
 ["certificate-cache-row/v1",stateDigest,minOccurrenceDigest,
  maxOccurrenceDigest,result,orderedProofCallIDs]
 ["compound-work-reservation/v1",runID,taskDigest,operationCodes,
@@ -1212,25 +1258,87 @@ The descriptive wires in that table are exactly:
  evaluationTableRoots,winnerDigests,status]
 ["action-scorer-truth-shard/v1",worldDigest,shardOrdinal,shardCount,
  terminalDigestRows,pairLabelRows]
-["action-store-snapshot/v1",[[unitName,unitKind,[[slotName,valueDigest]...]]...]]
+["action-store-boundary/v1",tableManifestDigests,acquisitionIndexRootDigests]
 ["action-generator-attempt-ledger/v1",panel,curriculum,attempt,
  [[phase,startWork,endWork,predicate,status]...],totalWork,terminal]
+["action-validity-row/v1",objectClass,sourceBytesDigest,result,status]
+["action-applicability-row/v1",stateDigest,occurrenceDigest,result,status]
+["action-transition-row/v1",stateDigest,occurrenceDigest,
+ applicabilityRowDigest,resultStateDigestOrZero,status]
+["action-state-equality-row/v1",leftStateDigest,rightStateDigest,result,status]
+["action-literal-evaluation-row/v1",stateDigest,aFactsDigest,bFactsDigest,
+ atom,polarity,result,status]
+["action-relation-match-row/v1",relationDigest,stateDigest,aFactsDigest,
+ bFactsDigest,aApplicabilityDigest,bApplicabilityDigest,traceAdmissible,
+ patternResult,literalRowDigests,result,status]
+["action-unanimous-use/v1",artifactDigest,stateDigest,aOccurrenceDigest,
+ bOccurrenceDigest,orderedRelationMatchDigests,result,status]
+["local-diamond-certificate-attempt/v1",stateDigest,aOccurrenceDigest,
+ bOccurrenceDigest,witnessDigest,orderedOperationRowDigests,result,
+ certificateDigestOrZero,status]
+["action-raw-input/v1",objectClass,base64urlNoPadding]
 ```
 
-Role integers, operation codes, digests, units, slots, phase rows, terminal
-rows, and pair-label rows use the canonical ordering already frozen for their
-types. Bitset is a two-byte big-endian value with atoms 1..15 in bits 0..14 and
-bit 15 zero. `result` and every status/terminal use the closed taxonomies in
-this plan. No protected execution is authorized if any tracked producer can
-emit an object outside this table. A record must decode as exactly its named
-kind; zero, unknown, or cross-kind bytes are invalid.
+Role integers, operation codes, digests, phase rows, terminal rows, and
+pair-label rows use the canonical ordering already frozen for their types.
+`objectClass` is `state` or `action`; `sourceBytesDigest` is the digest of the
+kind-45 wrapper, which commits the exact supplied bytes even when invalid.
+Booleans are literal JSON Booleans.
+`literalRowDigests` are guard-literal ordered and have exactly the relation's
+guard length; `orderedRelationMatchDigests` has exactly one entry for every
+artifact relation in artifact order. Attempt operation rows are execution
+order. Result/status pairs use the closed terminal taxonomy and reconstruct
+from their named inputs; every `OrZero` field is a raw zero digest exactly in
+the nonproducing case. No protected execution is authorized if any tracked
+producer can emit an object outside this table. A record must decode as exactly
+its named kind; zero, unknown, or cross-kind bytes are invalid.
+
+Every call-detail input or output digest resolves to exactly one leaf with one
+matching decoder: an ARTB kind/ordinal leaf for acquisition fixed rows or an
+object-index kind for all other durable inputs and outputs. In particular,
+utility validity, applicability, transition, equality, literal evaluation,
+relation matching, unanimous use, and certificate attempts are kinds 37..44;
+none may be represented by ARTB kind 107 or by an untyped JSON blob.
+Validity calls have one kind-45 input in slot 0. A valid call has two outputs:
+the parsed kind-1 state or kind-2 semantic action in slot 1 and its kind-37 row
+in slot 2; invalid input has only the kind-37 output in slot 1. The kind-45
+wrapper contains candidate canonical `finite-action-state/v1` or
+`finite-action-semantic/v1` bytes, respectively. All later calls consume the
+parsed object, never the raw wrapper.
+
+For kinds 37, 38, 40, 41, 42, and 43, status is `valid` or `invalid-input`;
+invalid input requires result false. Validity is true exactly with `valid`.
+Transition status is exactly `applied`, `inapplicable`, or `invalid-input`, and
+its result-state digest is nonzero only for `applied`. A certificate attempt's
+result is exactly `certified`, `not-certified`, or `invalid`; status is `valid`
+for the first two and `invalid-input` for the last, and its certificate digest
+is nonzero exactly for `certified`. The verifier rejects every other pairing.
+
+The Store boundary is logical rather than a serialization of physical unit
+names. Its table manifests are kind-code ordered and cover every acquisition
+fixed row; its acquisition index roots are raw-digest ordered and cover every
+other acquisition object. Together they are complete and disjoint. Unit names
+and slots are deterministically reconstructed from `(decoderKind, ordinal or
+objectDigest)` and do not enter semantic identity, so occupied-name suffixes
+cannot alter the boundary. There is no flat unit/slot snapshot and no snapshot
+shard: the compact boundary object is at most 1,024 bytes and is charged in the
+acquisition-small-object class.
 
 An object-index row is exactly 96 bytes: digest (32), offset `uint64` (8),
 length `uint32` (4), kind `uint16` (2), pack ordinal `uint16` (2), and 48 zero
 bytes. Rows are digest ordered. A shard has at most 4,096 rows and 1 MiB. A
 small object is at most 1,024 bytes; a large object is at most 65,536 bytes.
 Any pack is at most 16 MiB; deterministic split points are named in a root
-manifest. The verifier checks headers, lengths, digests, canonical decoders,
+manifest. An object pack is exactly `ASCII("AROP1\n")` followed by digest-
+ordered frames, each `length:uint32 || objectBytes`, with big-endian length and
+no padding or trailer. Index `offset` points to the first byte of `objectBytes`,
+not its four-byte prefix, and index `length` counts only `objectBytes`. Thus the
+first offset is 10; for every row the four bytes at `[offset-4,offset)` equal
+`length`, SHA-256 of `[offset,offset+length)` equals `digest`, and the next
+frame prefix or exact end-of-pack begins at `offset+length`. Packs split
+greedily before the first frame that would exceed 16 MiB; an individual frame
+that cannot fit is invalid. The verifier checks headers, frame boundaries,
+lengths, digests, canonical decoders,
 complete index coverage, object uniqueness, journal and detail sequence
 alignment, journal hash-chain continuity, zero padding, absence of trailing
 bytes, and root closure.
@@ -1258,8 +1366,8 @@ curriculum capacity table:
 
 | Class | Maximum | Bytes each | Maximum bytes |
 | --- | ---: | ---: | ---: |
-| operation journal | 60,992 | 128 | 7,806,976 |
-| call detail | 60,992 | 320 | 19,517,440 |
+| operation journal | 61,056 | 128 | 7,815,168 |
+| call detail | 61,056 | 320 | 19,537,920 |
 | acquisition fixed-row tables | 22,229 | kind-specific | 2,636,864 |
 | fixture state/action small object | 512 | 1,024 | 524,288 |
 | acquisition small object | 1,024 | 1,024 | 1,048,576 |
@@ -1273,9 +1381,11 @@ curriculum capacity table:
 The table-row count is
 `13,920+7,216+451+450+16+32+144 = 22,229`; its byte total is the sum of
 the fixed classes above. The event count is exactly
-`24,000 + 128 + 5*4,096 + 2*8,192 = 60,992`. The capacity table totals
-39,797,824 bytes, below
-the frozen 38 MiB curriculum reservation. The panel additionally reserves 16
+`24,000 + 192 + 5*4,096 + 2*8,192 = 61,056`. The capacity table totals
+39,826,496 bytes, 19,392 bytes below
+the frozen 38 MiB curriculum reservation. The no-guard cap covers its frozen
+maximum of 144 training operations plus root allocation, 16 root matches, one
+candidate result, and one freeze (163 events). The panel additionally reserves 16
 MiB: at most 14 MiB for its report and 2 MiB aggregate for receipts and the
 publication manifest. Hence the exact
 development, validation, and locked caps are respectively 624, 928, and 1,232
