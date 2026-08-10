@@ -2138,6 +2138,8 @@ Canonical top-level wires are closed arrays, not extensible objects:
 ["actionrelation-terminal-receipt/v2",panel,state,runningReceiptRefOrZero,
  sourceRoot,fixtureRootRef,attemptCommitment,reportRef,evidencePayloadRef,
  reason]
+["actionrelation-invalid-authority/v1",panel,kind,sourceRoot,
+ attemptCommitment,reason,"invalid"]
 ["actionrelation-publication/v3",planReviewRef,implementationReviewRef,
  buildAuthorityRef,competenceRef,claimReceiptRefOrZero,runningReceiptRefOrZero,
  primaryExecutionRef,auditExecutionRef,auditAttestationRef,runEvidenceRef,
@@ -2209,6 +2211,17 @@ Development uses raw zero digests for its absent claim/running `RefOrZero`
 fields. Validation and locked require nonzero canonical references. Every panel
 requires a nonzero terminal-receipt reference. `publication.json` excludes its
 own digest; its frozen path and final Git commit bind it without a self-cycle.
+
+If execution fails after its preflight boundary but before the fixture, report,
+or evidence payload exists, the missing path is filled once with the compact
+`invalid-authority` wire above. `kind` is exactly `fixture-root`,
+`evidence-payload`, or `report`; source root and attempt commitment equal the
+terminal receipt, and reason is the same bounded ASCII failure reason. Such a
+document is legal only as a reference from an `invalid` terminal receipt and
+is forbidden from a publication. Existing complete authority bytes are named
+directly instead of being overwritten. Development uses the zero attempt
+commitment and, like protected execution, terminalizes every failure after
+preflight.
 
 For every curriculum-policy pair, `searchWorkVector` is the componentwise sum
 of the six utility vectors and `lifecycleWorkVector = acquisitionWorkVector +
