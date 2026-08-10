@@ -2,7 +2,8 @@
 
 Status: accepted on 2026-08-08 at
 `7067e7b9f3a1fb60c5b2c9c7f769336592532396` after four adversarial review
-rounds.
+rounds. The Vocabulary 3 marginal-endpoint amendment below is provisional until
+the exact guarded-action-relations plan commit receives unanimous review.
 
 Revision record:
 
@@ -21,7 +22,12 @@ Revision record:
 - revision 4 removes that second primary-claim path and precisely distinguishes
   passive/public Part 3 invariant refinement from Part 2's active hidden-probe
   macro-F1 hypothesis; the adversarial reviewer returned unqualified `ACCEPT`
-  with no remaining blocker or major concern.
+  with no remaining blocker or major concern; and
+- revision 5 provisionally permits Vocabulary 3 V1 to claim post-freeze
+  marginal search utility without implying lifecycle amortization, because its
+  exhaustive guarded-relation acquisition is intentionally larger than the
+  bounded six-world use horizon. It remains subject to the lane's unanimous
+  plan review.
 
 Part 3 is a destination-independent curriculum for improving Nous one
 reasoning operation at a time. It does not amend, resume, or claim completion
@@ -141,7 +147,7 @@ Repository and claim identities are also fixed:
 | --- | --- | --- |
 | Nogoods | `internal/vocab/nogoods`; `internal/nogoodfixture`; `internal/nogoodexp`; `nogood-trials` | a scoped learned nogood reduces total held-out CSP lifecycle work while preserving the exact solution set |
 | Transformation schema | `internal/vocab/transformschema`; `internal/transformschemafixture`; `internal/transformschemaexp`; `transformschema-trials` | an induced executable schema improves exact held-out transformation success under a fixed lifecycle budget and alpha-renaming without false application |
-| Action relations | `internal/vocab/actionrelations`; `internal/actionrelationfixture`; `internal/actionrelationexp`; `actionrelation-trials` | a learned guarded relation plus charged local certificates reduces total lifecycle work while preserving terminal behaviors |
+| Action relations | `internal/vocab/actionrelations`; `internal/actionrelationfixture`; `internal/actionrelationexp`; `actionrelation-trials` | a learned guarded relation plus charged local certificates reduces post-freeze search work while preserving terminal behaviors; V1 reports but does not claim lifecycle amortization |
 | Invariant refinement | `internal/vocab/invariantrefine`; `internal/invariantrefinefixture`; `internal/invariantrefineexp`; `invariantrefine-trials` | counterexample-driven formula lineage improves held-out macro F1 under a fixed lifecycle budget on a public trace corpus |
 | Macro library | `internal/vocab/macrolib`; `internal/macrolibfixture`; `internal/macrolibexp`; `macrolib-trials` | a learned expansion-equivalent macro reduces total stream proposal/construction work after full amortization |
 | Abduction | `internal/vocab/abduction`; `internal/abductionfixture`; `internal/abductionexp`; `abduction-trials` | a learned fault signature reduces passive diagnosis lifecycle work while preserving every subset-minimal diagnosis |
@@ -256,9 +262,14 @@ must satisfy all of the following:
 - paired seeds and deterministic independent randomness streams; and
 - confidence intervals or exact paired tests appropriate to the frozen panel.
 
-Both total lifecycle work and post-training inference work are reported. The
-former determines the primary reuse claim; the latter diagnoses whether a null
-is caused by bad guidance or an insufficient reuse horizon.
+Both total lifecycle work and post-training inference work are reported. Total
+lifecycle work determines a reuse/payback claim. A lane may instead
+preregister a narrower post-training marginal-use claim only when it states
+that acquisition payback is unproven, freezes a lifecycle ratio and crossover
+as secondary outcomes, and cannot use `valid-positive` language to imply
+amortization. Vocabulary 3 V1 uses this exception because its complete 451-
+guard acquisition necessarily exceeds its deliberately tiny six-world search
+horizon.
 
 Every lane-specific plan defines one common semantic-work ledger before any
 panel is generated. At minimum it has separately reconciled counters for
@@ -638,12 +649,14 @@ baselines pay the same units for relation construction, dependency lookup,
 transition execution, and certificate checking. Raw category counts are also
 reported.
 
-The primary endpoint is total charged lifecycle work across the frozen
-relation-training and later-use horizon while preserving the complete terminal
-behavior set. Post-freeze explored histories and state transitions are
-diagnostic secondary endpoints, along with relation precision, equivalence
-class size, guard complexity, and the amortization crossover. Any lost terminal
-behavior or missed violation mechanically invalidates the reduction claim.
+V1's primary endpoint is total post-freeze charged search work across the
+frozen later-use horizon while preserving the complete terminal behavior set.
+Acquisition remains fully charged in a separately reported lifecycle ratio;
+the report also gives the frozen amortization crossover. A V1 `valid-positive`
+therefore means marginal search utility once the relation exists, not lifecycle
+payback. Relation precision, equivalence-class size, and guard complexity are
+diagnostic. Any lost terminal behavior or missed violation mechanically
+invalidates the reduction claim.
 
 ### Main risks and non-claims
 

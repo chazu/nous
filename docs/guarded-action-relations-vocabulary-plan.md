@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 4.
+Status: provisional Part 3 Vocabulary 3 plan, revision 5.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -29,9 +29,20 @@ uses finite stratum skeleton catalogs instead of improbable random filtering,
 freezes the full generator cost schedule and inner-power ordinal, and adds
 capacity-derived acquisition tables plus a realizable call-detail layout.
 
-This plan narrows the accepted
-[Part 3 vocabulary research program](vocabulary-research-program-v3.md) without
-amending it. Its exact lane identity is:
+Revision 4 was committed at
+`734e587e3e9935f93c0a677d0291ec949b80d8d7`. Architecture accepted it;
+semantics and experimental review rejected it because acquisition's mandatory
+22,000-plus operations made a six-world total-lifecycle positive mathematically
+impossible, relation applicability lacked a ledger event, and table wire codes
+were incomplete. Revision 5 makes post-freeze search work the primary marginal
+endpoint, retains lifecycle payback as a secondary crossover, and closes those
+remaining event and byte wires.
+
+This plan narrows and, in revision 5, explicitly amends the
+[Part 3 vocabulary research program](vocabulary-research-program-v3.md). The
+companion amendment limits V1's positive claim to post-freeze marginal search
+utility and requires lifecycle cost/crossover disclosure; it does not claim
+amortization. Its exact lane identity is:
 
 - domain: `domains/actionrelations`;
 - production semantics: `internal/vocab/actionrelations`;
@@ -107,7 +118,7 @@ panel constructor is callable:
   "certificate_version": "local-diamond-certificate/v1",
   "search_version": "certified-sleep-search/v1",
   "cost_version": "actionrelation-lifecycle/v1",
-  "statistics_version": "paired-stratified-ratio/v1",
+  "statistics_version": "paired-stratified-search-ratio/v2",
   "report_version": "actionrelation-trials/v1",
   "evidence_version": "actionrelation-packed-evidence/v1",
   "maximum_cells": 3,
@@ -133,7 +144,7 @@ panel constructor is callable:
   "development_power_inner_replicates": 2000,
   "bootstrap_replicates": 10000,
   "randomization_replicates": 10000,
-  "minimum_locked_work_reduction": 0.15,
+  "minimum_locked_search_work_reduction": 0.15,
   "minimum_locked_saving_coverage": 0.80,
   "minimum_locked_power": 0.80,
   "alpha": 0.05,
@@ -683,8 +694,8 @@ semantics, task order, budgets, and terminal scorer commitment.
 7. `learned-no-use`: performs identical acquisition and artifact persistence,
    then uses complete exploration without the artifact.
 
-The primary endpoint compares `nous-guarded-sleep` with
-`dynamic-diamond-sleep`. Static read/write is a secondary conventional
+The primary endpoint compares their summed post-freeze search work;
+`nous-guarded-sleep` versus `dynamic-diamond-sleep`. Static read/write is a secondary conventional
 baseline. Complete and lexical policies establish the unreduced behavior set.
 No-guard tests conditionality; learned-no-use separates artifact acquisition
 from causal search use.
@@ -931,6 +942,7 @@ The exhaustive word-to-counter map is:
 | 18 | certificate-cache lookup | 11 |
 | 19 | terminal/deadlock construction | 12 |
 | 20 | acquisition `ar-candidate-result` | 5 |
+| 21 | learned relation-instance `ar-applicable?` | 10 |
 
 Validity parsing, evidence serialization, CUE scheduling, and task-token
 movement are uncharged infrastructure and separately counted; they may not
@@ -946,6 +958,17 @@ reserved unit as `budget-exhausted`. The verifier derives each
 counter from operation codes, rejects caller-supplied deltas, and proves
 `total = sum(vector)`.
 
+For each learned candidate pair, code 21 runs in order for taken occurrence then
+sleeper—exactly twice for a valid co-enabled pair—after candidate enumeration,
+before any retained-relation pattern
+or literal row, and before certificate-cache lookup. It is once per pair, not
+once per retained relation. Either false/error result records its charged event
+and terminates matching for that pair; the second call is omitted only when the
+first is false/error. Success does not replace the certificate's separately
+charged initial applicability rows. Nous and no-guard invoke code 21;
+static/dynamic policies never do because their witness path enters the
+certificate directly, and complete/lexical/learned-no-use do not relation-match.
+
 Each policy/curriculum has a 2,000,000-unit lifecycle cap, 65,536 complete-
 history cap. Physical
 operation-event caps are separate and fixed per curriculum: shared Nous
@@ -954,10 +977,13 @@ static 4,096; dynamic 8,192; Nous 8,192; no-guard 4,096; learned-no-use 4,096.
 Crossing any cap yields the honest frozen terminal; it never licenses partial
 compound execution.
 
-Total lifecycle work across acquisition plus all six utility worlds determines
-the primary comparison. Post-freeze utility work, histories, transitions,
-certificate attempts/successes, guard precision/recall, artifact size, and
-amortization crossover are diagnostics only.
+Post-freeze search work across all six utility worlds determines the primary
+marginal comparison. Total lifecycle work still includes acquisition exactly
+once but is secondary: the report publishes its ratio and the amortization
+crossover. Histories, transitions, certificate attempts/successes, guard
+precision/recall, and artifact size are diagnostics. V1 can therefore establish
+that an acquired relation improves later search; it does not claim the small
+panel has already repaid acquisition.
 
 ## Independent oracle and competence
 
@@ -1029,10 +1055,19 @@ and therefore remain distinct logical leaves. A shard manifest fixes its
 inclusive sequence range. Journal and detail offsets are derived from fixed
 record sizes and sequence ranges; neither has a per-record index.
 
+Call-detail `kind` is the following closed `uint16` enum: 1 validity, 2 fact, 3
+applicability, 4 transition, 5 equality, 6 guard, 7 refinement-edge, 8
+literal-evaluation, 9 observation-core, 10 presentation-view, 11 candidate, 12
+candidate-result, 13 barrier, 14 relation, 15 artifact, 16 pattern-match, 17
+unanimous-use, 18 eligibility-witness, 19 certificate-attempt, 20 certificate,
+21 propagation-core, 22 proof-map, 23 search-node, 24 search-edge, 25
+completed-subtree, 26 terminal-behavior, 27 work-reservation, 28 work-terminal,
+29 cache-row, 30 policy-row, 31 view-evidence, and 32 normalization-proof. Zero
+and every other value are invalid.
+
 Acquisition-table packs start with `ARTB1\n`. Each manifest fixes one row kind,
-record size, count, inclusive ordinal range, and Merkle root over
-`SHA-256(["actionrelation-table-leaf/v1",kind,ordinal,recordBytes])` in ordinal
-order, duplicating the final node at an odd level. The fixed tables are 13,920
+record size, count, inclusive ordinal range, and the binary Merkle root defined
+below over rows in ordinal order. The fixed tables are 13,920
 signed-literal rows at 128 bytes, 7,216 guard/observation results at 96 bytes,
 451 candidates at 128 bytes, 450 refinement edges at 96 bytes, 16 observation
 cores at 512 bytes, 32 view-evidence rows at 512 bytes, and at most 144 training
@@ -1041,9 +1076,48 @@ leaf digest. The verifier locates it by kind/ordinal and recomputes the table
 root, preserving individual verification. These rows are the exact CUE Store
 boundary; they are not duplicated in object packs or object indexes.
 
+The manifest wire is
+`["actionrelation-table-manifest/v1",kind,recordSize,count,
+[[packOrdinal,firstOrdinal,lastOrdinal,packDigest]...],merkleRoot]`; shard rows
+are ordinal ordered, contiguous, nonoverlapping, and cover `0..count-1`.
+
+ARTB `kind` codes and big-endian fixed layouts are closed as follows. Every
+named digest is raw 32 bytes; Boolean bytes are 0 or 1; status is 1 valid or 2
+invalid; every `zero` range must contain zero:
+
+| Code/kind/size | Frozen offsets `[start,end)` |
+| --- | --- |
+| 101 signed-literal, 128 | guard `[0,32)`, observation `[32,64)`, atom `uint16` `[64,66)`, polarity `[66,67)`, result `[67,68)`, status `[68,69)`, zero `[69,96)`, fact-root `[96,128)` |
+| 102 guard-result, 96 | guard `[0,32)`, observation `[32,64)`, result `[64,65)`, status `[65,66)`, zero `[66,96)` |
+| 103 candidate, 128 | guard `[0,32)`, parent `[32,64)`, pattern `[64,96)`, ordinal `uint16` `[96,98)`, literal-count `[98,99)`, status `[99,100)`, zero `[100,128)` |
+| 104 refinement-edge, 96 | parent `[0,32)`, child `[32,64)`, atom `uint16` `[64,66)`, polarity `[66,67)`, status `[67,68)`, ordinal `uint32` `[68,72)`, zero `[72,96)` |
+| 105 observation-core, 512 | version/label/status/null-bitmap `[0,4)`, state `[4,36)`, a `[36,68)`, b `[68,100)`, a-initial `[100,132)`, b-initial `[132,164)`, b-after-a `[164,196)`, a-after-b `[196,228)`, ab-state `[228,260)`, ba-state `[260,292)`, operation-root `[292,324)`, zero `[324,512)` |
+| 106 view-evidence, 512 | view `[0,32)`, observation `[32,64)`, semantic-world `[64,96)`, normalization-proof `[96,128)`, original-state `[128,160)`, original-actions-root `[160,192)`, occurrence-map-root `[192,224)`, bank/cell-count/action-count/status `[224,228)`, zero `[228,512)` |
+| 107 training-operation, 256 | version/kind/status/result `[0,4)`, left/state `[4,36)`, right/action `[36,68)`, result-object `[68,100)`, input-root `[100,132)`, output-root `[132,164)`, call-root `[164,196)`, zero `[196,256)` |
+
+Atom codes are the displayed guard-atom order 1..15; polarity 0 is negative and
+1 positive. Observation labels are commutes 1, a-enables-b 2, b-enables-a 3,
+a-disables-b 4, b-disables-a 5, mutual-disables 6, inapplicable 7, conflicts 8,
+invalid 9. Null-bitmap bits 0..5 correspond in order to a-initial, b-initial,
+b-after-a, a-after-b, ab-state, ba-state and require the associated digest be
+zero exactly when the bit is 1; bits 0 and 1 must be zero. View bank is 0 for
+the `xa/aa` bank and 1 for the `red/joba` bank. Training-operation kinds are applicability 1,
+apply 2, and equality 3. Candidate ordinal is 0..450 and edge ordinal 0..449;
+the root candidate's parent digest is zero. Version bytes are 1. In row 105,
+bytes 1, 2, and 3 are label, status, and bitmap. In row 106, bytes 224..227
+are bank, cell count, action count, and status. In row 107, bytes 1..3 are kind,
+status, and Boolean/result code. Candidate literal count is 0..2.
+
+Merkle hashing is binary and domain-separated. A leaf preimage is hex bytes
+`41525442312d4c45414600 || kind:uint16 || ordinal:uint32 || record`; a parent
+preimage is `41525442312d4e4f444500 || leftDigest || rightDigest`. Both use
+SHA-256; an odd final node is duplicated as both left and right. Counts are
+nonzero, so no empty-table root exists.
+
 An object-index row is exactly 96 bytes: digest (32), offset `uint64` (8),
 length `uint32` (4), kind `uint16` (2), pack ordinal `uint16` (2), and 48 zero
 bytes. Rows are digest ordered. A shard has at most 4,096 rows and 1 MiB. A
+row's kind uses the same closed 1..32 enum as call detail. A
 small object is at most 1,024 bytes; a large object is at most 65,536 bytes.
 Any pack is at most 16 MiB; deterministic split points are named in a root
 manifest. The verifier checks headers, lengths, digests, canonical decoders,
@@ -1162,15 +1236,16 @@ Canonical top-level wires are closed arrays, not extensible objects:
  behaviorEqual,budgetRemaining,operationRoot]
 ["actionrelation-curriculum-policy-row/v1",panel,curriculum,family,policy,
  acquisitionTerminal,artifactDigest,acquisitionWorkVector,
- sixOrderedWorldRowDigests,aggregateTerminal,curriculumWorkVector,
- curriculumTotal,behaviorEqual,budgetRemaining,operationRoot]
+ sixOrderedWorldRowDigests,aggregateTerminal,searchWorkVector,searchTotal,
+ lifecycleWorkVector,lifecycleTotal,behaviorEqual,budgetRemaining,operationRoot]
 ["actionrelation-evidence-payload/v1",fixtureRoot,executionCoreDigest,
  objectPackRoots,journalPackRoots,detailPackRoots,acquisitionTableRoots,indexRoots,
  worldPolicyRowsRoot,curriculumPolicyRowsRoot]
 ["actionrelation-report/v1",panel,authority,manifestDigest,reviewDigests,
  buildDigest,fixtureRoot,runningReceiptDigest,curriculumPolicyRowsRoot,
  mechanicalGates,
- primaryRatio,confidenceInterval,randomizationP,savingCoverage,power,
+ primarySearchRatio,lifecycleRatio,amortizationRows,confidenceInterval,
+ randomizationP,savingCoverage,power,
  classification,evidencePayloadDigest]
 ["actionrelation-terminal-receipt/v1",panel,state,runningReceiptDigest,
  sourceRoot,fixtureRoot,attemptCommitment,reportDigest,evidencePayloadDigest,
@@ -1190,16 +1265,16 @@ contains neither report nor terminal-receipt digests, and the execution core
 contains no payload digest. No referenced or unreferenced leaf may be missing
 or extra.
 
-For every curriculum-policy pair,
-`curriculumWorkVector = acquisitionWorkVector + sum(six utilityWorkVectors)`
-componentwise and `curriculumTotal = sum(curriculumWorkVector)`. Acquisition is
-charged exactly once. Static/dynamic/complete/lexical acquisition vectors are
-zero; Nous and learned-no-use each reference and charge the same shared
-acquisition; no-guard references and charges its root-only acquisition. The
+For every curriculum-policy pair, `searchWorkVector` is the componentwise sum
+of the six utility vectors and `lifecycleWorkVector = acquisitionWorkVector +
+searchWorkVector`; each total is the sum of its vector. Acquisition is charged
+exactly once in lifecycle work. Static/dynamic/complete/lexical acquisition
+vectors are zero; Nous and learned-no-use each reference and charge the same
+shared acquisition; no-guard references and charges its root-only acquisition. The
 aggregate terminal is `completed` when acquisition reaches `not-applicable`,
 `completed`, or honest `no-discovery` and all six searches complete; otherwise
 it is the first `budget-exhausted` or invalid terminal in acquisition then world
-ordinal order. Only curriculum totals enter inference.
+ordinal order. Only curriculum search totals enter primary inference.
 
 Validation and locked use three committed stages. `-stage claim` creates a
 `claimed` receipt without seed material and must be committed/pushed on `main`.
@@ -1227,8 +1302,8 @@ The world- and curriculum-policy wires above are authoritative; every aggregate
 in the report is recomputed from those leaves. Training precision/recall and
 per-stratum matched pairs are contained in `matchCounts`; attempted/successful/
 cached-success/cached-failure counts are in `certificateCounts`. Bootstrap and
-randomization consume exactly the 16, 24, or 32 curriculum-policy totals, never
-world rows.
+randomization consume exactly the 16, 24, or 32 curriculum-policy search
+totals, never lifecycle totals or world rows.
 
 Mechanical validity precedes empirical classification and requires:
 
@@ -1250,17 +1325,23 @@ match may authorize a skip; its behavior set must still remain exact. A failed
 certificate is valid measured work. A missing, forged, reused, or false accepted
 certificate is mechanical invalidity.
 
-The paired primary ratio is:
+The paired primary marginal ratio is:
 
 ```text
-sum(total lifecycle work of nous-guarded-sleep)
+sum(search work across six worlds of nous-guarded-sleep)
 ------------------------------------------------
-sum(total lifecycle work of dynamic-diamond-sleep)
+sum(search work across six worlds of dynamic-diamond-sleep)
 ```
+
+The secondary lifecycle ratio replaces each numerator/denominator with
+`acquisition + search`. For each curriculum with positive search saving,
+amortization batches are
+`ceil(nousAcquisition / (dynamicSearch - nousSearch))`; zero/negative saving is
+reported as `infinite`. No lifecycle ratio or crossover gates progression.
 
 Only curricula where both primary policies mechanically complete enter the
 ratio; any omitted curriculum makes a protected result `valid-null`, never a
-smaller denominator. A zero dynamic denominator is mechanical invalidity.
+smaller denominator. A zero dynamic search denominator is mechanical invalidity.
 Ratios and threshold comparisons use nonnegative arbitrary-precision integer
 cross-products; decimal renderings are diagnostics.
 
@@ -1281,12 +1362,12 @@ Selection uses `pick(S(...),n) = floor(S(...)*n/2^64)`. No stream state,
 implicit increment, discarded draw, or other namespace exists. Bootstrap
 resamples within each family with the panel's exact `m`: 2 development, 3
 validation, or 4 locked curriculum rows. Its statistic is the ratio of summed
-curriculum totals. The 10,000 sorted ratios use zero-based indices 249 and
+curriculum search totals. The 10,000 sorted ratios use zero-based indices 249 and
 9,749, breaking equal rational values by replicate index.
 
 The paired randomization statistic is
-`abs(sum_i(nousWork_i - dynamicWork_i))`. Each replicate independently swaps
-the two work values within every curriculum. A replicate is extreme when its
+`abs(sum_i(nousSearch_i - dynamicSearch_i))`. Each replicate independently swaps
+the two search totals within every curriculum. A replicate is extreme when its
 statistic is greater than or equal to the observed statistic, including ties;
 `p = (1 + extremeCount) / 10001`.
 
@@ -1306,9 +1387,10 @@ underlying curriculum digests.
 A mechanically valid locked result is `valid-positive` only when:
 
 1. all 32 paired curricula complete with exact terminal behavior;
-2. aggregate Nous work is at most 85% of dynamic-diamond work;
+2. aggregate Nous post-freeze search work is at most 85% of dynamic-diamond
+   post-freeze search work;
 3. the bootstrap upper confidence bound for the ratio is below 1;
-4. at least 80% of curricula have strictly lower Nous work;
+4. at least 80% of curricula have strictly lower Nous search work;
 5. the paired-randomization p-value is below 0.05; and
 6. the Nous artifact has zero false matched commutativity claims.
 
@@ -1371,7 +1453,8 @@ Before implementation review:
   tests; caller-supplied increments and partial reservations fail;
 - dynamic considers every distinct co-enabled candidate; static and learned
   differ only in their explicit witness rows; cache and acquisition charges
-  reconstruct exactly;
+  reconstruct exactly; code 21 is twice-per-learned-pair before matching and
+  never silently folded into pattern or certificate work;
 - all 32 generator attempts, six stratum slots, policy-blind acceptance rules,
   family counts, exhaustion ledgers, and scorer mapping restrictions are
   mutation-tested;
