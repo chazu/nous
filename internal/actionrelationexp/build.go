@@ -64,6 +64,58 @@ type BuildAuthority struct {
 	Digest                      string
 }
 
+func ParseBuildAuthority(data []byte) (BuildAuthority, error) {
+	if len(data) > 1<<20 {
+		return BuildAuthority{}, fmt.Errorf("build authority exceeds cap")
+	}
+	var fields []json.RawMessage
+	if json.Unmarshal(data, &fields) != nil || len(fields) != 24 {
+		return BuildAuthority{}, fmt.Errorf("invalid build authority wire")
+	}
+	var version string
+	if json.Unmarshal(fields[0], &version) != nil || version != "actionrelation-build-authority/v1" {
+		return BuildAuthority{}, fmt.Errorf("invalid build authority version")
+	}
+	value := BuildAuthority{Canonical: bytes.Clone(data), Digest: shaHex(data)}
+	stringsOut := []*string{
+		&value.PlanCommit, &value.PlanArchiveDigest, nil,
+		&value.ImplementationCommit, &value.ImplementationArchiveDigest, nil,
+		&value.BuildHead, &value.SourceRoot, nil, &value.GitVersion,
+		&value.GoVersion, &value.GoExecutablePath, &value.GoExecutableDigest,
+		&value.MiseTomlDigest, nil, nil, &value.GOOS, &value.GOARCH,
+		&value.CGOEnabled, &value.BinaryPath, &value.BinaryDigest,
+		&value.GoVersionMDigest, nil,
+	}
+	for offset, target := range stringsOut {
+		if target != nil && json.Unmarshal(fields[offset+1], target) != nil {
+			return BuildAuthority{}, fmt.Errorf("invalid build authority field %d", offset+1)
+		}
+	}
+	var err error
+	if value.PlanReview, err = parseAuthorityRef(fields[3]); err != nil {
+		return BuildAuthority{}, err
+	}
+	if value.ImplementationReview, err = parseAuthorityRef(fields[6]); err != nil {
+		return BuildAuthority{}, err
+	}
+	if value.SourceRows, err = parseSourceRows(fields[9]); err != nil {
+		return BuildAuthority{}, err
+	}
+	if json.Unmarshal(fields[15], &value.BuildArgv) != nil {
+		return BuildAuthority{}, fmt.Errorf("invalid build argv wire")
+	}
+	if value.BuildEnvironment, err = parseEnvironmentRows(fields[16]); err != nil {
+		return BuildAuthority{}, err
+	}
+	if value.NonInputRows, err = parseNonInputRows(fields[23]); err != nil {
+		return BuildAuthority{}, err
+	}
+	if err := VerifyBuildAuthority(value); err != nil {
+		return BuildAuthority{}, err
+	}
+	return value, nil
+}
+
 func BuildSourceRoot(implementationCommit string, rows []SourceRow) (string, error) {
 	wires, err := sourceRowWires(rows)
 	if err != nil || !commitText(implementationCommit) {
@@ -246,4 +298,55 @@ func environmentValue(rows []EnvironmentRow, key string) string {
 		}
 	}
 	return ""
+}
+
+func parseAuthorityRef(data json.RawMessage) (AuthorityRef, error) {
+	var wire []json.RawMessage
+	var value AuthorityRef
+	if json.Unmarshal(data, &wire) != nil || len(wire) != 3 || json.Unmarshal(wire[0], &value.Path) != nil || json.Unmarshal(wire[1], &value.Digest) != nil || json.Unmarshal(wire[2], &value.Mode) != nil || value.Verify() != nil {
+		return AuthorityRef{}, fmt.Errorf("invalid authority-reference wire")
+	}
+	return value, nil
+}
+
+func parseSourceRows(data json.RawMessage) ([]SourceRow, error) {
+	var wires [][]json.RawMessage
+	if json.Unmarshal(data, &wires) != nil {
+		return nil, fmt.Errorf("invalid source-row wire")
+	}
+	rows := make([]SourceRow, len(wires))
+	for index, wire := range wires {
+		if len(wire) != 6 || json.Unmarshal(wire[0], &rows[index].Path) != nil || json.Unmarshal(wire[1], &rows[index].GitMode) != nil || json.Unmarshal(wire[2], &rows[index].GitBlobOID) != nil || json.Unmarshal(wire[3], &rows[index].ByteLength) != nil || json.Unmarshal(wire[4], &rows[index].Digest) != nil || json.Unmarshal(wire[5], &rows[index].Role) != nil {
+			return nil, fmt.Errorf("invalid source row %d wire", index)
+		}
+	}
+	return rows, nil
+}
+
+func parseEnvironmentRows(data json.RawMessage) ([]EnvironmentRow, error) {
+	var wires [][]json.RawMessage
+	if json.Unmarshal(data, &wires) != nil {
+		return nil, fmt.Errorf("invalid environment-row wire")
+	}
+	rows := make([]EnvironmentRow, len(wires))
+	for index, wire := range wires {
+		if len(wire) != 2 || json.Unmarshal(wire[0], &rows[index].Key) != nil || json.Unmarshal(wire[1], &rows[index].Value) != nil {
+			return nil, fmt.Errorf("invalid environment row %d wire", index)
+		}
+	}
+	return rows, nil
+}
+
+func parseNonInputRows(data json.RawMessage) ([]NonInputRow, error) {
+	var wires [][]json.RawMessage
+	if json.Unmarshal(data, &wires) != nil {
+		return nil, fmt.Errorf("invalid non-input-row wire")
+	}
+	rows := make([]NonInputRow, len(wires))
+	for index, wire := range wires {
+		if len(wire) != 2 || json.Unmarshal(wire[0], &rows[index].Path) != nil || json.Unmarshal(wire[1], &rows[index].Status) != nil {
+			return nil, fmt.Errorf("invalid non-input row %d wire", index)
+		}
+	}
+	return rows, nil
 }

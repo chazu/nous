@@ -39,6 +39,10 @@ func TestBuildAuthorityClosesSourceToolAndNonInputRows(t *testing.T) {
 	if err := VerifyBuildAuthority(value); err != nil {
 		t.Fatal(err)
 	}
+	parsed, err := ParseBuildAuthority(value.Canonical)
+	if err != nil || !bytes.Equal(parsed.Canonical, value.Canonical) {
+		t.Fatalf("parse: %v", err)
+	}
 	corrupted := value
 	corrupted.SourceRows = append([]SourceRow(nil), value.SourceRows...)
 	corrupted.SourceRows[0].Digest = strings.Repeat("0", 64)
