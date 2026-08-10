@@ -31,7 +31,8 @@ func TestFullCompetenceEvidenceRetainsAllNormalizedGuardTruth(t *testing.T) {
 	// 64 three-cell states * 61 actions.
 	wantTransitions := 4*15 + 16*35 + 64*61
 	wantDiamonds := 61 * 61
-	want := MaximumSequences + 16*451 + wantDiamonds + wantTransitions
+	wantSearches := 8 * 3
+	want := MaximumSequences + 16*451 + wantDiamonds + wantSearches + wantTransitions
 	if !report.Passed || len(evidence.Cases) != want || len(evidence.Results) != want || VerifyEvidence(evidence) != nil {
 		t.Fatalf("report=%+v cases=%d want=%d", report, len(evidence.Cases), want)
 	}

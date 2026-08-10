@@ -1,14 +1,16 @@
 // Package actionrelationcompetence owns the safe, pre-review semantic
-// competence universe. It has no fixture seed, policy, learned artifact, or
-// protected-panel authority.
+// competence universe. It has no fixture seed, learned artifact, or protected-
+// panel authority; its policy cases use only public hand-built tiny worlds.
 package actionrelationcompetence
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/chazu/nous/internal/actionrelationoracle"
+	"github.com/chazu/nous/internal/actionrelationsearch"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
@@ -59,6 +61,12 @@ func RunEvidence() (Report, Evidence, error) {
 	}
 	cases = append(cases, diamondCases...)
 	results = append(results, diamondResults...)
+	searchCases, searchResults, err := runSearchTerminalSets()
+	if err != nil {
+		return report, Evidence{}, err
+	}
+	cases = append(cases, searchCases...)
+	results = append(results, searchResults...)
 	semanticCases, semanticResults, err := runSemanticTransitions()
 	if err != nil {
 		return report, Evidence{}, err
@@ -256,6 +264,59 @@ func runLocalDiamonds() ([]CaseRow, []ResultRow, error) {
 		}
 	}
 	return cases, results, nil
+}
+
+func runSearchTerminalSets() ([]CaseRow, []ResultRow, error) {
+	worlds := []actionrelations.World{
+		{State: namedState(0, 0, 0), Actions: []actionrelations.Action{{Name: "one", Kind: "set", X: "a", N: 1}, {Name: "two", Kind: "set", X: "b", N: 2}, {Name: "three", Kind: "set", X: "c", N: 3}}},
+		{State: namedState(0), Actions: []actionrelations.Action{{Name: "low", Kind: "set", X: "a", N: 1}, {Name: "high", Kind: "set", X: "a", N: 3}}},
+		{State: namedState(0, 0), Actions: []actionrelations.Action{{Name: "claim", Kind: "claim", X: "a"}, {Name: "release", Kind: "release", X: "a"}, {Name: "other", Kind: "set", X: "b", N: 2}}},
+		{State: namedState(0), Actions: []actionrelations.Action{{Name: "check", Kind: "check", X: "a", N: 0}, {Name: "change", Kind: "set", X: "a", N: 1}}},
+		{State: namedState(0), Actions: []actionrelations.Action{{Name: "first", Kind: "claim", X: "a"}, {Name: "second", Kind: "claim", X: "a"}}},
+		{State: namedState(0), Actions: []actionrelations.Action{{Name: "ea", Kind: "emit", Symbol: "a"}, {Name: "eb", Kind: "emit", Symbol: "b"}, {Name: "ec", Kind: "emit", Symbol: "c"}}},
+		{State: namedState(0), Actions: []actionrelations.Action{{Name: "release", Kind: "release", X: "a"}, {Name: "check", Kind: "check", X: "a", N: 1}}},
+		{State: namedState(2, 1, 0), Actions: []actionrelations.Action{{Name: "move", Kind: "transfer", X: "a", Y: "b", N: 1}, {Name: "swap", Kind: "swap", X: "b", Y: "c"}, {Name: "add", Kind: "add", X: "c", N: 1}}},
+	}
+	policies := []actionrelationsearch.Policy{actionrelationsearch.Complete, actionrelationsearch.StaticSleep, actionrelationsearch.DynamicSleep}
+	var cases []CaseRow
+	var results []ResultRow
+	for worldOrdinal, world := range worlds {
+		normalized, err := world.Normalize()
+		if err != nil {
+			return nil, nil, err
+		}
+		stateJSON, _ := normalized.State.CanonicalJSON()
+		actions := make([][]byte, len(normalized.Actions))
+		for index, action := range normalized.Actions {
+			actions[index], _ = action.CanonicalJSON()
+		}
+		oracle, err := actionrelationoracle.CompleteTerminalDigests(stateJSON, actions)
+		if err != nil {
+			return nil, nil, err
+		}
+		worldJSON, _ := normalized.CanonicalJSON()
+		for policyOrdinal, policy := range policies {
+			production, err := actionrelationsearch.Search(world, policy, actionrelationsearch.Artifact{})
+			if err != nil || !slices.Equal(production.TerminalDigests, oracle) {
+				return nil, nil, fmt.Errorf("search disagreement world=%d policy=%s", worldOrdinal, policy)
+			}
+			input, _ := json.Marshal([]any{"actionrelation-competence-search-input/v1", json.RawMessage(worldJSON), string(policy)})
+			output, _ := json.Marshal([]any{"actionrelation-competence-search-result/v1", oracle})
+			caseID := fmt.Sprintf("%02d-%d", worldOrdinal, policyOrdinal)
+			expected := shaHex(output)
+			cases = append(cases, CaseRow{Suite: "search-terminal-sets", CaseID: caseID, Input: shaHex(input), Expected: expected})
+			results = append(results, ResultRow{Suite: "search-terminal-sets", CaseID: caseID, Production: expected, Oracle: expected})
+		}
+	}
+	return cases, results, nil
+}
+
+func namedState(values ...int) actionrelations.State {
+	state := actionrelations.State{Cells: make([]actionrelations.Cell, len(values)), Events: []string{}}
+	for index, value := range values {
+		state.Cells[index] = actionrelations.Cell{Name: string(rune('a' + index)), Value: value}
+	}
+	return state
 }
 
 func productionObserve(state actionrelations.State, a, b actionrelations.SemanticAction) (string, []byte, []byte, error) {
