@@ -1,6 +1,7 @@
 package actionrelationutility
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -25,6 +26,9 @@ func TestCompleteUtilityDFSUsesOnlyReservedCUESemantics(t *testing.T) {
 	}
 	if actionrelationexp.ValidateObject(46, run.RunRoot.Canonical) != nil || len(run.Transcript.CallIDs) != len(run.Records) {
 		t.Fatal("complete utility run lacks an exact charged operation range")
+	}
+	if run.Terminal != "completed" || run.WorkTotal != len(run.Records) {
+		t.Fatalf("complete utility work total=%d records=%d terminal=%s", run.WorkTotal, len(run.Records), run.Terminal)
 	}
 	seen := map[uint16]bool{}
 	hit := false
@@ -63,12 +67,16 @@ func TestLearnedNousUtilityLoadsFrozenArtifactAndUsesCUEBarrierBeforeSleep(t *te
 	}
 	world := independentUtilityWorld()
 	complete, _ := actionrelationsearch.Search(world, actionrelationsearch.Complete, actionrelationsearch.Artifact{})
-	run, err := ExecuteLearnedPolicy(acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, world, actionrelationsearch.NousSleep, "development", actionrelationexp.PlanCommit, 6, 0, len(acquisition.Run.MeterRecords), 2_000_000, "learned-nous")
+	initialWork, _ := MeterWorkVector(acquisition.Run.MeterRecords)
+	run, err := ExecuteLearnedPolicy(acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, world, actionrelationsearch.NousSleep, "development", actionrelationexp.PlanCommit, 6, 0, initialWork, 2_000_000, "learned-nous")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(run.Search.TerminalDigests, complete.TerminalDigests) || len(run.Search.Propagations) == 0 || !run.Search.CertificateEvidenceBound {
 		t.Fatalf("learned=%+v complete=%v", run.Search, complete.TerminalDigests)
+	}
+	if run.WorkTotal != len(acquisition.Run.MeterRecords)+len(run.Records) {
+		t.Fatalf("learned lifecycle total=%d acquisition=%d utility=%d", run.WorkTotal, len(acquisition.Run.MeterRecords), len(run.Records))
 	}
 	seen := map[uint16]bool{}
 	firstPairApplicable, firstCacheLookup := -1, -1
@@ -106,7 +114,8 @@ func TestNoGuardUtilityUsesItsSeparateRootOnlyAcquisitionAuthority(t *testing.T)
 	}
 	world := independentUtilityWorld()
 	complete, _ := actionrelationsearch.Search(world, actionrelationsearch.Complete, actionrelationsearch.Artifact{})
-	run, err := ExecuteLearnedPolicy(acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, world, actionrelationsearch.NoGuardSleep, "development", actionrelationexp.PlanCommit, 7, 0, len(acquisition.Run.MeterRecords), 2_000_000, "no-guard")
+	initialWork, _ := MeterWorkVector(acquisition.Run.MeterRecords)
+	run, err := ExecuteLearnedPolicy(acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, world, actionrelationsearch.NoGuardSleep, "development", actionrelationexp.PlanCommit, 7, 0, initialWork, 2_000_000, "no-guard")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,6 +175,27 @@ func TestCertifiedUtilityPoliciesRetainFreshOrientedSleepProofs(t *testing.T) {
 				t.Fatal("certified policy omitted prior-sleep proof-map authority")
 			}
 		})
+	}
+}
+
+func TestUtilityBudgetExhaustionRejectsWholeBlockAndEmitsKind49(t *testing.T) {
+	run, err := ExecuteComplete("../../domains", independentUtilityWorld(), "development", "authority", 8, 0, 2, "budget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Terminal != "budget-exhausted" || actionrelationexp.ValidateObject(49, run.WorkTerminal.Canonical) != nil || run.WorkTotal != 2 || run.WorkVector[10] != 1 || run.WorkVector[11] != 1 {
+		t.Fatalf("budget run=%+v", run)
+	}
+	if len(run.Records) != 2 || run.Records[0].Code != 16 || run.Records[1].Code != 19 {
+		t.Fatalf("budget records=%#v", run.Records)
+	}
+	var terminalWire []any
+	if json.Unmarshal(run.WorkTerminal.Canonical, &terminalWire) != nil || len(terminalWire) != 8 || terminalWire[4] != "budget-exhausted" || terminalWire[7] != float64(0) {
+		t.Fatalf("terminal=%v", terminalWire)
+	}
+	rejectedDigest := terminalWire[3].(string)
+	if run.Records[1].SourceTaskDigest == rejectedDigest {
+		t.Fatal("rejected compound reservation was used as charged authority")
 	}
 }
 

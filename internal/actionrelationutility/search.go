@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -18,13 +19,17 @@ import (
 )
 
 type SearchRun struct {
-	RunID       string
-	WorldDigest string
-	Store       *unit.Store
-	Search      actionrelationsearch.Result
-	Records     []dsl.ActionRelationMeterRecord
-	Transcript  actionrelationexp.TranscriptBundle
-	RunRoot     actionrelationexp.OperationRoot
+	RunID        string
+	WorldDigest  string
+	Store        *unit.Store
+	Search       actionrelationsearch.Result
+	Records      []dsl.ActionRelationMeterRecord
+	Transcript   actionrelationexp.TranscriptBundle
+	RunRoot      actionrelationexp.OperationRoot
+	Terminal     string
+	WorkTerminal WorkTerminal
+	WorkVector   [12]int
+	WorkTotal    int
 }
 
 func ExecuteComplete(domainsDir string, world actionrelations.World, panel, authority string, curriculum, worldOrdinal, cap int, token string) (SearchRun, error) {
@@ -47,10 +52,10 @@ func ExecutePolicy(domainsDir string, world actionrelations.World, policy action
 	if err != nil {
 		return SearchRun{}, err
 	}
-	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, 0, cap, token, "", "")
+	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, [12]int{}, cap, token, "", "")
 }
 
-func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal, initialTotal, cap int, token string) (SearchRun, error) {
+func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, world actionrelations.World, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, cap int, token string) (SearchRun, error) {
 	if policy != actionrelationsearch.NousSleep && policy != actionrelationsearch.NoGuardSleep {
 		return SearchRun{}, fmt.Errorf("unsupported learned utility policy %q", policy)
 	}
@@ -62,17 +67,21 @@ func ExecuteLearnedPolicy(store *unit.Store, artifactName, boundaryName string, 
 	if err != nil {
 		return SearchRun{}, err
 	}
-	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, initialTotal, cap, token, artifactName, boundaryName)
+	return executePolicyOnStore(store, normalized, policy, panel, authority, curriculum, worldOrdinal, initialWork, cap, token, artifactName, boundaryName)
 }
 
-func executePolicyOnStore(store *unit.Store, normalized actionrelations.NormalizedWorld, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal, initialTotal, cap int, token, artifactName, boundaryName string) (SearchRun, error) {
+func executePolicyOnStore(store *unit.Store, normalized actionrelations.NormalizedWorld, policy actionrelationsearch.Policy, panel, authority string, curriculum, worldOrdinal int, initialWork [12]int, cap int, token, artifactName, boundaryName string) (SearchRun, error) {
 	worldDigest, _ := normalized.Digest()
 	runID, err := actionrelationledger.UtilityRunID(panel, authority, curriculum, string(policy), worldOrdinal, worldDigest)
 	if err != nil {
 		return SearchRun{}, err
 	}
-	session, err := BeginSession(store, runID, "utility-search:"+token, initialTotal, cap)
+	session, err := BeginSession(store, runID, "utility-search:"+token, sumWorkVector(initialWork), cap)
 	if err != nil {
+		return SearchRun{}, err
+	}
+	if err := session.SetInitialWorkVector(initialWork); err != nil {
+		session.Abort()
 		return SearchRun{}, err
 	}
 	runner := completeRunner{
@@ -87,6 +96,15 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 	}
 	summary, err := runner.visit(normalized.State, normalized.Occurrences, nil)
 	if err != nil {
+		var exhausted *budgetExhaustedError
+		if errors.As(err, &exhausted) {
+			terminal, terminalErr := session.TerminateBudget(exhausted.Reservation)
+			if terminalErr != nil {
+				session.Abort()
+				return SearchRun{}, terminalErr
+			}
+			return finishSearchRun(session, runID, worldDigest, runner.result, "budget-exhausted", terminal)
+		}
 		session.Abort()
 		return SearchRun{}, err
 	}
@@ -100,11 +118,16 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 		session.Abort()
 		return SearchRun{}, err
 	}
+	return finishSearchRun(session, runID, worldDigest, runner.result, "completed", WorkTerminal{})
+}
+
+func finishSearchRun(session *Session, runID, worldDigest string, result actionrelationsearch.Result, terminal string, workTerminal WorkTerminal) (SearchRun, error) {
+	initialWork := session.InitialWork
 	records, err := session.Close()
 	if err != nil {
 		return SearchRun{}, err
 	}
-	transcript, err := BuildTranscript(store, runID, records)
+	transcript, err := BuildTranscript(session.Store, runID, records)
 	if err != nil {
 		return SearchRun{}, err
 	}
@@ -112,7 +135,14 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 	if err != nil {
 		return SearchRun{}, err
 	}
-	return SearchRun{RunID: runID, WorldDigest: worldDigest, Store: store, Search: runner.result, Records: records, Transcript: transcript, RunRoot: runRoot}, nil
+	workVector, err := MeterWorkVector(records)
+	if err != nil {
+		return SearchRun{}, err
+	}
+	for index := range workVector {
+		workVector[index] += initialWork[index]
+	}
+	return SearchRun{RunID: runID, WorldDigest: worldDigest, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, WorkTotal: sumWorkVector(workVector)}, nil
 }
 
 type completeVisit struct {
@@ -134,6 +164,14 @@ type completeRunner struct {
 	evidence     map[string]bool
 	cache        *CertificateCache
 	artifactName string
+}
+
+type budgetExhaustedError struct {
+	Reservation actionrelationledger.Reservation
+}
+
+func (e *budgetExhaustedError) Error() string {
+	return "utility budget exhausted"
 }
 
 func (r *completeRunner) visit(state actionrelations.State, remaining []actionrelations.Occurrence, proofs []actionrelationsearch.ProofEntry) (completeVisit, error) {
@@ -433,8 +471,14 @@ func (r *completeRunner) reserveTask(kind string, fields []any, codes []uint8) e
 	wire, _ := json.Marshal([]any{"actionrelation-utility-task/v1", r.session.RunID, kind, fields, codes})
 	digest := sha256.Sum256(wire)
 	reservation, err := r.session.Reserve(hex.EncodeToString(digest[:]), codes)
-	if err != nil || reservation.Status != "reserved" {
+	if err != nil {
 		return fmt.Errorf("reserve utility %s: %w", kind, err)
+	}
+	if reservation.Status == "rejected-cap" {
+		return &budgetExhaustedError{Reservation: reservation}
+	}
+	if reservation.Status != "reserved" {
+		return fmt.Errorf("reserve utility %s returned %s", kind, reservation.Status)
 	}
 	return nil
 }

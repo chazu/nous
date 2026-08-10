@@ -216,8 +216,21 @@ func translateUtilityRecord(record dsl.ActionRelationMeterRecord) (actionrelatio
 			call.OutputDigests = []string{value}
 		}
 	case 19:
-		if len(record.Inputs) != 3 || len(record.Outputs) != 1 {
+		if len(record.Outputs) != 1 {
 			return call, fmt.Errorf("invalid terminal construction")
+		}
+		if len(record.Inputs) == 1 {
+			row, err := canonicalRow(record.Outputs[0], 8)
+			if err != nil || stringAt(row, 0) != "action-work-terminal/v1" || stringAt(row, 3) != string(record.Inputs[0]) {
+				return call, fmt.Errorf("invalid budget terminal")
+			}
+			call.Payload = []any{"budget-terminal", string(record.Inputs[0])}
+			value, _ := output(0)
+			call.OutputDigests = []string{value}
+			break
+		}
+		if len(record.Inputs) != 3 {
+			return call, fmt.Errorf("invalid terminal inputs")
 		}
 		var applicabilityDigests []string
 		if json.Unmarshal(record.Inputs[2], &applicabilityDigests) != nil {

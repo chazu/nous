@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationledger"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/unit"
@@ -52,6 +53,10 @@ func TestSessionRejectsBlockAtReservedTerminalUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Abort()
+	initial := [12]int{8}
+	if err := session.SetInitialWorkVector(initial); err != nil {
+		t.Fatal(err)
+	}
 	task := strings.Repeat("f", 64)
 	reservation, err := session.Reserve(task, []uint8{16, 23})
 	if err != nil || reservation.Status != "rejected-cap" || session.Total != 8 {
@@ -60,5 +65,13 @@ func TestSessionRejectsBlockAtReservedTerminalUnit(t *testing.T) {
 	records, _ := session.Snapshot()
 	if len(records) != 0 {
 		t.Fatal("rejected compound block executed calls")
+	}
+	terminal, err := session.TerminateBudget(reservation)
+	if err != nil || actionrelationexp.ValidateObject(49, terminal.Canonical) != nil {
+		t.Fatalf("terminal=%+v err=%v", terminal, err)
+	}
+	records, err = session.Close()
+	if err != nil || len(records) != 1 || records[0].Code != 19 || records[0].SourceTaskDigest == reservation.Digest {
+		t.Fatalf("terminal records=%#v err=%v", records, err)
 	}
 }

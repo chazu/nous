@@ -51,3 +51,11 @@ func TestUtilityRunIDUsesExactWorldAndPolicyContext(t *testing.T) {
 		t.Fatal("unknown utility policy accepted")
 	}
 }
+
+func TestTerminalReservationCanConsumeTheLastUnit(t *testing.T) {
+	runID, _ := UtilityRunID("development", "authority", 1, "complete", 0, strings.Repeat("e", 64))
+	terminal, err := BuildTerminalReservation(runID, strings.Repeat("f", 64), 9, 10)
+	if err != nil || terminal.TotalAfter != 10 || terminal.OperationCodes[0] != 19 || VerifyReservation(terminal, 10) != nil {
+		t.Fatalf("terminal=%+v err=%v", terminal, err)
+	}
+}

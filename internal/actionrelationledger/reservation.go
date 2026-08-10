@@ -57,6 +57,16 @@ func BuildReservation(runID, taskDigest string, operationCodes []uint8, totalBef
 	return Reservation{Canonical: wire, Digest: shaHex(wire), RunID: runID, TaskDigest: taskDigest, OperationCodes: slices.Clone(operationCodes), TotalBefore: totalBefore, TotalAfter: totalAfter, Status: status}, nil
 }
 
+func BuildTerminalReservation(runID, taskDigest string, totalBefore, cap int) (Reservation, error) {
+	if !runIDText(runID) || !digestText(taskDigest) || totalBefore < 0 || totalBefore >= cap || cap < 1 {
+		return Reservation{}, fmt.Errorf("invalid terminal reservation identity")
+	}
+	operationCodes := []uint8{19}
+	totalAfter := totalBefore + 1
+	wire, _ := json.Marshal([]any{"compound-work-reservation/v1", runID, taskDigest, operationCodes, totalBefore, totalAfter, "reserved"})
+	return Reservation{Canonical: wire, Digest: shaHex(wire), RunID: runID, TaskDigest: taskDigest, OperationCodes: operationCodes, TotalBefore: totalBefore, TotalAfter: totalAfter, Status: "reserved"}, nil
+}
+
 func ParseReservation(data []byte) (Reservation, error) {
 	var row []json.RawMessage
 	if json.Unmarshal(data, &row) != nil || len(row) != 7 {
