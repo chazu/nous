@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 7.
+Status: provisional Part 3 Vocabulary 3 plan, revision 8.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -51,6 +51,15 @@ Revision 6 was committed at
 utility evidence type, removes the final result/call digest cycle, replaces an
 oversized flat Store snapshot with a compact logical boundary, freezes object
 pack framing, and raises the no-guard event cap to its realizable maximum.
+
+Revision 7 was committed at
+`3d6ecff251e53e614481f78c79d0fab156f2c5fe` and unanimously rejected. Revision
+8 makes zero-valued arguments representable, gives every charged primitive one
+typed sequence-aligned input and an exact output schedule, adds the missing
+guard-conjunction and candidate-finalization evidence, derives object and byte
+caps from every durable producer, freezes every authority-bearing root and
+physical pack/index manifest, and closes Store, competence, review, build, and
+publication authority without hash cycles.
 
 This plan narrows and, in revision 5, explicitly amends the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). The
@@ -167,9 +176,11 @@ panel constructor is callable:
   "maximum_pack_bytes": 16777216,
   "maximum_pack_index_rows": 4096,
   "maximum_pack_index_bytes": 1048576,
-  "maximum_development_evidence_bytes": 654311424,
-  "maximum_validation_evidence_bytes": 973078528,
-  "maximum_locked_evidence_bytes": 1291845632,
+  "maximum_object_index_rows_per_curriculum": 65248,
+  "maximum_object_index_shards_per_curriculum": 19,
+  "maximum_development_evidence_bytes": 2717908992,
+  "maximum_validation_evidence_bytes": 4068474880,
+  "maximum_locked_evidence_bytes": 5419040768,
   "maximum_report_bytes": 14680064,
   "tie_policy": "maximum-positive-coverage-then-minimum-literals-retain-all-ties-unanimous-use",
   "mutation_enabled": false
@@ -239,7 +250,8 @@ Every action has the fixed wire:
 ["finite-action/v1", name, kind, x, y, n, symbol]
 ```
 
-`name` is presentation identity only. Semantic matching never consumes it.
+`name` is presentation identity only and is a unique lowercase ASCII identifier
+of one to eight bytes within its presented world. Semantic matching never consumes it.
 Unused fields are the canonical empty string or zero. The eight kinds are:
 
 | Kind | Legal operands | Applicability and effect | Read/write footprint |
@@ -278,9 +290,10 @@ state and occurrence:
  readRoleInts,writeRoleInts,primaryValue,secondaryValue,traceLength]
 ```
 
-Missing roles and their values are integer `-1`. `argumentPresent` is Boolean;
-`argumentValue` is zero exactly when it is false. `symbol` is the empty string
-exactly when the action is not `emit`. Roles and footprints are sorted unique
+Missing roles and their values are integer `-1`. `argumentPresent` is Boolean.
+When it is false, `argumentValue` is zero; when true, `argumentValue` is the
+legal action argument, including zero for `set` and `check`. `symbol` is the
+empty string exactly when the action is not `emit`. Roles and footprints are sorted unique
 alpha-role integers, except that the event trace footprint is integer `-2`.
 Trace length is `0..8`. The row contains no pair pattern, relation, or pair atom.
 Given two such rows for the same state, the pair pattern and all 15 atom values
@@ -445,11 +458,16 @@ positive array contains every matching positive observation and its negative
 array contains every evaluated negative observation, whether or not it
 matched. Eligibility is reconstructed from the observation records and match
 rows; evidence digests themselves never affect matching. A frozen artifact
-retains every tied winning relation:
+retains every tied winning relation by digest:
 
 ```text
-["guarded-action-artifact/v1", [relation...], semanticTrainingRoot]
+["guarded-action-artifact/v1",relationDigests,semanticTrainingRoot]
 ```
+
+`relationDigests` are the retained relations in canonical relation-byte order,
+unique, and have length `1..451`. Each resolves to one kind-9 relation object.
+The digest list keeps the artifact below the logical-record ceiling even when
+all 451 candidates tie; the artifact transitively commits every relation.
 
 The separate
 `["action-training-evidence/v1",semanticTrainingRoot,viewEvidenceRoot]`
@@ -505,7 +523,9 @@ edges. The root has no parent. Each one-literal guard has the root as parent.
 Each two-literal guard has exactly one parent: remove the lexicographically
 larger signed literal. Thus there are exactly 450 refinement edges; no
 alternative parent edge is materialized. Each candidate is evaluated against
-every acquired observation through explicit guard matches. A candidate is
+every acquired observation through explicit literal matches followed by one
+charged guard-conjunction result. The empty root has no literal call and its
+conjunction is true. A candidate is
 eligible only if it:
 
 - matches at least four positive observations;
@@ -528,8 +548,10 @@ Acquisition is driven by ordinary CUE tasks, not a Go learner. For each
 observation, the driver publishes one explicit application or comparison task;
 CUE calls the primitive words, writes one result row, and closes an observation
 barrier only after all required rows exist. For every relation pattern CUE then
-materializes one row for each of the 451 guards, one row for each of the 7,216
-guard/observation results, all 13,920 constituent literal rows, and the unanimous
+materializes the root guard/candidate, 450 child guards, 450 refinement edges
+and child candidates, all 13,920 constituent literal rows, one charged
+conjunction row for each of the 7,216 guard/observation pairs, one
+candidate-finalization row for each of 451 candidates, and the unanimous
 winner barrier. The driver
 may validate exactly one supplied row, expose the next opaque task token, or
 reject it; it may not evaluate a whole artifact, choose a candidate, or return
@@ -554,10 +576,13 @@ writes at most the named output unit, and has the following Store effect:
 | `ar-applicable?` | state/action -> one applicability row | append row |
 | `ar-apply` | state/action/applicability -> one transition row | append state and row |
 | `ar-state-equal?` | two state digests -> one equality row | append row |
-| `ar-guard-root`, `ar-guard-extend` | explicit parent/literal -> one guard/edge | append candidate and edge |
+| `ar-guard-root` | pattern -> empty guard/root candidate | append guard and candidate |
+| `ar-guard-extend` | explicit parent/literal -> child guard/edge | append guard and edge |
 | `ar-guard-match` | signed literal/two local-facts rows -> one Boolean evaluation | append row |
+| `ar-guard-result` | guard/observation/ordered literal rows -> one conjunction result | append row |
 | `ar-observation-assemble` | required application rows/claimed label -> observation | append or reject |
-| `ar-candidate-allocate`, `ar-candidate-result` | guard/evaluation rows -> candidate row | append row |
+| `ar-candidate-allocate` | guard/parent/ordinal -> candidate row | append row |
+| `ar-candidate-result` | candidate/16 conjunction rows/view root -> candidate-finalization row | append row |
 | `ar-close-guard-search` | complete ordered candidate roots -> barrier | append immutable barrier |
 | `ar-freeze-relation` | barrier/tied rows -> relation or artifact | append immutable object |
 | `ar-pattern-match` | relation/state/two facts/two applicability rows -> relation-match row | append row |
@@ -581,6 +606,15 @@ Assembly words accept and validate explicitly supplied components; they do not
 derive missing states, labels, guards, winners, certificates, sleep sets, or
 search decisions. Every semantic action automatically emits a charged operation
 through the adapter; a heuristic cannot increment or suppress a counter.
+Validity, local-fact construction, observation/view assembly, barrier closure,
+unanimous-use closure, witness construction, certificate assembly,
+propagation attachment, proof-map/edge/subtree assembly, operation-root
+assembly, and report aggregation are uncharged structural constructors and
+have no journal or call-detail record. They may only parse, project one object,
+or structurally validate/fold already committed charged rows. They may not
+execute an action, evaluate a literal or conjunction, match a relation, perform
+a lookup, or classify a terminal. Every operation that may do one of those
+things is charged in the exhaustive ledger below.
 Scoped words are absent when another domain is loaded. The base VM, engine,
 agenda, mutation machinery, common pack, existing domains, and existing
 vocabulary semantics remain unchanged.
@@ -889,7 +923,10 @@ permuted by descending Fisher-Yates. At step `k=n-1..1`, swap `k` with
 Store preoccupations are the first
 `pick(F(...,"store-preoccupation-count",slot),5)` names from the fixed list
 `AR.Candidate`, `AR.Edge`, `AR.Observation`, `AR.Relation`. There are no other
-generator draws. The attempt ledger records every `F` preimage and result.
+generator draws. Each attempt therefore makes exactly 66 draws: six skeleton,
+six cell-bank, six action-bank, twelve cell-permutation, thirty
+action-permutation, and six Store-preoccupation draws. The attempt ledger
+records every `F` preimage and result.
 
 Generator work is a separate unit ledger. Exactly one unit is charged for each
 `F` draw, tested world-core bijection, classified state/action pair, evaluated
@@ -904,6 +941,11 @@ catalog and presentation data; enumerate/seal truth in slot order; evidence
 preflight. The next unit is reserved before each event. A failed predicate or
 reservation ends that attempt immediately; later phases perform no work. These
 are the only generator charges and rejection points.
+Generator work units are summarized only by the one bounded phase row in the
+attempt ledger; no per-work-unit object, pack record, or index row exists. Each
+curriculum retains at most 32 attempt ledgers with the closed phase order and
+predicate vocabulary above, so the 32,000,000 work-unit ceiling cannot expand
+evidence cardinality.
 
 Development authority is literal `development-public-v1` and seed is
 `851001+curriculum`; validation uses `validation-public-v1` and
@@ -985,6 +1027,7 @@ The exhaustive word-to-counter map is:
 | 19 | terminal/deadlock construction | 12 |
 | 20 | acquisition `ar-candidate-result` | 5 |
 | 21 | learned relation-instance `ar-applicable?` | 10 |
+| 22 | acquisition `ar-guard-result` | 5 |
 
 Validity parsing, evidence serialization, CUE scheduling, and task-token
 movement are uncharged infrastructure and separately counted; they may not
@@ -999,6 +1042,19 @@ infrastructure reservation-rejection row is written, and code 19 consumes the
 reserved unit as `budget-exhausted`. The verifier derives each
 counter from operation codes, rejects caller-supplied deltas, and proves
 `total = sum(vector)`.
+
+Code 22 constructs every candidate/observation conjunction row, including the
+16 empty-root rows. For an empty guard its ordered literal list is empty and
+the only valid result is true; otherwise the list length equals the guard's
+literal count, follows guard-literal order, and every named code-7 row binds the
+same guard and observation. Code 20 runs exactly once per candidate after its
+16 conjunction rows. Barrier closure is the uncharged structural fold of the
+complete fixed tables and is not a hidden operation. Full acquisition therefore
+uses at most `144 + 1 + 450 + 450 + 13,920 + 7,216 + 451 + 1 = 22,633`
+charged events: training operations, root, extensions, nonroot allocations,
+literal rows, conjunction rows, candidate finalizations, and freeze. No-guard
+acquisition uses exactly `144 + 1 + 16 + 1 + 1 = 163` events. The frozen
+24,000 and 192 physical caps include those complete schedules.
 
 For each learned candidate pair, code 21 runs in order for taken occurrence then
 sleeper—exactly twice for a valid co-enabled pair—after candidate enumeration,
@@ -1061,7 +1117,7 @@ The transformation lane demonstrated that one Git file per semantic object is
 operationally unacceptable. This lane instead commits bounded content-addressed
 packs without weakening leaf verification.
 
-There are four pack classes. Object packs start with `AROP1\n`, followed by
+There are five pack classes. Object packs start with `AROP1\n`, followed by
 `uint32-big-endian length || canonical-record-bytes`; records are unique and
 sorted by `SHA-256(recordBytes)`. Operation-journal packs start with `ARJR1\n`
 and contain contiguous sequence-order records. Every journal record is exactly
@@ -1075,52 +1131,116 @@ Input and output vector roots are recomputed from the ordered digest slices in
 the aligned call detail; those digests point to individually canonical evidence
 leaves. Vector wrappers are not separately stored objects.
 Version is 1; phases are acquisition 1 and utility 2; operation codes are the
-numeric codes frozen in the ledger table; statuses
-are success 1, semantic-failure-or-row-rejection 2, and cache-hit 3;
+numeric codes frozen in the ledger table; statuses are completed 1, rejected
+2, and cache-hit 3. Completed includes legitimate false, unequal,
+inapplicable, cache-miss, and not-certified outcomes. Rejected means malformed
+input or an invalid row. Cache-hit is legal only for code 16 returning an
+existing node or code 18 returning an existing certificate-cache row;
 counter is 1 through 12. All integers are unsigned and big-endian where wider
 than one byte. Compound reservations are canonical input objects rather than
 mutable journal header fields.
 
-Call-detail packs start with `ARCD1\n` and have one exactly 320-byte record per
+Every charged operation first commits this typed envelope, which contains no
+call ID or output digest:
+
+```text
+["action-charged-input/v1",phase,operationCode,sourceTaskDigest,payload]
+```
+
+`sourceTaskDigest` resolves to the kind-27 compound-work reservation whose
+ordered `operationCodes` contains this invocation at its reserved position;
+the envelope and detail repeat that same digest. The reservation is created
+uncharged before any covered primitive and cannot be rewritten after the first
+covered call.
+
+There is exactly one envelope per journal sequence. Input-envelope packs start
+with `ARIN1\n` and contain sequence-ordered
+`length:uint32-big-endian || canonical-envelope-bytes` frames without padding
+or trailer. The envelope digest is SHA-256 of its canonical bytes. Envelopes
+are not object-index rows: the aligned detail locates them by sequence and the
+input-pack manifest fixes every frame boundary and digest. Except for code 20,
+whose envelope is at most 2,048 bytes, and code 8, whose envelope is at most
+65,536 bytes, every envelope is at most 1,024 bytes. Per curriculum there are
+at most 452 code-20 envelopes and two code-8 envelopes; every other charged
+event uses the 1,024-byte class.
+
+Call-detail packs start with `ARCD1\n` and have one exactly 192-byte record per
 journal sequence. Its frozen offsets are: call ID `[0,32)`, kind `uint16`
 `[32,34)`, phase/operation/status/counter bytes `[34,38)`, sequence `uint32`
 `[38,42)`, source-task digest `[42,74)`, input count `uint8` at 74, output count
-`uint8` at 75, zero bytes `[76,96)`,
-six ordered 32-byte evidence digests `[96,288)`, and zero bytes `[288,320)`.
-Counts sum to `0..6`; inputs precede outputs and unused digest slots are zero.
+`uint8` at 75, zero bytes `[76,96)`, and three ordered 32-byte evidence digests
+`[96,192)`. Input count is always 1 and output count is `0..2`; slot 0 is the
+aligned input-envelope digest, outputs occupy slots 1 and 2 in the exact order
+below, and every unused slot is zero. `kind` equals the charged operation code;
+the detail and journal phase, operation, status, counter, sequence, call ID,
+and source-task digest must match, and the envelope repeats the same phase,
+operation, and source-task values.
 The journal roots are SHA-256 of
 `["actionrelation-input-vector/v1",[digest...]]` and the corresponding output
 wire over these slices.
 Search nodes, edges, eligibility rows, certificate attempts, propagation cores,
 proof-map entries, terminal behaviors, and reservations use separate kind codes
 and therefore remain distinct logical leaves. A shard manifest fixes its
-inclusive sequence range. Journal and detail offsets are derived from fixed
-record sizes and sequence ranges; neither has a per-record index.
+inclusive sequence range. Journal, input, and detail packs have identical
+sequence ranges and shard boundaries; none has a per-record index.
 
-Call-detail `kind` is the following closed `uint16` enum: 1 validity, 2 fact, 3
-applicability, 4 transition, 5 equality, 6 guard, 7 refinement-edge, 8
-literal-evaluation, 9 observation-core, 10 presentation-view, 11 candidate, 12
-candidate-result, 13 barrier, 14 relation, 15 artifact, 16 pattern-match, 17
-unanimous-use, 18 eligibility-witness, 19 certificate-attempt, 20 certificate,
-21 propagation-core, 22 proof-map, 23 search-node, 24 search-edge, 25
-completed-subtree, 26 terminal-behavior, 27 work-reservation, 28 work-terminal,
-29 cache-row, 30 policy-row, 31 view-evidence, and 32 normalization-proof. Zero
-and every other value are invalid.
+The input `payload` and detail outputs are closed by this matrix. `ARTB-n`
+means the exact fixed-table leaf kind; `kind-n` means the object-index decoder.
+An applied transition has its row in slot 1 and resulting state in slot 2; an
+inapplicable or rejected transition has only its row in slot 1. A rejected
+structural operation that cannot construct a valid result row has no output.
+
+| Code | Counter | Exact input `payload` | Detail outputs |
+| ---: | ---: | --- | --- |
+| 1 | 1 | `["guard-root",patternDigest]` | guard kind-7; root candidate ARTB-103 |
+| 2 | 1 | `["candidate-allocate",patternDigest,guardDigest,parentCandidateDigest,ordinal]` | candidate ARTB-103; ordinal `1..450` |
+| 3 | 2 | `["guard-extend",parentGuardDigest,atom,polarity,edgeOrdinal]` | child guard kind-7; edge ARTB-104 |
+| 4 | 3 | `["training-apply",stateDigest,occurrenceDigest,applicability107Digest]` | transition ARTB-107; state kind-1 iff applied |
+| 5 | 4 | `["training-applicable",stateDigest,occurrenceDigest]` | applicability ARTB-107 |
+| 6 | 4 | `["training-equality",leftStateDigest,rightStateDigest]` | equality ARTB-107 |
+| 7 | 5 | `["training-literal",guardDigest,observationDigest,aFactsDigest,bFactsDigest,atom,polarity]` | signed literal ARTB-101 |
+| 8 | 6 | `["artifact-freeze",barrierDigest,orderedWinnerCandidateResultDigests,semanticTrainingRoot]` | artifact kind-10, transitively committing its kind-9 relations |
+| 9 | 7 | `["relation-match",relationDigest,stateDigest,aFactsDigest,bFactsDigest,aApplicabilityDigest,bApplicabilityDigest,orderedLiteralRowDigests]` | relation match kind-42 |
+| 10 | 7 | `["artifact-load",storeBoundaryDigest,artifactDigest]` | loaded artifact kind-10 |
+| 11 | 8 | `["utility-apply",stateDigest,occurrenceDigest,applicabilityDigest]` | transition kind-39; state kind-1 iff applied |
+| 12 | 9 | `["certificate-apply",stateDigest,occurrenceDigest,applicabilityDigest]` | transition kind-39; state kind-1 iff applied |
+| 13 | 10 | `["certificate-applicable",stateDigest,occurrenceDigest]` | applicability kind-38 |
+| 14 | 10 | `["certificate-equality",leftStateDigest,rightStateDigest]` | equality kind-40 |
+| 15 | 10 | `["learned-literal",stateDigest,aFactsDigest,bFactsDigest,atom,polarity]` | literal evaluation kind-41 |
+| 16 | 11 | `["search-node-lookup",stateDigest,remainingDigest,proofMapDigest]` | node kind-20; status 3 if existing, 1 if newly constructed |
+| 17 | 11 | `["proof-map-lookup",parentNodeDigest,proofMapDigest,sleeperOccurrenceDigest]` | named propagation core kind-18 when found; none when absent |
+| 18 | 11 | `["certificate-cache-lookup",stateDigest,minOccurrenceDigest,maxOccurrenceDigest]` | cache row kind-26 on hit; none on miss |
+| 19 | 12 | `["terminal-construct",stateDigest,remainingDigest,orderedApplicabilityDigests]` | terminal behavior kind-23 |
+| 20 | 5 | `["candidate-result",candidateDigest,orderedGuardResultDigests,viewEvidenceRoot]` | candidate result ARTB-108 |
+| 21 | 10 | `["relation-instance-applicable",stateDigest,occurrenceDigest]` | applicability kind-38 |
+| 22 | 5 | `["guard-result",guardDigest,observationDigest,orderedSignedLiteralDigests]` | guard result ARTB-102 |
+
+Every digest in a payload resolves to exactly the named typed leaf. Code 20 has
+exactly 16 guard-result digests in committed observation order. Code 22 obeys
+the empty-root and literal-order rules frozen in the ledger. No uncharged word
+may create a journal, input-envelope, or detail record; validity remains the
+kind-45 raw input to kind-37 row and parsed kind-1/kind-2 object transformation
+without a fictitious call sequence.
 
 Acquisition-table packs start with `ARTB1\n`. Each manifest fixes one row kind,
-record size, count, inclusive ordinal range, and the binary Merkle root defined
-below over rows in ordinal order. The fixed tables are 13,920
+scope, record size, count, inclusive ordinal range, and the binary Merkle root
+defined below over rows in ordinal order. Full acquisition contains 13,920
 signed-literal rows at 128 bytes, 7,216 guard/observation results at 96 bytes,
 451 candidates at 128 bytes, 450 refinement edges at 96 bytes, 16 observation
-cores at 512 bytes, 32 view-evidence rows at 512 bytes, and at most 144 training
-transition/applicability/comparison rows at 256 bytes. A detail references the
+cores at 512 bytes, 32 view-evidence rows at 512 bytes, 144 training
+transition/applicability/comparison rows at 256 bytes, and 451 candidate-result
+rows at 128 bytes. Separate no-guard scope contains 16 guard results, one
+candidate, 16 observations, 32 views, 144 training operations, and one
+candidate result; absent kinds 101 and 104 have no empty manifest. A detail references the
 leaf digest. The verifier locates it by kind/ordinal and recomputes the table
-root, preserving individual verification. These rows are the exact CUE Store
-boundary; they are not duplicated in object packs or object indexes.
+root, preserving individual verification. These rows are the fixed-table
+portion of the exact CUE Store boundary; they are not duplicated in object
+packs or object indexes.
 
 The manifest wire is
-`["actionrelation-table-manifest/v1",kind,recordSize,count,
-[[packOrdinal,firstOrdinal,lastOrdinal,packDigest]...],merkleRoot]`; shard rows
+`["actionrelation-table-manifest/v2",scope,kind,recordSize,count,
+[[packOrdinal,relativePath,firstOrdinal,lastOrdinal,byteLength,packDigest]...],merkleRoot]`;
+`scope` is `nous` or `no-guard`. Shard rows
 are ordinal ordered, contiguous, nonoverlapping, and cover `0..count-1`.
 For a manifest shard whose inclusive range is `firstOrdinal..lastOrdinal`, the
 physical pack bytes are exactly
@@ -1145,6 +1265,7 @@ invalid; every `zero` range must contain zero:
 | 105 observation-core, 512 | version/label/status/null-bitmap `[0,4)`, state `[4,36)`, a `[36,68)`, b `[68,100)`, a-initial `[100,132)`, b-initial `[132,164)`, b-after-a `[164,196)`, a-after-b `[196,228)`, ab-state `[228,260)`, ba-state `[260,292)`, operation-root `[292,324)`, zero `[324,512)` |
 | 106 view-evidence, 512 | view `[0,32)`, observation `[32,64)`, semantic-world `[64,96)`, normalization-proof `[96,128)`, original-state `[128,160)`, original-actions-root `[160,192)`, occurrence-map-root `[192,224)`, bank/cell-count/action-count/status `[224,228)`, zero `[228,512)` |
 | 107 training-operation, 256 | version/kind/status/result `[0,4)`, left/state `[4,36)`, right/action `[36,68)`, result-object `[68,100)`, zero `[100,256)` |
+| 108 candidate-result, 128 | candidate `[0,32)`, guard-result-vector-root `[32,64)`, positive-coverage `[64,65)`, negative-coverage `[65,66)`, wrapper-coverage-complete `[66,67)`, eligible `[67,68)`, status `[68,69)`, zero `[69,128)` |
 
 Atom codes are the displayed guard-atom order 1..15; polarity 0 is negative and
 1 positive. Observation labels are commutes 1, a-enables-b 2, b-enables-a 3,
@@ -1157,7 +1278,11 @@ applicability 1, apply 2, and equality 3. Candidate ordinal is 0..450 and edge o
 the root candidate's parent digest is zero. Version bytes are 1. In row 105,
 bytes 1, 2, and 3 are label, status, and bitmap. In row 106, bytes 224..227
 are bank, cell count, action count, and status. In row 107, bytes 1..3 are kind,
-status, and result code. Candidate literal count is 0..2.
+status, and result code. Candidate literal count is 0..2. In row 108 coverage
+bytes are `0..16`, Boolean bytes are 0 or 1, and status is valid 1 or invalid 2.
+Its vector root is the root named below over exactly 16 ARTB-102 leaf digests
+in committed observation order; eligibility and coverage reconstruct from
+those rows and the named view-evidence root in the aligned code-20 input.
 
 Row 107 has this closed status/result matrix:
 
@@ -1179,23 +1304,89 @@ the left-state and right-state digests. Every status/result pairing not listed
 above, including valid apply with a zero result after `applied` or a nonzero
 result in any other row, is invalid.
 
-Row 107 is the result core committed by, and therefore constructed before, its
-aligned call record; it contains no input-vector, output-vector, call-ID, or
-detail digest. For applicability and equality, call detail has input count 2
-and output count 1: digest slots 0 and 1 are the row's left/right objects and
-slot 2 is the row-107 leaf digest. For apply, input count is 3: slots 0 and 1
-are state and occurrence and slot 2 is the required applicability-row digest.
-An applied call has output count 2, with the resulting state in slot 3 and the
-row-107 leaf in slot 4; an inapplicable or invalid call has output count 1 and
-the row-107 leaf in slot 3. The journal hashes those exact detail slices only
-after the result core and any resulting state exist, so construction is
-acyclic and the producing call always commits its result.
+Rows 107 and 108 are result cores committed by, and therefore constructed
+before, their aligned call records; neither contains an input-vector,
+output-vector, call-ID, or detail digest. The aligned typed input envelope
+commits every operand. Row 107 or 108 is output slot 1; an applied code-4 call
+places the resulting state in slot 2. The journal hashes the envelope digest
+and exact output slice only after every result exists, so construction is
+acyclic and every producing call commits its result.
 
 Merkle hashing is binary and domain-separated. A leaf preimage is hex bytes
 `41525442312d4c45414600 || kind:uint16 || ordinal:uint32 || record`; a parent
 preimage is `41525442312d4e4f444500 || leftDigest || rightDigest`. Both use
 SHA-256; an odd final node is duplicated as both left and right. Counts are
 nonzero, so no empty-table root exists.
+
+All canonical JSON in this section is compact UTF-8 with no trailing newline.
+JSON digest fields are lowercase 64-character hex; binary records use raw 32
+bytes. The shared domain-separated root function is:
+
+```text
+JRoot(tag,value) =
+ SHA-256(canonical-json(["actionrelation-root/v1",tag,value]))
+```
+
+Allowed tags are closed where used below; an empty collection is
+`JRoot(tag,[])`, never the raw zero digest. Authority-bearing descriptive roots
+are exactly:
+
+```text
+factRoot = JRoot("local-fact-pair",[aFactsDigest,bFactsDigest])
+originalActionsRoot = JRoot("original-actions",originalActionByteDigests)
+occurrenceMapRoot = JRoot("occurrence-map",occurrenceMapRows)
+semanticTrainingRoot = JRoot("semantic-training",observationCoreDigests)
+viewEvidenceRoot = JRoot("view-evidence",viewEvidenceRows)
+guardResultVectorRoot = JRoot("guard-result-vector",guardResultDigests)
+worldPolicyRowsRoot = JRoot("world-policy-rows",worldPolicyRowDigests)
+curriculumPolicyRowsRoot =
+ JRoot("curriculum-policy-rows",curriculumPolicyRowDigests)
+```
+
+`factRoot` uses the observation's oriented `a,b` local-fact rows; each resolves
+to kind 8 and names the same state and occurrence as the observation.
+`originalActionByteDigests` are SHA-256 of canonical original action bytes in
+original declaration order. `occurrenceMapRows` are
+`[originalActionName,occurrenceDigest]` in that same order; presentation names
+are unique lowercase ASCII. Training digests are the 16 unique semantic cores
+in committed order. View rows are
+`[observationCoreDigest,bank,viewEvidenceDigest]` in observation order and bank
+order 0 then 1, exactly two per observation. Guard-result vectors contain
+exactly 16 ARTB-102 digests in committed observation order. World and
+curriculum policy rows use the ordering frozen with their top-level wires.
+
+The semantic observation digest is SHA-256 of the canonical
+`action-pair-observation/v1` wire reconstructed from ARTB-105 fields; it
+excludes ARTB ordinal, journal/call IDs, and `operationRoot`. ARTB-105 remains
+the run-authority row for that semantic observation. In the acquisition
+barrier, `edgeTableRoot` is the digest of the canonical scope-`nous` ARTB-104
+manifest and `evaluationTableRoots` is exactly the two manifest digests for
+scope-`nous` ARTB-101 then ARTB-102. Candidate digests are ARTB-103 leaf
+digests in ordinal order; winners are surviving candidate-result ARTB-108 leaf
+digests in canonical guard-byte order.
+
+Operation authority is object-index kind 46 with these exact variants:
+
+```text
+["actionrelation-operation-root/v1","range",runID,phase,
+ startSequence,count,callMerkleRoot]
+["actionrelation-operation-root/v1","concat",contextDigest,
+ childOperationRootDigests]
+```
+
+A range covers exactly `startSequence..startSequence+count-1` in one run and
+phase. Call-Merkle leaves are
+`SHA-256(ASCII("ARCL1-LEAF\0") || sequence:uint32 || callID)`; parents are
+`SHA-256(ASCII("ARCL1-NODE\0") || left || right)`, duplicating an odd child.
+The empty call root is `SHA-256(ASCII("ARCL1-EMPTY\0"))`. A range object is
+assembled only after every included call and output exists, has no call of its
+own, and may include only calls earlier than any object that names it.
+Observation roots cover their explicit training calls. Certificate roots cover
+the matching, applicability, transition, equality, and cache calls preceding
+uncharged certificate assembly. A world row names its complete run range. A
+curriculum row names a concat whose children are acquisition then six world
+roots; `contextDigest` hashes that row's canonical identity fields excluding
+`operationRoot`. Child roots are nonoverlapping and in execution order.
 
 Object-index kind is a separate closed decoder enum:
 
@@ -1231,11 +1422,11 @@ Object-index kind is a separate closed decoder enum:
 | 28 | acquisition barrier wire |
 | 29 | scorer-truth-shard wire |
 | 30 | `actionrelation-fixture-root/v1` |
-| 31 | `actionrelation-execution-core/v1` |
+| 31 | `actionrelation-execution-core/v2` |
 | 32 | `actionrelation-world-policy-row/v1` |
 | 33 | `actionrelation-curriculum-policy-row/v1` |
-| 34 | `actionrelation-evidence-payload/v1` |
-| 35 | `action-store-boundary/v1` |
+| 34 | `actionrelation-evidence-payload/v2` |
+| 35 | `action-store-boundary/v2` |
 | 36 | generator-attempt-ledger wire |
 | 37 | `action-validity-row/v1` |
 | 38 | `action-applicability-row/v1` |
@@ -1246,6 +1437,8 @@ Object-index kind is a separate closed decoder enum:
 | 43 | `action-unanimous-use/v1` |
 | 44 | `local-diamond-certificate-attempt/v1` |
 | 45 | `action-raw-input/v1` |
+| 46 | `actionrelation-operation-root/v1` |
+| 47 | `actionrelation-curriculum-fixture/v1` |
 
 The descriptive wires in that table are exactly:
 
@@ -1258,7 +1451,8 @@ The descriptive wires in that table are exactly:
  evaluationTableRoots,winnerDigests,status]
 ["action-scorer-truth-shard/v1",worldDigest,shardOrdinal,shardCount,
  terminalDigestRows,pairLabelRows]
-["action-store-boundary/v1",tableManifestDigests,acquisitionIndexRootDigests]
+["action-store-boundary/v2",scope,tableManifestDigests,
+ acquisitionObjectSetRoot]
 ["action-generator-attempt-ledger/v1",panel,curriculum,attempt,
  [[phase,startWork,endWork,predicate,status]...],totalWork,terminal]
 ["action-validity-row/v1",objectClass,sourceBytesDigest,result,status]
@@ -1272,7 +1466,7 @@ The descriptive wires in that table are exactly:
  bFactsDigest,aApplicabilityDigest,bApplicabilityDigest,traceAdmissible,
  patternResult,literalRowDigests,result,status]
 ["action-unanimous-use/v1",artifactDigest,stateDigest,aOccurrenceDigest,
- bOccurrenceDigest,orderedRelationMatchDigests,result,status]
+ bOccurrenceDigest,relationMatchRoot,result,status]
 ["local-diamond-certificate-attempt/v1",stateDigest,aOccurrenceDigest,
  bOccurrenceDigest,witnessDigest,orderedOperationRowDigests,result,
  certificateDigestOrZero,status]
@@ -1281,30 +1475,35 @@ The descriptive wires in that table are exactly:
 
 Role integers, operation codes, digests, phase rows, terminal rows, and
 pair-label rows use the canonical ordering already frozen for their types.
+Within a scorer-truth shard, `terminalDigestRows` are unique terminal digests
+in raw digest order. `pairLabelRows` are
+`[stateDigest,minOccurrenceDigest,maxOccurrenceDigest,label]`, sorted by the
+three raw digests in that order; orientation and labels reconstruct under the
+observation truth table above. Shards partition that complete ordered pair-row
+sequence into contiguous greedily maximal slices below the logical-record
+ceiling, and `shardOrdinal` is zero based. Empty, overlapping, skipped, or
+reordered slices are invalid.
 `objectClass` is `state` or `action`; `sourceBytesDigest` is the digest of the
 kind-45 wrapper, which commits the exact supplied bytes even when invalid.
 Booleans are literal JSON Booleans.
 `literalRowDigests` are guard-literal ordered and have exactly the relation's
-guard length; `orderedRelationMatchDigests` has exactly one entry for every
-artifact relation in artifact order. Attempt operation rows are execution
+guard length. `relationMatchRoot` is
+`JRoot("unanimous-relation-matches",orderedRelationMatchDigests)`, with exactly
+one digest for every artifact relation in artifact order; every named row
+binds the same state and oriented occurrences. Attempt operation rows are execution
 order. Result/status pairs use the closed terminal taxonomy and reconstruct
 from their named inputs; every `OrZero` field is a raw zero digest exactly in
 the nonproducing case. No protected execution is authorized if any tracked
 producer can emit an object outside this table. A record must decode as exactly
 its named kind; zero, unknown, or cross-kind bytes are invalid.
 
-Every call-detail input or output digest resolves to exactly one leaf with one
-matching decoder: an ARTB kind/ordinal leaf for acquisition fixed rows or an
-object-index kind for all other durable inputs and outputs. In particular,
-utility validity, applicability, transition, equality, literal evaluation,
-relation matching, unanimous use, and certificate attempts are kinds 37..44;
-none may be represented by ARTB kind 107 or by an untyped JSON blob.
-Validity calls have one kind-45 input in slot 0. A valid call has two outputs:
-the parsed kind-1 state or kind-2 semantic action in slot 1 and its kind-37 row
-in slot 2; invalid input has only the kind-37 output in slot 1. The kind-45
-wrapper contains candidate canonical `finite-action-state/v1` or
-`finite-action-semantic/v1` bytes, respectively. All later calls consume the
-parsed object, never the raw wrapper.
+Every call-detail output digest resolves to exactly one ARTB kind/ordinal leaf
+or object-index decoder named by the operation matrix; none may be an untyped
+JSON blob. Uncharged validity instead consumes one kind-45 wrapper containing
+candidate canonical `finite-action-state/v1` or `finite-action-semantic/v1`
+bytes. It emits the parsed kind-1 state or kind-2 semantic action when valid and
+one kind-37 row in all cases, without any journal/detail record. All later
+calls consume the parsed object, never the raw wrapper.
 
 For kinds 37, 38, 40, 41, 42, and 43, status is `valid` or `invalid-input`;
 invalid input requires result false. Validity is true exactly with `valid`.
@@ -1315,33 +1514,92 @@ for the first two and `invalid-input` for the last, and its certificate digest
 is nonzero exactly for `certified`. The verifier rejects every other pairing.
 
 The Store boundary is logical rather than a serialization of physical unit
-names. Its table manifests are kind-code ordered and cover every acquisition
-fixed row; its acquisition index roots are raw-digest ordered and cover every
-other acquisition object. Together they are complete and disjoint. Unit names
-and slots are deterministically reconstructed from `(decoderKind, ordinal or
-objectDigest)` and do not enter semantic identity, so occupied-name suffixes
-cannot alter the boundary. There is no flat unit/slot snapshot and no snapshot
-shard: the compact boundary object is at most 1,024 bytes and is charged in the
-acquisition-small-object class.
+names. `scope` is `nous` or `no-guard`; `tableManifestDigests` are kind ordered
+and are exactly kinds 101..108 for `nous`, or 102, 103, and 105..108 for
+`no-guard`. They cover every fixed row in that acquisition Store.
+`acquisitionObjectSetRoot` is
+`JRoot("acquisition-object-set",[scope,[[decoderKind,objectDigest]...]])` over every
+non-ARTB logical Store object produced through completion of acquisition
+freeze, sorted by
+numeric decoder kind then raw digest. It excludes the boundary itself,
+physical pack/index/root manifests, utility objects, and review/build/
+competence/report/receipt/publication authority. After that root is computed,
+the kind-35 boundary is constructed under physical scope `authority`; no later
+object in that acquisition Store is legal. The preboundary table and object sets are
+complete and disjoint without requiring the boundary to hash itself. Unit
+names and slots reconstruct from `(decoderKind,ordinal or objectDigest)` and do
+not enter semantic identity, so occupied-name suffixes cannot alter the
+boundary. There is no flat unit/slot snapshot or snapshot shard; the boundary
+is at most 4,096 bytes in the supporting-object class.
 
 An object-index row is exactly 96 bytes: digest (32), offset `uint64` (8),
 length `uint32` (4), kind `uint16` (2), pack ordinal `uint16` (2), and 48 zero
-bytes. Rows are digest ordered. A shard has at most 4,096 rows and 1 MiB. A
-small object is at most 1,024 bytes; a large object is at most 65,536 bytes.
-Any pack is at most 16 MiB; deterministic split points are named in a root
-manifest. An object pack is exactly `ASCII("AROP1\n")` followed by digest-
-ordered frames, each `length:uint32 || objectBytes`, with big-endian length and
-no padding or trailer. Index `offset` points to the first byte of `objectBytes`,
-not its four-byte prefix, and index `length` counts only `objectBytes`. Thus the
-first offset is 10; for every row the four bytes at `[offset-4,offset)` equal
-`length`, SHA-256 of `[offset,offset+length)` equals `digest`, and the next
-frame prefix or exact end-of-pack begins at `offset+length`. Packs split
-greedily before the first frame that would exceed 16 MiB; an individual frame
-that cannot fit is invalid. The verifier checks headers, frame boundaries,
-lengths, digests, canonical decoders,
-complete index coverage, object uniqueness, journal and detail sequence
-alignment, journal hash-chain continuity, zero padding, absence of trailing
-bytes, and root closure.
+bytes. Rows are digest ordered. An index shard has at most 4,096 rows and 1
+MiB. Any pack is at most 16 MiB. An object pack is exactly
+`ASCII("AROP1\n")` followed by digest-ordered frames, each
+`length:uint32 || objectBytes`, with big-endian length and no padding or
+trailer. Index `offset` points to the first byte of `objectBytes`, not its
+four-byte prefix, and `length` counts only `objectBytes`. Thus the first offset
+is 10; the four bytes at `[offset-4,offset)` equal `length`, SHA-256 of
+`[offset,offset+length)` equals `digest`, and the next prefix or exact end of
+pack begins at `offset+length`. Packs split greedily before the first frame
+that would exceed 16 MiB; an individual frame that cannot fit is invalid.
+
+Index packs are exactly `ASCII("ARIX1\n") || row96...`, with no other header,
+padding, or trailer. All physical evidence files have Git mode `100644` and
+strict relative POSIX ASCII paths; empty components, `.`, `..`, backslash,
+absolute paths, duplicate paths, and non-byte-sorted path sets are invalid.
+Object and index scopes are exactly `acquisition-nous-preboundary`,
+`acquisition-no-guard-preboundary`, `utility`, and `authority`. Objects and index rows are globally digest-ordered within a
+scope; object/index pack ordinals start at zero. A kind-35 boundary appears
+only in `authority`; utility objects never appear in a preboundary scope.
+
+The generic pack-root manifest is:
+
+```text
+["actionrelation-pack-root/v1",class,scope,recordSize,totalRecords,
+ [[packOrdinal,relativePath,firstKey,lastKey,recordCount,
+   byteLength,packSHA256]...]]
+```
+
+`class` is `object`, `journal`, `input`, or `detail`; `recordSize` is 0 for
+object/input, 128 for journal, and 192 for detail. Object keys are lowercase
+object digests; other keys are sequence integers. Rows are pack-ordinal
+ordered, contiguous, nonoverlapping, and exactly cover the class order.
+`byteLength` includes the six-byte header and manifest digest is SHA-256 of
+canonical manifest bytes. Empty roots are not listed. Object packs split
+greedily by frames. For class `object`, `scope` is one of the four object
+scopes above. For classes `journal`, `input`, and `detail`, `scope` is the raw
+run ID rather than an object scope. Journal, input, and detail roots use
+identical sequence ranges: split before the first input frame or aligned fixed
+record that would make any of the three packs exceed 16 MiB. This produces at
+most four aligned shards under the frozen envelope caps.
+
+The index-root manifest is:
+
+```text
+["actionrelation-index-root/v1",scope,objectPackRootDigest,totalRows,
+ objectSetRoot,
+ [[shardOrdinal,relativePath,firstDigest,lastDigest,rowCount,
+   byteLength,packSHA256]...]]
+```
+
+`objectSetRoot` is
+`JRoot("indexed-object-set",[[decoderKind,objectDigest]...])`, sorted by kind
+then raw digest. Physical index rows remain digest-sorted. Every row's pack
+ordinal binds the corresponding object-pack manifest row and digest; every
+frame has exactly one row and every row exactly one frame. Shards split before
+row 4,097 or 1 MiB and there are at most 19 across all four scopes.
+
+ARTB manifests use greedily maximal shards below 16 MiB; their paths, lengths,
+and digests are mandatory. Root references are
+`[scope,relativeManifestPath,manifestDigest]`. Object/index refs sort by scope
+then path, journal/input/detail refs by raw run ID then path, and table refs by
+scope order `nous`,`no-guard` then numeric kind. These rules uniquely derive
+the payload's pack-root fields and bind every pack ordinal. The verifier checks
+headers, frame boundaries, lengths, digests, canonical decoders, complete
+coverage, uniqueness, aligned sequences, journal chains, padding, absence of
+trailing bytes, and transitive root closure.
 
 The evidence payload lists only regular committed pack and index files plus the
 fixture root, execution manifests, review authority, competence root, and
@@ -1359,68 +1617,138 @@ subtree and every adjacent-swap propagation. The verifier reconstructs DFS
 order, cache reuse, every omitted edge, and work from these leaves rather than
 trusting policy summaries. Primary and audit executions independently reload
 the committed fixture bytes and must produce identical semantic rows,
-transcript roots, artifacts, behaviors, and work.
+transcript roots, artifacts, behaviors, and work. Their role-specific execution
+manifests are distinct, but both use the same deterministic semantic run ID
+derived from panel, curriculum, policy, and world; run role is not a call
+input. Content-addressed semantic packs are retained once. A canonical audit
+attestation names both execution-manifest digests and the one transcript/result
+root set and has terminal `identical`. Any divergence is mechanical invalidity.
+Distinct retained audit packs are forbidden rather than silently unbudgeted.
 
 Before any panel attempt, algebraic preflight uses this exhaustive per-
 curriculum capacity table:
 
 | Class | Maximum | Bytes each | Maximum bytes |
 | --- | ---: | ---: | ---: |
-| operation journal | 61,056 | 128 | 7,815,168 |
-| call detail | 61,056 | 320 | 19,537,920 |
-| acquisition fixed-row tables | 22,229 | kind-specific | 2,636,864 |
-| fixture state/action small object | 512 | 1,024 | 524,288 |
-| acquisition small object | 1,024 | 1,024 | 1,048,576 |
-| search/cache/proof small object | 2,048 | 1,024 | 2,097,152 |
-| terminal/statistics small object | 512 | 1,024 | 524,288 |
-| large barrier/artifact object | 32 | 65,536 | 2,097,152 |
-| large scorer-truth object | 32 | 65,536 | 2,097,152 |
-| object index | 4,160 | 96 | 399,360 |
+| operation journal including four headers | 61,056 | 128 | 7,815,192 |
+| call detail including four headers | 61,056 | 192 | 11,722,776 |
+| typed input envelopes, frames, four headers | closed per-code caps | n/a | 63,357,464 |
+| full plus no-guard ARTB rows, fourteen headers | 22,890 | kind-specific | 2,757,908 |
+| all object payloads, frame prefixes, eight headers | 65,248 | class-specific | 74,841,008 |
+| object index including nineteen headers | 65,248 | 96 | 6,263,922 |
 | all pack headers and manifests | fixed aggregate cap | n/a | 1,048,576 |
 
-The table-row count is
-`13,920+7,216+451+450+16+32+144 = 22,229`; its byte total is the sum of
-the fixed classes above. The event count is exactly
+The indexed object bound is bottom-up. Charged small result cores are at most
+61,056 objects of at most 1,024 bytes. Other supporting decoder kinds are
+individually capped at 4,096 and split into an aggregate maximum of 3,584
+small objects of at most 1,024 bytes and 512 medium objects of at most 4,096
+bytes. A kind-9 relation and kind-35 Store boundary are medium; every other
+supporting object must satisfy the small bound unless its decoder is explicitly
+assigned medium by this plan. Barrier/artifact objects, scorer shards, and generator ledgers are
+each capped at 32 and aggregate to at most 96 objects of at most 65,536 bytes.
+Every producer is in the charged matrix or closed uncharged-constructor list;
+crossing a per-kind or aggregate cap is mechanical invalidity before writing.
+Object payload is therefore
+`61,056*1,024 + 3,584*1,024 + 512*4,096 + 96*65,536 = 74,579,968` bytes;
+65,248 frame prefixes and eight headers make 74,841,008.
+
+Full ARTB scope has
+`13,920+7,216+451+450+16+32+144+451 = 22,680` rows and 2,694,592 record bytes.
+No-guard scope has `16+1+16+32+144+1 = 210` rows and 63,232 record bytes.
+Fourteen headers make 2,757,908 bytes. The input-pack bound is
+`60,602*1,024 + 452*2,048 + 2*65,536 + 61,056*4 + 4*6 = 63,357,464`.
+The event count is exactly
 `24,000 + 192 + 5*4,096 + 2*8,192 = 61,056`. The capacity table totals
-39,826,496 bytes, 19,392 bytes below
-the frozen 38 MiB curriculum reservation. The no-guard cap covers its frozen
-maximum of 144 training operations plus root allocation, 16 root matches, one
-candidate result, and one freeze (163 events). The panel additionally reserves 16
+167,806,846 bytes, 1,013,890 bytes below the frozen 161 MiB curriculum
+reservation. The no-guard cap covers its exact 163-event schedule. The panel additionally reserves 16
 MiB: at most 14 MiB for its report and 2 MiB aggregate for receipts and the
 publication manifest. Hence the exact
-development, validation, and locked caps are respectively 624, 928, and 1,232
-MiB as frozen in the manifest. The locked cap remains below
-revision 1's bound. Preflight runs before fixture construction or policy work;
+development, validation, and locked caps are respectively 2,592, 3,880, and
+5,168 MiB as frozen in the manifest. Preflight runs before fixture construction or policy work;
 a logical record, pack, index shard, curriculum, or panel that cannot fit is
 mechanically invalid rather than truncated.
 
 Plan acceptances are committed in `docs/actionrelations-plan-reviews.json` and
 implementation acceptances in
-`docs/actionrelations-implementation-reviews.json`. Each ordered row is:
+`docs/actionrelations-implementation-reviews.json`. Their exact wires are:
 
 ```text
-[scope,reviewerTask,round,reviewedCommit,archiveSHA256,
- verdictSHA256,"accepted",attestationSHA256]
+["actionrelation-plan-reviews/v1",round,reviewedCommit,archiveSHA256,
+ [architectureRow,actionSemanticsRow,experimentalValidityRow]]
+["actionrelation-implementation-reviews/v1",round,reviewedCommit,
+ archiveSHA256,
+ [architectureRow,actionSemanticsRow,experimentalValidityRow]]
 ```
 
-The attestation is SHA-256 of the canonical preceding seven fields. Review
-authority comes from the archived independent reviewer result; the hash binds
-rather than impersonates reviewer identity. All three scopes must name the
-same exact commit and source archive. A rejection invalidates the whole round.
+Each row is
+`[scope,reviewerTask,verdictPath,verdictSHA256,"accepted",attestationSHA256]`.
+Scope order is exactly `architecture`, `action-semantics`, then
+`experimental-validity`. Verdict path is
+`docs/actionrelations-reviews/<plan-or-implementation>/round-<decimal>/<scope>.txt`.
+An accepted verdict file is exactly the eight ASCII bytes `ACCEPTED`, no
+newline, mode `100644`; any other bytes reject the row. Attestation is SHA-256
+of canonical
+`["actionrelation-review-attestation/v1",reviewKind,round,reviewedCommit,
+archiveSHA256,scope,reviewerTask,verdictPath,verdictSHA256,"accepted"]`.
+The archived independent verdict is authority; the row only binds it. All
+scopes name the same commit/archive. Any rejection invalidates the whole round.
 
-Before development, `docs/actionrelations-build-authority.json` binds the
-accepted plan and implementation commits, both review-manifest digests, every
-tracked Go/CUE/C/compiler input, module/toolchain file, command, test, plan and
-Part 3 umbrella input, the source-tree hash, `go version`, `mise.toml`,
-GOOS/GOARCH/CGO, build flags, produced binary SHA-256, and `go version -m`
-digest. Only the allowlisted `.nous/bin/actionrelation-nous-v1` may execute a
-panel; `go run`, overlays, build tags, nonempty `GOFLAGS`, any `GOWORK` other
-than literal `off`, and compiler inputs outside the manifest are rejected.
-Ignored local `go.work` and `go.work.sum` may exist but are recorded as
-non-inputs and never read. Runtime environment is reduced to an
-allowlist recorded in the execution manifest. Git replacement, alternates,
-shallow authority, unsafe config, hooks, in-progress operations, symlinks,
-dirty protected files, and untracked or ignored compiler inputs are rejected.
+`archiveSHA256` is SHA-256 of raw stdout from
+`GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c
+core.attributesFile=/dev/null archive --format=tar
+<40-lowercase-reviewedCommit>` at the canonical root,
+with no prefix, pathspec, compression, added file, or substitution. Review
+preflight rejects replacements, alternates, grafts, shallow history, unsafe or
+external attributes, submodule gitlinks, `export-ignore`, and `export-subst`.
+The environment assignments and `-c` option shown above are mandatory and no
+other environment or configuration input may change archive bytes. The exact
+`git version` is later bound by build authority; recomputation must match.
+
+Canonical build source rows are
+`[path,gitMode,gitBlobOID,byteLength,sha256,role]`, raw-path sorted and unique;
+role is `compiler-input`, `domain`, `test`, `toolchain`, `plan`, or `umbrella`.
+`sourceRoot` is SHA-256 of canonical
+`["actionrelation-source-tree/v1",implementationCommit,sourceRows]`. The exact
+build-authority wire is:
+
+```text
+["actionrelation-build-authority/v1",
+ planCommit,planArchiveSHA256,planReviewDigest,
+ implementationCommit,implementationArchiveSHA256,
+ implementationReviewDigest,buildHead,sourceRoot,sourceRows,
+ gitVersion,goVersion,goExecutablePath,goExecutableSHA256,miseTomlDigest,
+ buildArgv,buildEnvironmentRows,goos,goarch,cgoEnabled,
+ binaryPath,binarySHA256,goVersionMDigest,nonInputRows]
+```
+
+Source rows contain every tracked Go, CUE, C, assembly, generated/compiler
+input, module/toolchain file, command source, relevant test, build script, lane
+plan, and umbrella plan. Each equals its accepted implementation blob.
+`buildArgv` preserves argv without shell evaluation; environment rows are the
+complete unique ASCII-key-sorted allowlist. `GOFLAGS` is empty, `GOWORK` is
+`off`, and overlays/build tags are absent. Binary path is exactly
+`.nous/bin/actionrelation-nous-v1`; `goVersionMDigest` hashes exact stdout of
+`go version -m` on it. Path-sorted `nonInputRows` use `absent` or
+`present-not-read` and cover local `go.work`, `go.work.sum`, hooks, ignored
+files, and allowed evidence outputs. Build authority is constructed after the
+binary and introduces no build-input cycle. `buildHead` may be the later clean
+authority commit, but no compiler input may differ. Git replacement,
+alternates, shallow authority, unsafe config, hooks, in-progress operations,
+symlinks, dirty protected files, and untracked/ignored compiler inputs fail
+closed.
+
+Competence is a top-level prerequisite with exact wire:
+
+```text
+["actionrelation-competence-root/v1",sourceRoot,binaryDigest,
+ commandArgv,environmentRows,caseSetRoot,oracleResultRoot,totalCases,"passed"]
+```
+
+Argument order is preserved; environment rows are unique ASCII-key sorted.
+Case and result roots use `JRoot` over case-identity order. Only literal
+`passed` authorizes a panel. Review, build, competence, claim, running,
+execution-manifest, audit-attestation, report, receipt, and publication
+documents use their strict top-level decoders and are not object-index leaves.
 
 Canonical panel paths are:
 
@@ -1442,14 +1770,24 @@ Canonical panel paths are:
 Canonical top-level wires are closed arrays, not extensible objects:
 
 ```text
+["actionrelation-curriculum-fixture/v1",panel,curriculum,family,
+ acceptedAttempt,trainingCoreDigests,viewEvidenceDigests,
+ sixWorldDigests,attemptLedgerDigests]
 ["actionrelation-fixture-root/v1",panel,authority,curriculumRoots,scorerRoot]
 [
  "actionrelation-claim/v1",panel,"claimed",baseCommit,sourceRoot,authority
 ]
 ["actionrelation-running/v1",panel,"running",claimReceiptDigest,
  claimCommit,sourceRoot,attemptCommitment,secretLocationDigestOrNull]
-["actionrelation-execution-core/v1",panel,authority,sourceRoot,binaryDigest,
- environmentRows,fixtureRoot,runIDs,runningReceiptDigest]
+["actionrelation-execution-manifest/v1",role,panel,authority,sourceRoot,
+ binaryDigest,environmentRows,fixtureRoot,runIDs,transcriptRootRows,
+ resultRootRows,"completed"]
+["actionrelation-execution-core/v2",panel,authority,sourceRoot,binaryDigest,
+ planReviewDigest,implementationReviewDigest,buildDigest,competenceRoot,
+ environmentRows,fixtureRoot,primaryExecutionManifestDigest,
+ auditExecutionManifestDigest,auditAttestationsRoot,runningReceiptDigest]
+["actionrelation-audit-attestation/v1",primaryExecutionManifestDigest,
+ auditExecutionManifestDigest,transcriptRootRows,resultRootRows,"identical"]
 ["actionrelation-world-policy-row/v1",panel,curriculum,family,worldOrdinal,
  stratum,worldDigest,policy,searchTerminal,utilityWorkVector,utilityTotal,
  matchCounts,certificateCounts,sleepCount,historyCount,terminalSetDigest,
@@ -1458,11 +1796,14 @@ Canonical top-level wires are closed arrays, not extensible objects:
  acquisitionTerminal,artifactDigest,acquisitionWorkVector,
  sixOrderedWorldRowDigests,aggregateTerminal,searchWorkVector,searchTotal,
  lifecycleWorkVector,lifecycleTotal,behaviorEqual,budgetRemaining,operationRoot]
-["actionrelation-evidence-payload/v1",fixtureRoot,executionCoreDigest,
- objectPackRoots,journalPackRoots,detailPackRoots,acquisitionTableRoots,indexRoots,
- worldPolicyRowsRoot,curriculumPolicyRowsRoot]
-["actionrelation-report/v1",panel,authority,manifestDigest,reviewDigests,
- buildDigest,fixtureRoot,runningReceiptDigest,curriculumPolicyRowsRoot,
+["actionrelation-evidence-payload/v2",fixtureRoot,executionCoreDigest,
+ planReviewDigest,implementationReviewDigest,buildDigest,competenceRoot,
+ auditAttestationsRoot,storeBoundaryRows,
+ objectPackRoots,journalPackRoots,inputPackRoots,detailPackRoots,
+ acquisitionTableRoots,indexRoots,worldPolicyRowsRoot,curriculumPolicyRowsRoot]
+["actionrelation-report/v2",panel,authority,manifestDigest,planReviewDigest,
+ implementationReviewDigest,buildDigest,competenceRoot,
+ fixtureRoot,runningReceiptDigest,curriculumPolicyRowsRoot,
  mechanicalGates,
  primarySearchRatio,lifecycleRatio,amortizationRows,confidenceInterval,
  randomizationP,savingCoverage,power,
@@ -1470,10 +1811,19 @@ Canonical top-level wires are closed arrays, not extensible objects:
 ["actionrelation-terminal-receipt/v1",panel,state,runningReceiptDigest,
  sourceRoot,fixtureRoot,attemptCommitment,reportDigest,evidencePayloadDigest,
  reason]
-["actionrelation-publication/v1",planReviewDigest,implementationReviewDigest,
- buildDigest,claimReceiptDigest,runningReceiptDigest,executionCoreDigest,
+["actionrelation-publication/v2",planReviewDigest,implementationReviewDigest,
+ buildDigest,competenceRoot,claimReceiptDigest,runningReceiptDigest,executionCoreDigest,
  evidencePayloadDigest,reportDigest,terminalReceiptDigest]
 ```
+
+Curriculum roots are kind-47 object digests in curriculum-ordinal order.
+Training cores are the 16 committed-order digests, views are observation order
+then bank, worlds are slot `0..5`, and attempt ledgers are attempt order through
+the accepted attempt. `scorerRoot` is
+`JRoot("scorer-shards",[[worldDigest,shardOrdinal,shardDigest]...])`, ordered by
+world digest then ordinal and complete for every fixture world. `manifestDigest`
+is SHA-256 of the exact canonical compact JSON object displayed under Frozen
+manifest; no prose defaults or additional key participate.
 
 Each amortization row is:
 
@@ -1491,12 +1841,21 @@ the three recorded operands and signed saving remain exact partial totals,
 amortization summary. No JSON null, float, alternate infinity spelling, or
 omitted row is legal.
 
-Arrays have exactly the displayed arity and canonical nested row order.
+`auditAttestationsRoot` is `JRoot("audit-attestations",attestationDigests)` in
+raw semantic-run-ID order. `transcriptRootRows` and `resultRootRows` use that
+run's class order. Execution-manifest role is `primary` or `audit`; run IDs and
+root rows use the same raw run-ID order, and the core's two manifest digests
+must name those roles respectively. `storeBoundaryRows` are
+`[curriculum,scope,boundaryDigest]`, curriculum ordered and scope `nous` then
+`no-guard`. Pack-root fields contain the root references frozen above. The
+payload's four authority digests equal the execution core and report fields
+byte for byte. Arrays have exactly the displayed arity and canonical nested row order.
 Unknown, missing, duplicated, or reordered fields are invalid. World rows are
 ordered by curriculum, world ordinal, then policy; curriculum rows by
 curriculum then policy. Authority is the acyclic DAG
 `fixture -> execution core -> evidence payload -> report -> terminal receipt ->
-publication`; claim/running receipts enter as earlier prerequisites. The payload
+publication`; review/build/competence and claim/running receipts enter as
+earlier prerequisites. The payload
 contains neither report nor terminal-receipt digests, and the execution core
 contains no payload digest. No referenced or unreferenced leaf may be missing
 or extra.
@@ -1671,7 +2030,9 @@ Before implementation review:
   and leave relation/artifact bytes invariant; relation-instance matching
   charges and requires both applicability rows and trace context;
 - all guard formulae, counts, polarity, normalization, 451 candidates, and 450
-  canonical refinement edges are exhaustive and exact;
+  canonical refinement edges are exhaustive and exact; all 13,920 code-7
+  literal rows, 7,216 code-22 conjunction rows including the root, and 451
+  code-20 finalizations reconstruct;
 - observation construction cannot omit, reorder, duplicate, or relabel any of
   the four transition applications;
 - relation selection and tied unanimous-use behavior reconstruct from Store;
@@ -1697,16 +2058,19 @@ Before implementation review:
 - exact SHA-256 draws, multiply-high indices, rational bootstrap bounds,
   every namespace/index schedule, family/attempt decoding, randomization ties,
   zero denominators, and nested power are golden-tested;
-- pack split, index, digest, truncation, duplicate, reordering, oversized-file,
-  journal-chain, detail offsets/padding, table ordinal/Merkle proofs, sequence,
-  call-range, capacity-preflight, and path traversal attacks fail;
+- object/journal/input/detail/index/table pack split, every physical header and
+  root manifest, digest, truncation, duplicate, reordering, oversized file,
+  journal chain, typed-envelope/detail alignment, offsets/padding, table
+  ordinal/Merkle proofs, operation range, Store preboundary, capacity
+  preflight, and path traversal attacks fail;
 - fixture/scorer access traces prove truth is committed before policy and
   unavailable until termination; utility validation cannot invoke the complete
   enumerator;
 - six world rows plus acquisition reconstruct each curriculum row exactly once;
   evidence payload, report, terminal receipt, and publication hashes form an
   acyclic construction order;
-- plan/implementation review rows, build binary and environment, claimed/running
+- archived plan/implementation review rows and tar hashes, competence/build
+  roots, binary/environment, primary/audit deduplication, claimed/running
   receipt transitions, dirty Git, and replayed protected attempts fail closed;
 - dependency and source-surface scans enforce every package boundary; and
 - protected constructors have one direct guarded caller and no test, reflection,
