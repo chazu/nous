@@ -1,14 +1,15 @@
 # Transformation-schema induction vocabulary: implementation and trial record
 
-Status: **v2 implementation revision 5 unanimously accepted; review authority
-is being committed, v1 was closed unexecuted, and no v2 protected panel has run**
+Status: **v2 development classified `interim-power-authorized`; implementation
+revision 5 was unanimously accepted, v1 was closed unexecuted, and validation
+and locked panels have not run**
 
 This document records Vocabulary 2 of the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) as it
-is implemented and tested after adversarial implementation acceptance. It is
-not yet an empirical result. Development remains forbidden until the accepted
-authority is committed in the canonical review manifest; validation and locked
-execution remain forbidden by their later progression gates.
+is implemented, adversarially accepted, and evaluated on its public development
+panel. It is an interim empirical result, not a final locked-panel claim.
+Validation and locked execution remain forbidden by their later progression
+and evidence-commitment gates.
 
 ## Frozen identity and goal
 
@@ -234,28 +235,88 @@ candidate. It completed every other listed package, including
 rejects the current causal dependency proof. That failure is outside this
 vocabulary and was not changed or waived.
 
+## Protected development result
+
+After all three reviewers accepted exact implementation commit
+`bd374884662db7c0db562b0428ca032e79eded8b`, their authority and all 334
+protected source hashes were committed at
+`3fbbeb6dae1554cc89f28202872ed5611415c30e`. The public development panel then
+ran once. Its canonical report has payload digest
+`8a70df6e4c528fa50d5e146bdb59e876d5453079aef740461a4044ebc038ab1d`
+and classification `interim-power-authorized`.
+
+All 12 mechanical gates passed, the limitations array was empty, primary and
+audit executions agreed, and the competence result remained exactly 351
+forests, 25,272 schema applications, 7,020 concrete-program applications, and
+14 executable microcases.
+
+The preregistered primary comparison was decisive on the 48 development
+curricula:
+
+| Measure | Development result |
+| --- | ---: |
+| Nous perfect held-out curricula | 48 / 48 |
+| bounded-PBE perfect held-out curricula | 14 / 48 |
+| paired success advantage | 34 / 48 (70.8 percentage points) |
+| stratified bootstrap interval | 30 / 48 to 37 / 48 |
+| paired-randomization p-value | 1 / 10,001 |
+| Nous false applications | 0 |
+| Nous nonmatching work | 3,651 |
+| bounded-PBE nonmatching work | 409,051 |
+| synthetic locked panels passing power gate | 2,000 / 2,000 |
+
+The controls behaved in the expected directions. Positive LGG completed every
+curriculum but made one false application in every curriculum and was never
+perfect. Concrete replay completed every curriculum but was never perfect on
+held-out cases. Removing the equality guard retained a perfect result in 27
+curricula and produced `no-discovery` in 21. Random PBE was perfect in 16 and
+budget-exhausted in 32; bounded PBE was perfect in 14 and budget-exhausted in
+34.
+
+This is good evidence for the intended mechanism on the frozen synthetic
+distribution: factorized refinement discovered an executable schema reliably,
+generalized beyond memorized examples, abstained without false application,
+and used much less nonmatching search work than bounded PBE. It still does not
+establish a locked-panel effect or utility on naturally occurring software
+transformations.
+
+### Evidence-delivery constraint
+
+The run restored the checkout's ignored `go.work` and `go.work.sum` files
+byte-for-byte and did not claim validation or locked receipts. It persisted the
+canonical development report and evidence locally under `.nous/`, comprising
+638,361 files and approximately 2.7 GB. The single canonical
+`evidence-graph.json` is approximately 113 MB.
+
+The v2 guard requires every development evidence leaf and graph to be an
+ordinary committed Git blob before validation. Committing and pushing this
+bundle is therefore not a routine documentation commit and has not been done
+implicitly. Progression now requires an explicit evidence-storage decision:
+accept the repository cost and remote constraints for v2, or amend the next
+experiment identity to use a scalable content-addressed evidence transport
+without weakening committed reconstruction.
+
 ## What these trials do and do not show
 
-They show that the implemented vocabulary can recover and execute the expected
-schema families on safe generated curricula and that its reports can be
-reconstructed from semantic evidence rather than trusted counters. Ablation
-and control behavior supports—but does not by itself prove—the causal value of
-the factorized Store artifacts and evidence barriers.
+The protected development result shows that the implemented vocabulary can
+recover and execute the expected schema families across its frozen public
+distribution and that its report can be reconstructed from semantic evidence
+rather than trusted counters. Ablation and control behavior supports—but does
+not by itself prove—the causal value of the factorized Store artifacts and
+evidence barriers.
 They also show expected qualitative separation: concrete replay memorizes
 positive cases but cannot generalize, LGG over-applies, and removing the
 equality guard prevents safe completion where that guard is required.
 
-They do not establish the preregistered empirical claim, estimate an effect, or
-authorize protected execution. Those conclusions require accepted reviews of
-one exact commit followed by the one-shot development panel. If development
-power is unauthorized, this lane stops with that result; validation and locked
-panels remain unrun.
+They estimate a development effect and authorize progression by the frozen
+power rule. They do not establish the final preregistered claim: validation and
+locked panels remain unrun, and their evidence prerequisites have not yet been
+committed.
 
 ## Next protocol step
 
-Commit and push the canonical review manifest and this acceptance record. Once
-the resulting `HEAD` is clean and its protected files still match reviewed
-commit `bd374884662db7c0db562b0428ca032e79eded8b`, run the development entry
-point once under that reviewed repository authority. Continue to validation
-only if the development report classifies the frozen power analysis as
-`interim-power-authorized`.
+Choose how to preserve the 2.7 GB development evidence under the guard's
+committed-blob contract. Do not run validation until that evidence is durably
+committed, the repository is clean, and `verifyCommittedPanel` can reconstruct
+the development report from `HEAD`. Do not run locked until a later committed
+validation report independently passes its gate.
