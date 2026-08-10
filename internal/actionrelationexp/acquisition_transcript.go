@@ -1,12 +1,11 @@
 package actionrelationexp
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
 	"github.com/chazu/nous/internal/actionrelationacquire"
+	"github.com/chazu/nous/internal/actionrelationledger"
 	"github.com/chazu/nous/internal/dsl"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -20,12 +19,7 @@ type AcquisitionTranscript struct {
 }
 
 func AcquisitionRunID(panel, authority string, curriculum int, scope string) (string, error) {
-	if panel == "" || authority == "" || curriculum < 0 || scope != "nous" && scope != "no-guard" {
-		return "", fmt.Errorf("invalid acquisition run identity")
-	}
-	wire, _ := json.Marshal([]any{"actionrelation-run-id/v1", panel, authority, curriculum, "acquisition", scope})
-	digest := sha256.Sum256(wire)
-	return hex.EncodeToString(digest[:16]), nil
+	return actionrelationledger.AcquisitionRunID(panel, authority, curriculum, scope)
 }
 
 func BuildAcquisitionTranscript(run actionrelationacquire.Run, tables map[uint16]TableBundle, runID string) (AcquisitionTranscript, error) {
@@ -48,15 +42,29 @@ func BuildAcquisitionTranscript(run actionrelationacquire.Run, tables map[uint16
 	translator := acquisitionCallTranslator{run: run, tables: tables, ordinals: map[uint16]int{}}
 	calls := make([]ChargedCall, len(run.MeterRecords))
 	reservations := make([]WorkReservation, len(run.MeterRecords))
+	reservationNames := experiment.GetStrings("reservationUnits")
+	if experiment.GetString("runID") != runID || len(reservationNames) != len(run.MeterRecords) {
+		return AcquisitionTranscript{}, fmt.Errorf("acquisition reservations do not cover charged calls")
+	}
 	for sequence, meter := range run.MeterRecords {
 		code := uint8(meter.Code)
-		taskWire, _ := json.Marshal([]any{"actionrelation-task/v1", runID, "acquisition", sequence, code})
-		taskDigest := shaHex(taskWire)
-		reservation, err := BuildWorkReservation(runID, taskDigest, []uint8{code}, sequence, acquisitionLifecycleCap)
-		if err != nil || reservation.Status != "reserved" {
-			return AcquisitionTranscript{}, fmt.Errorf("reserve acquisition call %d: %w", sequence, err)
+		name := fmt.Sprintf("AR.Reservation.%s.%05d", runID, sequence)
+		if reservationNames[sequence] != name {
+			return AcquisitionTranscript{}, fmt.Errorf("acquisition reservation %d has noncanonical name", sequence)
 		}
-		call, err := translator.translate(meter, reservation.Digest)
+		u := run.Store.Get(name)
+		if u == nil || u.GetString("objectDigest") != meter.SourceTaskDigest {
+			return AcquisitionTranscript{}, fmt.Errorf("acquisition call %d lacks reserved authority", sequence)
+		}
+		reservation, err := actionrelationledger.ParseReservation([]byte(u.GetString("canonicalObject")))
+		if err != nil || VerifyWorkReservation(reservation, acquisitionLifecycleCap) != nil ||
+			reservation.Digest != meter.SourceTaskDigest || reservation.RunID != runID ||
+			reservation.TaskDigest != actionrelationledger.TaskDigest(runID, sequence, code) ||
+			len(reservation.OperationCodes) != 1 || reservation.OperationCodes[0] != code ||
+			reservation.TotalBefore != sequence || reservation.TotalAfter != sequence+1 || reservation.Status != "reserved" {
+			return AcquisitionTranscript{}, fmt.Errorf("invalid acquisition reservation %d", sequence)
+		}
+		call, err := translator.translate(meter, meter.SourceTaskDigest)
 		if err != nil {
 			return AcquisitionTranscript{}, fmt.Errorf("translate acquisition call %d: %w", sequence, err)
 		}

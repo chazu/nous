@@ -208,6 +208,9 @@ func completeAcquisitionFor(session *actionrelationacquire.Session, curriculum i
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}
+	if runID != session.RunID {
+		return AcquisitionEvidence{}, fmt.Errorf("acquisition run authority changed after reservation")
+	}
 	transcript, err := BuildAcquisitionTranscript(run, tables, runID)
 	if err != nil {
 		return AcquisitionEvidence{}, err
@@ -235,18 +238,19 @@ func retainAcquisitionTranscriptAuthority(store *unit.Store, experimentName stri
 	if experiment == nil {
 		return fmt.Errorf("missing acquisition experiment")
 	}
-	reservationNames := make([]string, len(transcript.Reservations))
+	reservationNames := experiment.GetStrings("reservationUnits")
+	if experiment.GetString("runID") != transcript.RunID || len(reservationNames) != len(transcript.Reservations) {
+		return fmt.Errorf("missing pre-execution acquisition reservations")
+	}
 	for index, reservation := range transcript.Reservations {
 		if err := VerifyWorkReservation(reservation, acquisitionLifecycleCap); err != nil {
 			return err
 		}
 		name := fmt.Sprintf("AR.Reservation.%s.%05d", transcript.RunID, index)
-		u := unit.New(name)
-		u.Set("isA", []string{"CompoundWorkReservation", "Anything"})
-		u.Set("canonicalObject", string(reservation.Canonical))
-		u.Set("objectDigest", reservation.Digest)
-		store.Put(u)
-		reservationNames[index] = name
+		u := store.Get(name)
+		if reservationNames[index] != name || u == nil || u.GetString("canonicalObject") != string(reservation.Canonical) || u.GetString("objectDigest") != reservation.Digest {
+			return fmt.Errorf("pre-execution acquisition reservation %d changed", index)
+		}
 	}
 	rootNames := make([]string, 0, len(transcript.ObservationRoots)+1)
 	for index, root := range append(append([]OperationRoot{}, transcript.ObservationRoots...), transcript.RunRoot) {
@@ -265,7 +269,6 @@ func retainAcquisitionTranscriptAuthority(store *unit.Store, experimentName stri
 	inputRoot, _ := transcript.Transcript.InputRoot.Digest()
 	detailRoot, _ := transcript.Transcript.DetailRoot.Digest()
 	experiment.Set("runID", transcript.RunID)
-	experiment.Set("reservationUnits", reservationNames)
 	experiment.Set("operationRootUnits", rootNames)
 	experiment.Set("runOperationRoot", transcript.RunRoot.Digest)
 	experiment.Set("journalRoot", journalRoot)

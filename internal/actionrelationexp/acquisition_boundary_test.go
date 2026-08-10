@@ -9,7 +9,7 @@ import (
 )
 
 func TestAcquisitionBoundaryIndexesOnlyNonTableLogicalObjects(t *testing.T) {
-	session, err := actionrelationacquire.Begin("../../domains", "boundary")
+	session, err := actionrelationacquire.BeginFor("../../domains", "boundary", 0, 2, "development", PlanCommit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestAcquisitionBoundaryIndexesOnlyNonTableLogicalObjects(t *testing.T) {
 }
 
 func TestAcquisitionBoundaryDetectsLaterLogicalObject(t *testing.T) {
-	session, err := actionrelationacquire.Begin("../../domains", "boundary-mutation")
+	session, err := actionrelationacquire.BeginFor("../../domains", "boundary-mutation", 0, 3, "development", PlanCommit)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,11 +12,13 @@ import (
 const TrainingCount = 16
 
 type Case struct {
-	Ordinal     int
-	State       []byte
-	AOccurrence []byte
-	BOccurrence []byte
-	Label       string
+	Ordinal              int
+	State                []byte
+	AOccurrence          []byte
+	BOccurrence          []byte
+	Label                string
+	AInitiallyApplicable bool
+	BInitiallyApplicable bool
 }
 
 // Training returns eight disjoint-add commutations followed by one witness for
@@ -140,7 +142,15 @@ func makeCase(state actionrelations.State, left, right actionrelations.SemanticA
 	if err != nil {
 		return Case{}, "", err
 	}
-	return Case{State: stateJSON, AOccurrence: aJSON, BOccurrence: bJSON, Label: observation.Label}, observation.Label, nil
+	aInitial, err := actionrelationoracle.Apply(stateJSON, mustActionJSON(a.Action))
+	if err != nil {
+		return Case{}, "", err
+	}
+	bInitial, err := actionrelationoracle.Apply(stateJSON, mustActionJSON(b.Action))
+	if err != nil {
+		return Case{}, "", err
+	}
+	return Case{State: stateJSON, AOccurrence: aJSON, BOccurrence: bJSON, Label: observation.Label, AInitiallyApplicable: aInitial.Applicable, BInitiallyApplicable: bInitial.Applicable}, observation.Label, nil
 }
 
 func mustActionJSON(action actionrelations.SemanticAction) []byte {

@@ -58,7 +58,7 @@ func TestAcquisitionStoreEncodesFrozenHighVolumeTables(t *testing.T) {
 }
 
 func TestEvidenceBoundAcquisitionClosesBarrierAfterTableManifests(t *testing.T) {
-	session, err := actionrelationacquire.Begin("../../domains", "evidence-bound")
+	session, err := actionrelationacquire.BeginFor("../../domains", "evidence-bound", 0, 4, "development", PlanCommit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +96,16 @@ func TestEvidenceBoundAcquisitionClosesBarrierAfterTableManifests(t *testing.T) 
 	if len(evidence.Transcript.Transcript.CallIDs) != len(evidence.Run.MeterRecords) || len(evidence.Transcript.Reservations) != len(evidence.Run.MeterRecords) || len(evidence.Transcript.ObservationRoots) != 16 {
 		t.Fatal("acquisition transcript does not cover every charged call and observation")
 	}
+	reservationNames := experiment.GetStrings("reservationUnits")
+	for sequence, meter := range evidence.Run.MeterRecords {
+		if sequence >= len(reservationNames) {
+			t.Fatal("charged call lacks a pre-execution reservation unit")
+		}
+		reservation := evidence.Run.Store.Get(reservationNames[sequence])
+		if reservation == nil || meter.SourceTaskDigest == "" || reservation.GetString("objectDigest") != meter.SourceTaskDigest || evidence.Transcript.Reservations[sequence].Digest != meter.SourceTaskDigest {
+			t.Fatalf("charged call %d is not bound to its retained reservation", sequence)
+		}
+	}
 	firstObservation := evidence.Run.Store.Get(experiment.GetStrings("observationUnits")[0])
 	firstRecord := evidence.Tables[105].Files[0].Data[len(TableHeader) : len(TableHeader)+tableRecordSizes[105]]
 	wantOperationRoot, _ := hex.DecodeString(firstObservation.GetString("operationRoot"))
@@ -128,7 +138,7 @@ func TestAcquisitionTablesProduceCompletePhysicalManifests(t *testing.T) {
 }
 
 func TestNoGuardAcquisitionHasClosedRootOnlyTablesAndTranscript(t *testing.T) {
-	session, err := actionrelationacquire.BeginNoGuard("../../domains", "no-guard-evidence", 0)
+	session, err := actionrelationacquire.BeginNoGuardFor("../../domains", "no-guard-evidence", 0, 12, "development", PlanCommit)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,20 +1,29 @@
 package dsl
 
 import (
+	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 )
 
 type ActionRelationMeterRecord struct {
-	Code      uint16
-	Counter   uint8
-	Operation string
-	Inputs    [][]byte
-	Outputs   [][]byte
+	Code             uint16
+	Counter          uint8
+	Operation        string
+	SourceTaskDigest string
+	Inputs           [][]byte
+	Outputs          [][]byte
+}
+
+type ActionRelationMeterPlanEntry struct {
+	Code             uint16
+	SourceTaskDigest string
 }
 
 type actionRelationMeter struct {
 	records []ActionRelationMeterRecord
+	plan    []ActionRelationMeterPlanEntry
 }
 
 var actionRelationMeters = struct {
@@ -23,6 +32,10 @@ var actionRelationMeters = struct {
 }{items: map[string]*actionRelationMeter{}}
 
 func RegisterActionRelationMeter(token string) error {
+	return RegisterActionRelationMeterPlan(token, nil)
+}
+
+func RegisterActionRelationMeterPlan(token string, plan []ActionRelationMeterPlanEntry) error {
 	if token == "" {
 		return errors.New("empty action-relation meter token")
 	}
@@ -31,7 +44,13 @@ func RegisterActionRelationMeter(token string) error {
 	if _, exists := actionRelationMeters.items[token]; exists {
 		return errors.New("duplicate action-relation meter token")
 	}
-	actionRelationMeters.items[token] = &actionRelationMeter{}
+	for _, entry := range plan {
+		raw, err := hex.DecodeString(entry.SourceTaskDigest)
+		if entry.Code < 1 || entry.Code > 25 || err != nil || len(raw) != 32 || entry.SourceTaskDigest != strings.ToLower(entry.SourceTaskDigest) {
+			return errors.New("invalid action-relation meter plan")
+		}
+	}
+	actionRelationMeters.items[token] = &actionRelationMeter{plan: append([]ActionRelationMeterPlanEntry(nil), plan...)}
 	return nil
 }
 
@@ -67,7 +86,25 @@ func ChargeActionRelationMeter(token string, code uint16, counter uint8, operati
 	if meter == nil {
 		return errors.New("unknown action-relation meter capability")
 	}
-	meter.records = append(meter.records, ActionRelationMeterRecord{Code: code, Counter: counter, Operation: operation, Inputs: cloneByteRows(inputs), Outputs: cloneByteRows(outputs)})
+	source := ""
+	if len(meter.plan) > 0 {
+		sequence := len(meter.records)
+		if sequence >= len(meter.plan) || meter.plan[sequence].Code != code {
+			return errors.New("action-relation operation violates reserved plan")
+		}
+		source = meter.plan[sequence].SourceTaskDigest
+	}
+	meter.records = append(meter.records, ActionRelationMeterRecord{Code: code, Counter: counter, Operation: operation, SourceTaskDigest: source, Inputs: cloneByteRows(inputs), Outputs: cloneByteRows(outputs)})
+	return nil
+}
+
+func ActionRelationMeterPlanComplete(token string) error {
+	actionRelationMeters.Lock()
+	defer actionRelationMeters.Unlock()
+	meter := actionRelationMeters.items[token]
+	if meter == nil || len(meter.plan) > 0 && len(meter.records) != len(meter.plan) {
+		return errors.New("incomplete action-relation meter plan")
+	}
 	return nil
 }
 

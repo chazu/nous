@@ -11,6 +11,7 @@ import (
 	"io"
 
 	"github.com/chazu/nous/internal/actionrelationfixturecore"
+	"github.com/chazu/nous/internal/actionrelationledger"
 	"github.com/chazu/nous/internal/actionrelationwire"
 	"github.com/chazu/nous/internal/agenda"
 	"github.com/chazu/nous/internal/dsl"
@@ -45,6 +46,7 @@ type Session struct {
 	Store      *unit.Store
 	Experiment string
 	Scope      string
+	RunID      string
 	engine     *engine.Engine
 	meterToken string
 	closed     bool
@@ -58,11 +60,23 @@ func BeginFamily(domainsDir, token string, family int) (*Session, error) {
 	return BeginFamilyScope(domainsDir, token, family, "nous")
 }
 
+func BeginFor(domainsDir, token string, family, curriculum int, panel, authority string) (*Session, error) {
+	return BeginFamilyScopeFor(domainsDir, token, family, "nous", panel, authority, curriculum)
+}
+
 func BeginNoGuard(domainsDir, token string, family int) (*Session, error) {
 	return BeginFamilyScope(domainsDir, token, family, "no-guard")
 }
 
+func BeginNoGuardFor(domainsDir, token string, family, curriculum int, panel, authority string) (*Session, error) {
+	return BeginFamilyScopeFor(domainsDir, token, family, "no-guard", panel, authority, curriculum)
+}
+
 func BeginFamilyScope(domainsDir, token string, family int, scope string) (*Session, error) {
+	return BeginFamilyScopeFor(domainsDir, token, family, scope, "development", acceptedPlanCommit, 0)
+}
+
+func BeginFamilyScopeFor(domainsDir, token string, family int, scope, panel, authority string, curriculum int) (*Session, error) {
 	if scope != "nous" && scope != "no-guard" {
 		return nil, fmt.Errorf("invalid acquisition scope")
 	}
@@ -81,11 +95,33 @@ func BeginFamilyScope(domainsDir, token string, family int, scope string) (*Sess
 	if err := installSemanticInputs(store, training); err != nil {
 		return nil, err
 	}
+	runID, err := actionrelationledger.AcquisitionRunID(panel, authority, curriculum, scope)
+	if err != nil {
+		return nil, err
+	}
 	experiment := unit.New("AR.Experiment." + token)
 	experiment.Set("isA", []string{"ActionRelationExperiment", "Anything"})
 	experiment.Set("expectedObservationCount", len(training))
 	meterToken := "arm:" + token
-	if err := dsl.RegisterActionRelationMeter(meterToken); err != nil {
+	operationCodes := acquisitionOperationSchedule(training, scope)
+	reservationNames := make([]string, len(operationCodes))
+	meterPlan := make([]dsl.ActionRelationMeterPlanEntry, len(operationCodes))
+	for sequence, code := range operationCodes {
+		taskDigest := actionrelationledger.TaskDigest(runID, sequence, code)
+		reservation, err := actionrelationledger.BuildReservation(runID, taskDigest, []uint8{code}, sequence, acquisitionLifecycleCap)
+		if err != nil || reservation.Status != "reserved" {
+			return nil, fmt.Errorf("reserve acquisition operation %d: %w", sequence, err)
+		}
+		name := fmt.Sprintf("AR.Reservation.%s.%05d", runID, sequence)
+		u := unit.New(name)
+		u.Set("isA", []string{"CompoundWorkReservation", "Anything"})
+		u.Set("canonicalObject", string(reservation.Canonical))
+		u.Set("objectDigest", reservation.Digest)
+		store.Put(u)
+		reservationNames[sequence] = name
+		meterPlan[sequence] = dsl.ActionRelationMeterPlanEntry{Code: uint16(code), SourceTaskDigest: reservation.Digest}
+	}
+	if err := dsl.RegisterActionRelationMeterPlan(meterToken, meterPlan); err != nil {
 		return nil, err
 	}
 	fail := func(err error) (*Session, error) {
@@ -93,6 +129,8 @@ func BeginFamilyScope(domainsDir, token string, family int, scope string) (*Sess
 		return nil, err
 	}
 	experiment.Set("meterToken", meterToken)
+	experiment.Set("runID", runID)
+	experiment.Set("reservationUnits", reservationNames)
 	firstA, err := actionrelations.ParseOccurrence(training[0].AOccurrence)
 	if err != nil {
 		return fail(err)
@@ -144,7 +182,7 @@ func BeginFamilyScope(domainsDir, token string, family int, scope string) (*Sess
 	if eng.LastError != nil {
 		return fail(fmt.Errorf("arFinalize: %w", eng.LastError))
 	}
-	session := &Session{Store: store, Experiment: experiment.Name, Scope: scope, engine: eng, meterToken: meterToken}
+	session := &Session{Store: store, Experiment: experiment.Name, Scope: scope, RunID: runID, engine: eng, meterToken: meterToken}
 	run, err := session.Snapshot()
 	if err != nil {
 		return fail(err)
@@ -213,6 +251,10 @@ func (s *Session) BindEvidence(roots EvidenceRoots) (Run, error) {
 		s.Abort()
 		return Run{}, err
 	}
+	if err := dsl.ActionRelationMeterPlanComplete(s.meterToken); err != nil {
+		s.Abort()
+		return Run{}, err
+	}
 	s.closed = true
 	dsl.UnregisterActionRelationMeter(s.meterToken)
 	if run.Artifact == "" || experiment.GetString("terminal") != "completed" || !experiment.GetBool("guardSearchClosed") {
@@ -272,6 +314,49 @@ func ExecuteFamilyScope(domainsDir, token string, family int, scope string) (Run
 }
 
 const zeroDigest = "0000000000000000000000000000000000000000000000000000000000000000"
+
+const (
+	acceptedPlanCommit      = "a3e18b10a01cf83315bff398586e91cd33544861"
+	acquisitionLifecycleCap = 2_000_000
+)
+
+func acquisitionOperationSchedule(training []actionrelationfixturecore.Case, scope string) []uint8 {
+	var result []uint8
+	for _, testCase := range training {
+		result = append(result, 5, 5, 4, 4)
+		if testCase.AInitiallyApplicable {
+			result = append(result, 5, 4)
+		}
+		if testCase.BInitiallyApplicable {
+			result = append(result, 5, 4)
+		}
+		if testCase.Label == "commutes" || testCase.Label == "conflicts" {
+			result = append(result, 6)
+		}
+	}
+	guards := actionrelations.EnumerateGuards()
+	if scope == "no-guard" {
+		guards = guards[:1]
+	}
+	result = append(result, 1)
+	if scope == "nous" {
+		for range guards[1:] {
+			result = append(result, 3, 2)
+		}
+	}
+	for _, guard := range guards {
+		for range training {
+			for range guard.Literals {
+				result = append(result, 7)
+			}
+			result = append(result, 22)
+		}
+	}
+	for range guards {
+		result = append(result, 20)
+	}
+	return append(result, 8)
+}
 
 func developmentDigests(label string, count int) []string {
 	result := make([]string, count)
