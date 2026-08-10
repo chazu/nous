@@ -187,7 +187,7 @@ func actionRelationPhaseCode(vm *VM, training, certificate, learned, fallback ui
 		switch vm.CurrentTask.SlotName {
 		case "arObserve", "arEvaluate", "arFinalize":
 			return training
-		case "arCertify":
+		case "arCertify", "arCertifyInitial", "arCertifyCross", "arCertifyEquality", "arCertifyAssemble":
 			return certificate
 		case "arMatch":
 			return learned

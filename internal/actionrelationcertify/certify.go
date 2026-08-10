@@ -22,13 +22,30 @@ type Result struct {
 }
 
 func Execute(store *unit.Store, state actionrelations.State, a, b actionrelations.Occurrence, witness []byte, operationRoot, token string) (Result, error) {
-	stateJSON, err := state.CanonicalJSON()
+	request, err := Begin(store, state, a, b, witness, token, "")
 	if err != nil {
 		return Result{}, err
 	}
+	if err := RunInitial(store, request); err != nil {
+		return Result{}, err
+	}
+	if err := RunCross(store, request); err != nil {
+		return Result{}, err
+	}
+	if err := RunEquality(store, request); err != nil {
+		return Result{}, err
+	}
+	return Complete(store, request, operationRoot)
+}
+
+func Begin(store *unit.Store, state actionrelations.State, a, b actionrelations.Occurrence, witness []byte, token, meterToken string) (string, error) {
+	stateJSON, err := state.CanonicalJSON()
+	if err != nil {
+		return "", err
+	}
 	a, b, err = actionrelations.CanonicalPair(a, b)
 	if err != nil || a == b {
-		return Result{}, actionrelations.ErrInvalid
+		return "", actionrelations.ErrInvalid
 	}
 	aJSON, _ := a.CanonicalJSON()
 	bJSON, _ := b.CanonicalJSON()
@@ -37,7 +54,7 @@ func Execute(store *unit.Store, state actionrelations.State, a, b actionrelation
 		digest := sha256.Sum256(append(append(append(stateJSON, aJSON...), bJSON...), witness...))
 		name += "." + hex.EncodeToString(digest[:8])
 		if store.Has(name) {
-			return Result{}, fmt.Errorf("certificate request name occupied")
+			return "", fmt.Errorf("certificate request name occupied")
 		}
 	}
 	request := unit.New(name)
@@ -46,18 +63,71 @@ func Execute(store *unit.Store, state actionrelations.State, a, b actionrelation
 	request.Set("aOccurrence", string(aJSON))
 	request.Set("bOccurrence", string(bJSON))
 	request.Set("witness", string(witness))
-	request.Set("operationRoot", operationRoot)
+	if meterToken != "" {
+		request.Set("meterToken", meterToken)
+	}
 	store.Put(request)
+	return request.Name, nil
+}
+
+func RunInitial(store *unit.Store, request string) error {
+	return executeStage(store, request, "arCertifyInitial", "initialTerminal")
+}
+
+func CrossOperationCodes(store *unit.Store, request string) []uint8 {
+	u := store.Get(request)
+	if u != nil && u.GetString("afterAUnit") != "" && u.GetString("afterBUnit") != "" {
+		return []uint8{13, 13, 12, 12}
+	}
+	return nil
+}
+
+func RunCross(store *unit.Store, request string) error {
+	return executeStage(store, request, "arCertifyCross", "crossTerminal")
+}
+
+func EqualityOperationCodes(store *unit.Store, request string) []uint8 {
+	u := store.Get(request)
+	if u != nil && u.GetString("abUnit") != "" && u.GetString("baUnit") != "" {
+		return []uint8{14}
+	}
+	return nil
+}
+
+func RunEquality(store *unit.Store, request string) error {
+	return executeStage(store, request, "arCertifyEquality", "equalityTerminal")
+}
+
+func Complete(store *unit.Store, request, operationRoot string) (Result, error) {
+	u := store.Get(request)
+	if u == nil {
+		return Result{}, fmt.Errorf("missing certificate request")
+	}
+	u.Set("operationRoot", operationRoot)
+	if err := executeStage(store, request, "arCertifyAssemble", "certificateTerminal"); err != nil {
+		return Result{}, err
+	}
+	return Result{Request: request, Terminal: u.GetString("certificateTerminal"), Certificate: u.GetString("certificateUnit"), Attempt: u.GetString("certificateAttemptUnit")}, nil
+}
+
+func executeStage(store *unit.Store, request, slot, terminalSlot string) error {
+	u := store.Get(request)
+	if u == nil {
+		return fmt.Errorf("missing certificate request")
+	}
 	ag := agenda.New()
 	eng := engine.New(store, ag)
 	eng.Out, eng.VM.Out = io.Discard, io.Discard
 	eng.MutConfig.Enabled = false
 	if err := eng.VM.InitError(); err != nil {
-		return Result{}, err
+		return err
 	}
-	eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: request.Name, SlotName: "arCertify"})
+	eng.WorkOnTask(&agenda.Task{Priority: 900, UnitName: request, SlotName: slot})
 	if eng.LastError != nil {
-		return Result{}, eng.LastError
+		return eng.LastError
 	}
-	return Result{Request: request.Name, Terminal: request.GetString("certificateTerminal"), Certificate: request.GetString("certificateUnit"), Attempt: request.GetString("certificateAttemptUnit")}, nil
+	if u.GetString(terminalSlot) == "" {
+		return fmt.Errorf("certificate stage %s did not complete", slot)
+	}
+	return nil
 }

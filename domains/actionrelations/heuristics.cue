@@ -315,15 +315,15 @@ units: [
 			"""#
 	},
 	{
-		name: "AR-H-CertifyLocalDiamond"
+		name: "AR-H-CertifyLocalDiamondInitial"
 		worth: 700
 		isA: ["Heuristic", "Anything"]
-		english: "Build one fresh local diamond certificate through explicit applicability, transition, and equality calls"
+		english: "Execute the two initial arms of one supplied local diamond"
 		overallRecord: {successes: 0, failures: 0}
 		ifWorkingOnTask: #"""
-			"CurSlot" @ "arCertify" =
+			"CurSlot" @ "arCertifyInitial" =
 			"CurUnit" @ "ActionRelationCertificateRequest" isa? and
-			"CurUnit" @ "certificateTerminal" get-slot nil = and
+			"CurUnit" @ "initialTerminal" get-slot nil = and
 			"""#
 		thenCompute: #"""
 			"CurUnit" @ "request" !
@@ -338,7 +338,32 @@ units: [
 			"state" @ "b" @ "bApp" @ "Cert.Transition.B." "request" @ concat "Cert.State.AfterB." "request" @ concat ar-apply "bResult" !
 			"aResult" @ 0 list-get "aInitial" ! "aResult" @ 1 list-get "afterAUnit" !
 			"bResult" @ 0 list-get "bInitial" ! "bResult" @ 1 list-get "afterBUnit" !
-			"" "bAfterA" ! "" "aAfterB" ! "" "equality" !
+			"aInitial" @ "request" @ "aInitial" set-slot
+			"bInitial" @ "request" @ "bInitial" set-slot
+			"afterAUnit" @ "request" @ "afterAUnit" set-slot
+			"afterBUnit" @ "request" @ "afterBUnit" set-slot
+			"completed" "request" @ "initialTerminal" set-slot
+			"""#
+	},
+	{
+		name: "AR-H-CertifyLocalDiamondCross"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Execute the two crossed arms of one supplied local diamond"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arCertifyCross" =
+			"CurUnit" @ "ActionRelationCertificateRequest" isa? and
+			"CurUnit" @ "initialTerminal" get-slot "completed" = and
+			"CurUnit" @ "crossTerminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "aOccurrence" get-slot "a" !
+			"request" @ "bOccurrence" get-slot "b" !
+			"request" @ "afterAUnit" get-slot "afterAUnit" !
+			"request" @ "afterBUnit" get-slot "afterBUnit" !
+			"" "bAfterA" ! "" "aAfterB" ! "" "abUnit" ! "" "baUnit" !
 			"afterAUnit" @ "" != "afterBUnit" @ "" != and
 			if
 				"afterAUnit" @ "state" get-slot "afterA" !
@@ -349,14 +374,67 @@ units: [
 				"afterB" @ "a" @ "aCrossApp" @ "Cert.Transition.AAfterB." "request" @ concat "Cert.State.BA." "request" @ concat ar-apply "aCrossResult" !
 				"bCrossResult" @ 0 list-get "bAfterA" ! "bCrossResult" @ 1 list-get "abUnit" !
 				"aCrossResult" @ 0 list-get "aAfterB" ! "aCrossResult" @ 1 list-get "baUnit" !
-				"abUnit" @ "" != "baUnit" @ "" != and
-				if
-					"abUnit" @ "state" get-slot "abState" !
-					"baUnit" @ "state" get-slot "baState" !
-					"abState" @ "baState" @ "Cert.Equality." "request" @ concat ar-state-equal? "equality" !
-				then
 			then
-			"state" @ "a" @ "b" @ "request" @ "witness" get-slot "aInitial" @ "bInitial" @ "bAfterA" @ "aAfterB" @ "equality" @ "a" @ "request" @ "operationRoot" get-slot "AR.CertificateAttempt." "request" @ concat ar-certificate-assemble "attempt" !
+			"bAfterA" @ "request" @ "bAfterA" set-slot
+			"aAfterB" @ "request" @ "aAfterB" set-slot
+			"abUnit" @ "request" @ "abUnit" set-slot
+			"baUnit" @ "request" @ "baUnit" set-slot
+			"completed" "request" @ "crossTerminal" set-slot
+			"""#
+	},
+	{
+		name: "AR-H-CertifyLocalDiamondEquality"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Compare the two completed local-diamond arms when both exist"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arCertifyEquality" =
+			"CurUnit" @ "ActionRelationCertificateRequest" isa? and
+			"CurUnit" @ "crossTerminal" get-slot "completed" = and
+			"CurUnit" @ "equalityTerminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "abUnit" get-slot "abUnit" !
+			"request" @ "baUnit" get-slot "baUnit" !
+			"" "equality" !
+			"abUnit" @ "" != "baUnit" @ "" != and
+			if
+				"abUnit" @ "state" get-slot "abState" !
+				"baUnit" @ "state" get-slot "baState" !
+				"abState" @ "baState" @ "Cert.Equality." "request" @ concat ar-state-equal? "equality" !
+			then
+			"equality" @ "request" @ "equality" set-slot
+			"completed" "request" @ "equalityTerminal" set-slot
+			"""#
+	},
+	{
+		name: "AR-H-CertifyLocalDiamondAssemble"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Assemble one local-diamond attempt after its charged operation root is closed"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arCertifyAssemble" =
+			"CurUnit" @ "ActionRelationCertificateRequest" isa? and
+			"CurUnit" @ "equalityTerminal" get-slot "completed" = and
+			"CurUnit" @ "certificateTerminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "state" get-slot
+			"request" @ "aOccurrence" get-slot
+			"request" @ "bOccurrence" get-slot
+			"request" @ "witness" get-slot
+			"request" @ "aInitial" get-slot
+			"request" @ "bInitial" get-slot
+			"request" @ "bAfterA" get-slot
+			"request" @ "aAfterB" get-slot
+			"request" @ "equality" get-slot
+			"request" @ "aOccurrence" get-slot
+			"request" @ "operationRoot" get-slot
+			"AR.CertificateAttempt." "request" @ concat ar-certificate-assemble "attempt" !
 			"attempt" @ nil !=
 			if
 				"attempt" @ "request" @ "certificateAttemptUnit" set-slot
