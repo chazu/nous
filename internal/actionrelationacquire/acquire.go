@@ -44,16 +44,28 @@ type EvidenceRoots struct {
 type Session struct {
 	Store      *unit.Store
 	Experiment string
+	Scope      string
 	engine     *engine.Engine
 	meterToken string
 	closed     bool
 }
 
 func Begin(domainsDir, token string) (*Session, error) {
-	return BeginFamily(domainsDir, token, 0)
+	return BeginFamilyScope(domainsDir, token, 0, "nous")
 }
 
 func BeginFamily(domainsDir, token string, family int) (*Session, error) {
+	return BeginFamilyScope(domainsDir, token, family, "nous")
+}
+
+func BeginNoGuard(domainsDir, token string, family int) (*Session, error) {
+	return BeginFamilyScope(domainsDir, token, family, "no-guard")
+}
+
+func BeginFamilyScope(domainsDir, token string, family int, scope string) (*Session, error) {
+	if scope != "nous" && scope != "no-guard" {
+		return nil, fmt.Errorf("invalid acquisition scope")
+	}
 	training, err := actionrelationfixturecore.TrainingFamily(family)
 	if err != nil {
 		return nil, err
@@ -98,6 +110,7 @@ func BeginFamily(domainsDir, token string, family int) (*Session, error) {
 	experiment.Set("patternUnit", putCanonical(store, "ActionRelationPattern", patternJSON))
 	experiment.Set("family", family)
 	experiment.Set("familyName", actionrelationfixturecore.FamilyNames[family])
+	experiment.Set("scope", scope)
 	store.Put(experiment)
 	for _, testCase := range training {
 		name := fmt.Sprintf("AR.Training.%s.%02d", token, testCase.Ordinal)
@@ -131,12 +144,16 @@ func BeginFamily(domainsDir, token string, family int) (*Session, error) {
 	if eng.LastError != nil {
 		return fail(fmt.Errorf("arFinalize: %w", eng.LastError))
 	}
-	session := &Session{Store: store, Experiment: experiment.Name, engine: eng, meterToken: meterToken}
+	session := &Session{Store: store, Experiment: experiment.Name, Scope: scope, engine: eng, meterToken: meterToken}
 	run, err := session.Snapshot()
 	if err != nil {
 		return fail(err)
 	}
-	if run.Observations != 16 || run.Candidates != 451 || run.Edges != 450 || run.LiteralRows != 13920 || run.GuardResults != 7216 || run.CandidateResults != 451 || run.Winners < 1 || experiment.GetBool("candidatesFinalized") != true {
+	wantCandidates, wantEdges, wantLiterals, wantGuardResults := 451, 450, 13920, 7216
+	if scope == "no-guard" {
+		wantCandidates, wantEdges, wantLiterals, wantGuardResults = 1, 0, 0, 16
+	}
+	if run.Observations != 16 || run.Candidates != wantCandidates || run.Edges != wantEdges || run.LiteralRows != wantLiterals || run.GuardResults != wantGuardResults || run.CandidateResults != wantCandidates || run.Winners < 1 || experiment.GetBool("candidatesFinalized") != true {
 		session.Abort()
 		return nil, fmt.Errorf("partial acquisition cardinality mismatch: %+v", run)
 	}
@@ -165,7 +182,11 @@ func (s *Session) Snapshot() (Run, error) {
 }
 
 func (s *Session) BindEvidence(roots EvidenceRoots) (Run, error) {
-	if s == nil || s.closed || len(roots.CandidateLeaves) != 451 || len(roots.EvaluationTableRoots) != 2 {
+	wantCandidates, wantEvaluations := 451, 2
+	if s != nil && s.Scope == "no-guard" {
+		wantCandidates, wantEvaluations = 1, 1
+	}
+	if s == nil || s.closed || len(roots.CandidateLeaves) != wantCandidates || len(roots.EvaluationTableRoots) != wantEvaluations || s.Scope == "nous" && !actionrelationsDigest(roots.EdgeTableRoot) || s.Scope == "no-guard" && roots.EdgeTableRoot != zeroDigest {
 		return Run{}, fmt.Errorf("invalid evidence-bound acquisition session")
 	}
 	experiment := s.Store.Get(s.Experiment)
@@ -215,7 +236,15 @@ func Execute(domainsDir, token string) (Run, error) {
 }
 
 func ExecuteFamily(domainsDir, token string, family int) (Run, error) {
-	session, err := BeginFamily(domainsDir, token, family)
+	return ExecuteFamilyScope(domainsDir, token, family, "nous")
+}
+
+func ExecuteNoGuard(domainsDir, token string, family int) (Run, error) {
+	return ExecuteFamilyScope(domainsDir, token, family, "no-guard")
+}
+
+func ExecuteFamilyScope(domainsDir, token string, family int, scope string) (Run, error) {
+	session, err := BeginFamilyScope(domainsDir, token, family, scope)
 	if err != nil {
 		return Run{}, err
 	}
@@ -225,7 +254,7 @@ func ExecuteFamily(domainsDir, token string, family int) (Run, error) {
 		return Run{}, err
 	}
 	experiment := run.Store.Get(run.Experiment)
-	candidateLeaves := developmentDigests("candidate", len(experiment.GetStrings("candidateUnits")))
+	candidateLeaves := developmentDigests("candidate-"+scope, len(experiment.GetStrings("candidateUnits")))
 	winnerLeaves := developmentDigests("winner", len(experiment.GetStrings("winnerResultUnits")))
 	for index, name := range experiment.GetStrings("candidateUnits") {
 		run.Store.Get(name).Set("tableLeafDigest", candidateLeaves[index])
@@ -233,11 +262,16 @@ func ExecuteFamily(domainsDir, token string, family int) (Run, error) {
 	for index, name := range experiment.GetStrings("winnerResultUnits") {
 		run.Store.Get(name).Set("tableLeafDigest", winnerLeaves[index])
 	}
-	return session.BindEvidence(EvidenceRoots{
-		CandidateLeaves: candidateLeaves, EdgeTableRoot: developmentDigests("edge-table", 1)[0],
-		EvaluationTableRoots: developmentDigests("evaluation-table", 2), WinnerLeaves: winnerLeaves,
-	})
+	edgeRoot := zeroDigest
+	evaluationRoots := developmentDigests("evaluation-table-"+scope, 1)
+	if scope == "nous" {
+		edgeRoot = developmentDigests("edge-table", 1)[0]
+		evaluationRoots = developmentDigests("evaluation-table", 2)
+	}
+	return session.BindEvidence(EvidenceRoots{CandidateLeaves: candidateLeaves, EdgeTableRoot: edgeRoot, EvaluationTableRoots: evaluationRoots, WinnerLeaves: winnerLeaves})
 }
+
+const zeroDigest = "0000000000000000000000000000000000000000000000000000000000000000"
 
 func developmentDigests(label string, count int) []string {
 	result := make([]string, count)

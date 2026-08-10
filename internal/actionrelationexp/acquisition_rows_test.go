@@ -126,3 +126,31 @@ func TestAcquisitionTablesProduceCompletePhysicalManifests(t *testing.T) {
 		}
 	}
 }
+
+func TestNoGuardAcquisitionHasClosedRootOnlyTablesAndTranscript(t *testing.T) {
+	session, err := actionrelationacquire.BeginNoGuard("../../domains", "no-guard-evidence", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := CompleteNoGuardAcquisition(session, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants := map[uint16]int{102: 16, 103: 1, 105: 16, 106: 32, 107: 130, 108: 1}
+	if len(evidence.Tables) != len(wants) {
+		t.Fatalf("tables=%v", evidence.Tables)
+	}
+	for kind, count := range wants {
+		bundle, ok := evidence.Tables[kind]
+		if !ok || bundle.Manifest.Scope != "no-guard" || bundle.Manifest.Count != count || VerifyTableBundle(bundle) != nil {
+			t.Fatalf("kind %d bundle=%+v", kind, bundle)
+		}
+	}
+	if len(evidence.Transcript.Transcript.CallIDs) != 149 || VerifyAcquisitionTranscript(evidence.Transcript, evidence.Run) != nil {
+		t.Fatal("no-guard transcript does not bind T+19 calls")
+	}
+	boundary, err := BuildAcquisitionBoundary(evidence, 12, "no-guard")
+	if err != nil || boundary.Verify(evidence) != nil {
+		t.Fatalf("boundary=%v verify=%v", err, boundary.Verify(evidence))
+	}
+}

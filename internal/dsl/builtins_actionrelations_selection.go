@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/chazu/nous/internal/unit"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
@@ -84,11 +85,32 @@ func bARCandidateResult(vm *VM) error {
 
 func bARCloseGuardSearch(vm *VM) error {
 	requestedValue, winnerLeavesValue, evaluationRootsValue, edgeRootValue, candidateLeavesValue, winnersValue, resultsValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
-	if requestedValue.Kind() != VString || winnerLeavesValue.Kind() != VList || evaluationRootsValue.Kind() != VList || edgeRootValue.Kind() != VString || candidateLeavesValue.Kind() != VList || winnersValue.Kind() != VList || resultsValue.Kind() != VList || vm.Store == nil || len(resultsValue.AsList()) != 451 || len(candidateLeavesValue.AsList()) != 451 || len(winnersValue.AsList()) == 0 || len(winnerLeavesValue.AsList()) != len(winnersValue.AsList()) || len(evaluationRootsValue.AsList()) != 2 || !actionrelationsDigest(edgeRootValue.AsString()) {
+	if requestedValue.Kind() != VString || winnerLeavesValue.Kind() != VList || evaluationRootsValue.Kind() != VList || edgeRootValue.Kind() != VString || candidateLeavesValue.Kind() != VList || winnersValue.Kind() != VList || resultsValue.Kind() != VList || vm.Store == nil || len(resultsValue.AsList()) == 0 || len(winnersValue.AsList()) == 0 || len(winnerLeavesValue.AsList()) != len(winnersValue.AsList()) || !actionrelationsDigest(edgeRootValue.AsString()) {
 		vm.push(Nil())
 		return nil
 	}
 	resultNames := valuesToStrings(resultsValue.AsList())
+	firstResult := vm.Store.Get(resultNames[0])
+	firstCandidate := (*unit.Unit)(nil)
+	if firstResult != nil {
+		firstCandidate = vm.Store.Get(firstResult.GetString("candidate"))
+	}
+	experiment := (*unit.Unit)(nil)
+	if firstCandidate != nil {
+		experiment = vm.Store.Get(firstCandidate.GetString("experiment"))
+	}
+	if experiment == nil {
+		vm.push(Nil())
+		return nil
+	}
+	wantCandidates, wantEvaluations, wantEdgeRoot := 451, 2, true
+	if experiment.GetString("scope") == "no-guard" {
+		wantCandidates, wantEvaluations, wantEdgeRoot = 1, 1, false
+	}
+	if len(resultNames) != wantCandidates || len(candidateLeavesValue.AsList()) != wantCandidates || len(evaluationRootsValue.AsList()) != wantEvaluations || wantEdgeRoot && edgeRootValue.AsString() == actionRelationZeroDigest || !wantEdgeRoot && edgeRootValue.AsString() != actionRelationZeroDigest {
+		vm.push(Nil())
+		return nil
+	}
 	winnerNames := valuesToStrings(winnersValue.AsList())
 	candidateLeaves := valuesToStrings(candidateLeavesValue.AsList())
 	winnerLeaves := valuesToStrings(winnerLeavesValue.AsList())

@@ -32,7 +32,15 @@ func BuildAcquisitionTranscript(run actionrelationacquire.Run, tables map[uint16
 	if run.Store == nil || run.Experiment == "" || !runIDText(runID) {
 		return AcquisitionTranscript{}, fmt.Errorf("invalid acquisition transcript input")
 	}
-	for _, kind := range []uint16{101, 102, 103, 104, 107, 108} {
+	experiment := run.Store.Get(run.Experiment)
+	if experiment == nil {
+		return AcquisitionTranscript{}, fmt.Errorf("missing acquisition experiment")
+	}
+	tableKinds := []uint16{101, 102, 103, 104, 107, 108}
+	if experiment.GetString("scope") == "no-guard" {
+		tableKinds = []uint16{102, 103, 107, 108}
+	}
+	for _, kind := range tableKinds {
 		if bundle, ok := tables[kind]; !ok || VerifyTableBundle(bundle) != nil {
 			return AcquisitionTranscript{}, fmt.Errorf("missing acquisition transcript table %d", kind)
 		}
@@ -54,7 +62,7 @@ func BuildAcquisitionTranscript(run actionrelationacquire.Run, tables map[uint16
 		}
 		calls[sequence], reservations[sequence] = call, reservation
 	}
-	for _, kind := range []uint16{101, 102, 103, 104, 107, 108} {
+	for _, kind := range tableKinds {
 		if translator.ordinals[kind] != len(tables[kind].LeafDigests) {
 			return AcquisitionTranscript{}, fmt.Errorf("table %d charged-output coverage %d want %d", kind, translator.ordinals[kind], len(tables[kind].LeafDigests))
 		}

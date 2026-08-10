@@ -99,3 +99,28 @@ func TestCUEAcquisitionLearnsEveryFrozenFamilyGuard(t *testing.T) {
 		}
 	}
 }
+
+func TestNoGuardAcquisitionExecutesOnlyRootSchedule(t *testing.T) {
+	run, err := ExecuteNoGuard("../../domains", "no-guard", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Observations != 16 || run.Candidates != 1 || run.Edges != 0 || run.LiteralRows != 0 || run.GuardResults != 16 || run.CandidateResults != 1 || run.Winners != 1 || run.Artifact == "" {
+		t.Fatalf("run=%+v", run)
+	}
+	codes := map[uint16]int{}
+	for _, record := range run.MeterRecords {
+		codes[record.Code]++
+	}
+	training := codes[4] + codes[5] + codes[6]
+	if training != 130 || len(run.MeterRecords) != training+19 || codes[1] != 1 || codes[22] != 16 || codes[20] != 1 || codes[8] != 1 || codes[2] != 0 || codes[3] != 0 || codes[7] != 0 {
+		t.Fatalf("no-guard operation schedule=%v total=%d", codes, len(run.MeterRecords))
+	}
+	experiment := run.Store.Get(run.Experiment)
+	winner := run.Store.Get(experiment.GetStrings("winnerResultUnits")[0])
+	candidate := run.Store.Get(winner.GetString("candidate"))
+	guard, err := actionrelations.ParseGuard([]byte(candidate.GetString("guard")))
+	if err != nil || len(guard.Literals) != 0 {
+		t.Fatalf("guard=%+v err=%v", guard, err)
+	}
+}

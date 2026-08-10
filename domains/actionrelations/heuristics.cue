@@ -29,9 +29,10 @@ units: [
 			"shared-value-max" "a-primary-zero" "a-primary-max"
 			"b-primary-zero" "b-primary-max" "combined-adds-in-bounds"
 			15 list-of "atoms" !
+			"experiment" @ "scope" get-slot "no-guard" = if 0 else 15 then "atomCount" !
 			false true 2 list-of "polarities" !
 			0 list-of "oneLiteralCandidates" !
-			15 iota each
+			"atomCount" @ iota each
 				it "atomIndex" !
 				"polarities" @ each
 					it "polarity" !
@@ -52,9 +53,9 @@ units: [
 					"edges" @ "edge" @ list-append "edges" !
 				end
 			end
-			15 iota each
+			"atomCount" @ iota each
 				it "leftIndex" !
-				15 iota each
+				"atomCount" @ iota each
 					it "rightIndex" !
 					"rightIndex" @ "leftIndex" @ >
 					if
@@ -86,7 +87,9 @@ units: [
 			"candidates" @ "experiment" @ "candidateUnits" set-slot
 			"edges" @ "experiment" @ "edgeUnits" set-slot
 			"rootName" @ "experiment" @ "rootCandidate" set-slot
-			"ordinal" @ 450 = "candidates" @ list-length 451 = and "edges" @ list-length 450 = and
+			"experiment" @ "scope" get-slot "no-guard" =
+			if "ordinal" @ 0 = "candidates" @ list-length 1 = and "edges" @ list-length 0 = and
+			else "ordinal" @ 450 = "candidates" @ list-length 451 = and "edges" @ list-length 450 = and then
 			if true "experiment" @ "guardSpaceAllocated" set-slot
 			else "no-discovery" "experiment" @ "terminal" set-slot then
 			"""#

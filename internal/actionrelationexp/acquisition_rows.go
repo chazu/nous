@@ -26,12 +26,20 @@ func BuildAcquisitionTables(run actionrelationacquire.Run) (map[uint16]TablePack
 		106: experiment.GetStrings("viewEvidenceUnits"),
 		108: experiment.GetStrings("candidateResultUnits"),
 	}
+	scope := experiment.GetString("scope")
+	if scope != "nous" && scope != "no-guard" {
+		return nil, fmt.Errorf("invalid acquisition scope")
+	}
 	operationRecords, err := acquisitionOperationRecords(run)
 	if err != nil {
 		return nil, err
 	}
 	tables := map[uint16]TablePack{}
-	for _, kind := range []uint16{101, 102, 103, 104, 105, 106, 107, 108} {
+	kinds := []uint16{101, 102, 103, 104, 105, 106, 107, 108}
+	if scope == "no-guard" {
+		kinds = []uint16{102, 103, 105, 106, 107, 108}
+	}
+	for _, kind := range kinds {
 		names := inputs[kind]
 		records := make([][]byte, len(names))
 		if kind == 107 {
@@ -77,6 +85,11 @@ func BuildAcquisitionTableBundles(run actionrelationacquire.Run, curriculum int)
 	if err != nil {
 		return nil, err
 	}
+	experiment := run.Store.Get(run.Experiment)
+	if experiment == nil {
+		return nil, fmt.Errorf("missing acquisition experiment")
+	}
+	scope := experiment.GetString("scope")
 	bundles := make(map[uint16]TableBundle, len(tables))
 	for kind, table := range tables {
 		recordSize := tableRecordSizes[kind]
@@ -86,7 +99,7 @@ func BuildAcquisitionTableBundles(run actionrelationacquire.Run, curriculum int)
 			start := len(TableHeader) + ordinal*recordSize
 			records[ordinal] = table.Bytes[start : start+recordSize]
 		}
-		bundle, err := BuildTableBundle(curriculum, "nous", kind, records)
+		bundle, err := BuildTableBundle(curriculum, scope, kind, records)
 		if err != nil {
 			return nil, fmt.Errorf("kind %d: %w", kind, err)
 		}
@@ -105,7 +118,22 @@ func CompleteAcquisition(session *actionrelationacquire.Session, curriculum int)
 	return CompleteAcquisitionFor(session, curriculum, "development", PlanCommit)
 }
 
+func CompleteNoGuardAcquisition(session *actionrelationacquire.Session, curriculum int) (AcquisitionEvidence, error) {
+	return CompleteNoGuardAcquisitionFor(session, curriculum, "development", PlanCommit)
+}
+
 func CompleteAcquisitionFor(session *actionrelationacquire.Session, curriculum int, panel, authority string) (AcquisitionEvidence, error) {
+	return completeAcquisitionFor(session, curriculum, panel, authority, "nous")
+}
+
+func CompleteNoGuardAcquisitionFor(session *actionrelationacquire.Session, curriculum int, panel, authority string) (AcquisitionEvidence, error) {
+	return completeAcquisitionFor(session, curriculum, panel, authority, "no-guard")
+}
+
+func completeAcquisitionFor(session *actionrelationacquire.Session, curriculum int, panel, authority, scope string) (AcquisitionEvidence, error) {
+	if session == nil || session.Scope != scope {
+		return AcquisitionEvidence{}, fmt.Errorf("acquisition session scope mismatch")
+	}
 	partial, err := session.Snapshot()
 	if err != nil {
 		return AcquisitionEvidence{}, err
@@ -122,25 +150,35 @@ func CompleteAcquisitionFor(session *actionrelationacquire.Session, curriculum i
 		}
 		return canonicalDigest(bundle.Manifest.CanonicalJSON())
 	}
-	edgeRoot, err := manifestDigest(104)
-	if err != nil {
-		session.Abort()
-		return AcquisitionEvidence{}, err
-	}
-	evaluationOne, err := manifestDigest(101)
-	if err != nil {
-		session.Abort()
-		return AcquisitionEvidence{}, err
+	edgeRoot := zeroIfEmpty("")
+	var evaluationRoots []string
+	if scope == "nous" {
+		edgeRoot, err = manifestDigest(104)
+		if err != nil {
+			session.Abort()
+			return AcquisitionEvidence{}, err
+		}
+		evaluationOne, oneErr := manifestDigest(101)
+		if oneErr != nil {
+			session.Abort()
+			return AcquisitionEvidence{}, oneErr
+		}
+		evaluationRoots = append(evaluationRoots, evaluationOne)
 	}
 	evaluationTwo, err := manifestDigest(102)
 	if err != nil {
 		session.Abort()
 		return AcquisitionEvidence{}, err
 	}
+	evaluationRoots = append(evaluationRoots, evaluationTwo)
 	experiment := partial.Store.Get(partial.Experiment)
 	candidateLeaves := tables[103].LeafDigests
 	resultLeaves := tables[108].LeafDigests
-	if experiment == nil || len(candidateLeaves) != 451 || len(resultLeaves) != 451 {
+	wantCandidates := 451
+	if scope == "no-guard" {
+		wantCandidates = 1
+	}
+	if experiment == nil || len(candidateLeaves) != wantCandidates || len(resultLeaves) != wantCandidates {
 		session.Abort()
 		return AcquisitionEvidence{}, fmt.Errorf("acquisition leaf cardinality mismatch")
 	}
@@ -161,12 +199,12 @@ func CompleteAcquisitionFor(session *actionrelationacquire.Session, curriculum i
 	}
 	run, err := session.BindEvidence(actionrelationacquire.EvidenceRoots{
 		CandidateLeaves: candidateLeaves, EdgeTableRoot: edgeRoot,
-		EvaluationTableRoots: []string{evaluationOne, evaluationTwo}, WinnerLeaves: winnerLeaves,
+		EvaluationTableRoots: evaluationRoots, WinnerLeaves: winnerLeaves,
 	})
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}
-	runID, err := AcquisitionRunID(panel, authority, curriculum, "nous")
+	runID, err := AcquisitionRunID(panel, authority, curriculum, scope)
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}
@@ -182,7 +220,7 @@ func CompleteAcquisitionFor(session *actionrelationacquire.Session, curriculum i
 			return AcquisitionEvidence{}, fmt.Errorf("rebuild observation table %d: %w", ordinal, err)
 		}
 	}
-	tables[105], err = BuildTableBundle(curriculum, "nous", 105, observationRecords)
+	tables[105], err = BuildTableBundle(curriculum, scope, 105, observationRecords)
 	if err != nil {
 		return AcquisitionEvidence{}, err
 	}
