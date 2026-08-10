@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 3.
+Status: provisional Part 3 Vocabulary 3 plan, revision 4.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -20,6 +20,14 @@ world canonical labeling, freezes every generator and statistical draw,
 separates world from curriculum accounting, derives evidence capacity by leaf
 class, and narrows protected-panel authority to precommitted attempt identity
 and cooperative replay detection.
+
+Revision 3 was committed at
+`3584db169b2b5a7ac62a917da25e9df48fe8eeb1` and unanimously rejected. Revision
+4 makes initial applicability part of relation-instance matching, splits
+presentation wrappers from semantic support, closes every proof-root wire,
+uses finite stratum skeleton catalogs instead of improbable random filtering,
+freezes the full generator cost schedule and inner-power ordinal, and adds
+capacity-derived acquisition tables plus a realizable call-detail layout.
 
 This plan narrows the accepted
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md) without
@@ -134,10 +142,10 @@ panel constructor is callable:
   "maximum_pack_bytes": 16777216,
   "maximum_pack_index_rows": 4096,
   "maximum_pack_index_bytes": 1048576,
-  "maximum_development_evidence_bytes": 587202560,
-  "maximum_validation_evidence_bytes": 872415232,
-  "maximum_locked_evidence_bytes": 1157627904,
-  "maximum_report_bytes": 16777216,
+  "maximum_development_evidence_bytes": 654311424,
+  "maximum_validation_evidence_bytes": 973078528,
+  "maximum_locked_evidence_bytes": 1291845632,
+  "maximum_report_bytes": 14680064,
   "tie_policy": "maximum-positive-coverage-then-minimum-literals-retain-all-ties-unanimous-use",
   "mutation_enabled": false
 }
@@ -279,20 +287,34 @@ mistaken for commutativity. Observation classification is total and oriented;
 transition is `invalid`. Every non-`commutes` label is negative evidence; the
 directional labels are diagnostics rather than learned capabilities.
 
-The exact observation wire is:
+The semantic observation core is:
 
 ```text
-["action-pair-observation/v1",presentationViewDigest,stateDigest,
- aOccurrenceDigest,bOccurrenceDigest,
+["action-pair-observation/v1",stateDigest,aOccurrenceDigest,bOccurrenceDigest,
  aInitialRowDigest,bInitialRowDigest,bAfterARowDigestOrNull,
  aAfterBRowDigestOrNull,abStateDigestOrNull,baStateDigestOrNull,label]
 ```
 
 Null positions correspond exactly to `n/a` cells in the table. Assemblers
 reject omitted required rows, non-null forbidden rows, a noncanonical pair
-orientation, or a label that does not reconstruct. The presentation-view
-digest commits original cell/action names and declaration order for transfer
-testing but is excluded from every semantic match and truth predicate.
+orientation, or a label that does not reconstruct. Presentation lineage is a
+separate canonical pair:
+
+```text
+["action-presentation-view/v1",originalState,orderedOriginalActions,
+ semanticWorldCoreDigest,[[originalActionName,occurrenceDigest]...]]
+["action-view-evidence/v1",semanticObservationDigest,
+ presentationViewDigest,normalizationProofDigest]
+["action-normalization-proof/v1",presentationViewDigest,
+ [[originalCellName,canonicalRole]...],semanticWorldCoreDigest]
+```
+
+The mapping is ordered by original declaration position and must be bijective.
+The verifier reruns whole-world normalization and requires the view's state and
+mapped observations to equal the named semantic world/core. Arbitrary digests,
+missing actions, and two wrappers for the same presentation bytes are invalid.
+When semantic-world candidates tie, the proof alone uses the lexicographically
+least canonical mapping-row array; it never enters semantic identity.
 
 ### Pattern
 
@@ -367,7 +389,7 @@ A guarded relation wire is:
  positiveObservationDigests,negativeObservationDigests]
 ```
 
-Observation digests are sorted, unique, training-only evidence. A relation's
+Observation digests are sorted, unique, presentation-free training cores. A relation's
 positive array contains every matching positive observation and its negative
 array contains every evaluated negative observation, whether or not it
 matched. Eligibility is reconstructed from the observation records and match
@@ -375,19 +397,41 @@ rows; evidence digests themselves never affect matching. A frozen artifact
 retains every tied winning relation:
 
 ```text
-["guarded-action-artifact/v1", [relation...], trainingRoot]
+["guarded-action-artifact/v1", [relation...], semanticTrainingRoot]
 ```
+
+The separate
+`["action-training-evidence/v1",semanticTrainingRoot,viewEvidenceRoot]`
+commits presentation lineage without changing relation or artifact identity.
+Support and precision count unique semantic observation cores exactly once.
+Alpha-transfer coverage requires valid wrappers from both frozen name banks but
+never adds support.
 
 At causal-use time the artifact matches a state/pair only when every retained
 relation has the pair's pattern and every retained guard evaluates true.
 Unanimous use makes tie retention conservative rather than silently choosing a
 favorable schema after training.
 
+A relation *instance* matches only after two additional nonlearned predicates:
+both occurrences are explicitly and successfully checked applicable at the
+current state, and the event trace length is `0..6`. Those checks are individual
+charged CUE rows and precede pattern/guard rows. Six is the maximum admissible
+trace when two occurrences remain in an initially empty world of at most eight
+occurrences. Pattern-plus-guard is the reusable artifact; applicability and
+context are public instance preconditions. Acquisition candidate truth,
+identifiability, utility match counts, and the zero-false-match gate all use the
+complete conjunction:
+
+```text
+admissible-context and both-initially-applicable and pattern and guard
+```
+
 ## Acquisition protocol
 
-Each curriculum provides 16 public training observations in a committed order:
-eight locally commuting and eight negative examples for one latent pair motif.
-They span at least two independent alpha-renamings. Negatives include
+Each curriculum provides 16 unique semantic training observations in committed
+order: eight locally commuting and eight negative examples for one latent pair
+motif. Every core has exactly two verified presentation wrappers, one per
+frozen name bank. Negatives include
 inapplicability, one-way enabling/disabling, final-state conflict, event-order
 conflict, and irrelevant surface similarity.
 
@@ -414,7 +458,7 @@ every acquired observation through explicit guard matches. A candidate is
 eligible only if it:
 
 - matches at least four positive observations;
-- covers positives from at least two alpha-renamings;
+- every covered positive core has both verified alpha-renaming wrappers;
 - matches no negative observation; and
 - has a complete evidence row for all 16 observations.
 
@@ -553,6 +597,24 @@ childSleepers = {u in candidateSleepers |
                  u is enabled at N and freshCertificate(N,t,u) succeeds}
 ```
 
+The remaining set, proof map, and earlier-sibling authority have exact wires:
+
+```text
+["remaining-occurrences/v1",[occurrenceDigest...]]
+["sleep-proof-map/v1",[[sleeperDigest,propagationCoreDigest]...]]
+["completed-subtree/v1",parentNodeDigest,takenOccurrenceDigest,
+ subtreeRoot,terminalSetRoot,"completed"]
+```
+
+Occurrence and proof-map rows are sorted by occurrence digest and unique. Empty
+remaining/proof-map roots are SHA-256 of their respective empty canonical wire.
+A completed subtree is constructible only after every reachable submitted edge
+under that earlier sibling has terminated or been validly sleep-blocked and its
+terminal-set root is closed. `subtreeRoot` is SHA-256 of
+`["sleep-subtree-root/v1",rootNodeDigest,[edgeDigest...]]` in recorded DFS
+preorder; `terminalSetRoot` is SHA-256 of
+`["sleep-terminal-set/v1",[terminalBehaviorDigest...]]` in sorted unique order.
+
 Every failed, absent, stale, or ineligible certificate drops `u`; there is no
 inherit-by-default rule. Each retained `u` gets this durable oriented wire:
 
@@ -577,7 +639,9 @@ proof-map root. Only then is the final child constructed:
 
 No propagation core names the final child node, so the evidence is an acyclic
 DAG. The edge is the sole object that binds the completed propagation map to
-the final child.
+the final child. Its propagation list is ordered by sleeper and must equal the
+proof-map entries' propagation digests exactly; empty means the canonical empty
+proof map.
 A sleep-blocked node is legal only when every enabled sleeper has a recursively
 valid chain, through fresh local diamonds, to a completed earlier subtree.
 The verifier replays that adjacent-swap chain; a certificate about a canonical
@@ -658,10 +722,11 @@ these templates are instantiated before presentation renaming:
 | 6 `identical-emits` | `emit e0`; `emit e0` | `symbol-equal` |
 | 7 `embedded-bounded-adds` | family 1 motif at non-root history depth | family 1 guard |
 
-Every family includes negative observations from alias collisions, bound
-failures, different assignments, competing transfers, event-symbol order,
-one-way enabling, and destructive conflicts. Utility worlds rename every cell
-and action, change legal numeric values, reorder declarations, preoccupy Store
+Every family's finite training pool includes candidates from alias collisions,
+bound failures, different assignments, competing transfers, event-symbol order,
+one-way enabling, and destructive conflicts; the exact selected diagnostics are
+governed by the closed selection predicates below. Utility worlds rename every cell
+and action, vary initial numeric values, reorder declarations, preoccupy Store
 names, add irrelevant actions, and place the motif at different history depths.
 
 For each curriculum, acquisition uses the 16 training observations and utility
@@ -681,9 +746,6 @@ precommitted latent motif. They cannot execute a policy or inspect a learned
 artifact, work, search history, certificate count, reduction, or effect size.
 The strata deliberately test helpful transfer, no-op transfer, and filtering
 whose opportunity cost favors the all-pairs baseline.
-Every accepted utility world additionally requires that every reachable match
-of the latent pattern and guard is a true commutation; this is a fixture-oracle
-predicate and prevents knowingly planting a false transferable rule.
 
 Curriculum construction tries attempts `0..31` in order. Each attempt may
 consume at most 1,000,000 independent-generator
@@ -694,25 +756,30 @@ attempt ledger commits every rejection predicate and work total. No replacement
 seed is drawn. Exhausting attempt 31, either work cap, or any stratum slot makes
 the panel mechanically invalid before a policy runs.
 
-`Identifiable` has one exact meaning. Over the complete finite training
-observation universe, acquisition has at least one winner and every tied winner
-is extensionally equal to the family's pattern-plus-latent-guard truth table.
-For the root family, root is the expected winner. The finite admissible-context
-universe contains all `0..3` assignments to the template's canonical cells,
-event traces of zero through six `e3` symbols, and every canonical pair from
-the action alphabet below. Every semantic observation is expanded through the
-two fixed presentation banks below and includes their distinct view digest.
-Six is the largest trace with two occurrences still remaining in an initially
-empty, at-most-eight-occurrence utility world. The expanded observations are
-sorted by canonical bytes. Depth-first selection visits indices in ascending
-order, explores include before exclude, and prunes only when a positive/negative
-count exceeds eight or remaining rows cannot fill it. The selected result is
-the first complete set with exactly eight positive and eight negative labels,
-both presentation banks, all attainable directional labels, both
-inapplicability and conflict, an event-order conflict, and the identifiability predicate. Each
-visited combination costs one generator operation; exhaustion rejects the
-attempt. The two banks are `[x0,x1,x2]/[a0..a7]` and
-`[red,green,blue]/[job0..job7]`.
+`Identifiable` has one exact meaning. The family universe contains every
+canonical pair with that family's kind/alias pattern and all legal numeric or
+symbol arguments, every `0..3` assignment to its roles, and traces of zero
+through six `e3` symbols. Truth is actual `commutes` under the complete
+admissibility/applicability/pattern/guard predicate. Acquisition has at least
+one winner and every tied winner is extensionally equal to that truth table.
+For the root family, root is the expected winner.
+
+The complete action alphabet is the canonical-byte-sorted set of every valid
+semantic action over `c0,c1,c2`, all arguments in the action table, and emit
+symbols `e0,e1,e2,e3`.
+
+The training pool is the family universe plus the lexicographically first
+attainable witness for every remaining directional diagnostic from the complete
+action alphabet: enumerate state bytes, then canonical pair bytes, both
+ascending, and stop a label after its first row. Semantic cores are unique and canonical-byte sorted.
+Depth-first selection visits indices in ascending order, explores include
+before exclude, and prunes only when a positive/negative count exceeds eight or
+remaining rows cannot fill it. The selected result is the first set with eight
+positive and eight negative cores, every attainable directional label,
+inapplicability, conflict, an event-order conflict, and identifiability. Every
+selected core then receives, without affecting support, the two fixed verified
+presentation wrappers `[xa,xb,xc]/[aa,ab,ac,ad,ae,af,ag,ah]` and
+`[red,green,blue]/[joba,jobb,jobc,jobd,jobe,jobf,jobg,jobh]`.
 
 Family assignment is nonrandom and exact:
 `familyIndex = curriculumOrdinal mod 8` and
@@ -730,31 +797,60 @@ F(panel,authority,curriculum,curriculumSeed,attempt,namespace,i) =
 panel,authority,curriculum,curriculumSeed,attempt,namespace,i])))
 ```
 
-`pick(u,n) = floor(u*n/2^64)`. The action alphabet is the canonical-byte-sorted
-list of every valid semantic action over `c0,c1,c2`, arguments in the action
-table, and emit symbols `e0..e3`. A utility slot has three canonical cells,
-event trace empty, occurrence count `6 + pick(F(...,"occurrence-count",slot),3)`,
-initial cell `r` value `pick(F(...,"initial-value",3*slot+r),4)`, the motif pair
-in positive slots only, and remaining occurrences selected with replacement
-from the alphabet by `pick(F(...,"decoy-action",8*slot+k),len(alphabet))`, for
-`k=0..occurrenceCount-requiredCount-1`.
-Occurrence assignment and whole-world canonicalization then run as specified.
+`pick(u,n) = floor(u*n/2^64)`. Utility worlds come from finite skeleton
+catalogs, not unconstrained rejection sampling. A positive skeleton for
+families 0 through 6 contains two copies of each motif action plus two
+permanently inapplicable `check c2 3` occurrences. Family 7 contains
+`set c0 0`, four `add c0 +1` occurrences, and one inert check, and requires the
+motif absent initially but present after the set. A neutral skeleton is
+`claim c0` plus five `check c1 3` occurrences. An adverse skeleton contains
+two copies of each alternative pair plus two inert checks; for families 0, 3,
+and 5 those checks are replaced by one latent pair required to satisfy raw
+pattern/guard but fail initial applicability at every reachable occurrence.
+Alternatives by
+family index are `repeated-swap`, `equal-sets`, `identical-emits`,
+`repeated-swap`, `identical-emits`, `equal-sets`, `equal-sets`, and
+`repeated-swap`.
 
-Slots 0 and 1 target `positive-effect`, 2 and 3 `neutral`, and 4 and 5
-`adverse`; acceptance uses only the frozen semantic stratum predicates. Cell
-presentation names come from `x0,x1,x2`, action names from `a0..a7`, and both
-declaration lists are permuted by descending Fisher-Yates. For list length `n`,
-step `k=n-1..1` swaps `k` with
-`pick(F(...,"cell-permutation" or "action-permutation",8*slot+k),k+1)`.
+For each skeleton, the catalog enumerates all 64 initial value vectors with an
+empty trace, rejects an applicable inert check, canonicalizes and deduplicates
+worlds, retains exactly the target semantic stratum, and sorts by world bytes.
+An empty catalog invalidates the attempt. Slots 0/1, 2/3, and 4/5 draw without
+replacement from the positive, neutral, and adverse catalog respectively:
+slot one uses `pick(F(...,"skeleton-variant",slot),n)`; slot two removes the
+first selection and uses `pick(...,n-1)`. Thus every world has exactly six
+occurrences, and the two members of a stratum are semantically distinct.
+
 The cell-name bank is selected by
 `pick(F(...,"cell-name-bank",slot),4)` from
-`[[x0,x1,x2],[p,q,r],[red,green,blue],[u,v,w]]`; the action-name bank is
-selected by `pick(F(...,"action-name-bank",slot),4)` from four fixed `a*`,
-`op*`, `step*`, and `job*` banks.
+`[[xa,xb,xc],[p,q,r],[red,green,blue],[u,v,w]]`; action banks are
+`[aa,ab,ac,ad,ae,af,ag,ah]`,
+`[opa,opb,opc,opd,ope,opf,opg,oph]`,
+`[stepa,stepb,stepc,stepd,stepe,stepf,stepg,steph]`, and
+`[joba,jobb,jobc,jobd,jobe,jobf,jobg,jobh]`, selected by
+`pick(F(...,"action-name-bank",slot),4)`. Canonical role `cr` receives cell
+name `bank[r]`; canonical occurrences in occurrence-byte order receive action
+names in bank order. Cell and action declaration rows are then independently
+permuted by descending Fisher-Yates. At step `k=n-1..1`, swap `k` with
+`pick(F(...,"cell-permutation" or "action-permutation",8*slot+k),k+1)`.
 Store preoccupations are the first
 `pick(F(...,"store-preoccupation-count",slot),5)` names from the fixed list
 `AR.Candidate`, `AR.Edge`, `AR.Observation`, `AR.Relation`. There are no other
 generator draws. The attempt ledger records every `F` preimage and result.
+
+Generator work is a separate unit ledger. Exactly one unit is charged for each
+`F` draw, tested world-core bijection, classified state/action pair, evaluated
+guard/candidate pair during identifiability, visited training-DFS node, tested
+skeleton initial vector, dequeued reachable world state, classified reachable
+ordered pair, evaluated stratum predicate, sealed-truth row, and evidence-
+preflight component, and named acceptance/bound predicate. Hashing, canonical serialization, sorting, and deduplication
+are zero-unit infrastructure and may not perform semantic tests. Attempt phases
+are, in order: build/classify family universe; establish identifiability; select
+training cores/views; build all three skeleton catalogs; draw two worlds per
+catalog and presentation data; enumerate/seal truth in slot order; evidence
+preflight. The next unit is reserved before each event. A failed predicate or
+reservation ends that attempt immediately; later phases perform no work. These
+are the only generator charges and rejection points.
 
 Development authority is literal `development-public-v1` and seed is
 `851001+curriculum`; validation uses `validation-public-v1` and
@@ -776,9 +872,11 @@ policy termination.
 During policy-blind generation the independent enumerator commits each world's
 complete sorted terminal-behavior set and every reachable state/pair observation
 label into a sealed truth object. Its digest is
-in the fixture root before acquisition; its bytes are held in a separate scorer
-pack that the experiment process cannot map until every policy terminates.
-After disclosure, validation compares each explored terminal set to this prior
+in the fixture root before acquisition. A generator/supervisor process writes
+the scorer pack, closes it, and launches the policy runner with only a read-only
+public-view descriptor; the scorer path, descriptor, and capability are absent
+from the runner environment and process. After every runner exits, the
+supervisor reopens the scorer pack and validation compares each explored terminal set to this prior
 commitment. It replays only the submitted certificates, proof chains, and
 representative subtrees for omissions. Complete exploration is permitted while
 building the sealed fixture and in competence tests, never as a post-policy
@@ -895,7 +993,7 @@ The transformation lane demonstrated that one Git file per semantic object is
 operationally unacceptable. This lane instead commits bounded content-addressed
 packs without weakening leaf verification.
 
-There are three pack classes. Object packs start with `AROP1\n`, followed by
+There are four pack classes. Object packs start with `AROP1\n`, followed by
 `uint32-big-endian length || canonical-record-bytes`; records are unique and
 sorted by `SHA-256(recordBytes)`. Operation-journal packs start with `ARJR1\n`
 and contain contiguous sequence-order records. Every journal record is exactly
@@ -905,7 +1003,9 @@ and contain contiguous sequence-order records. Every journal record is exactly
 ordered-input-vector root (32), ordered-output-vector root (32), and reserved
 zero bytes (4). Its call ID is `SHA-256(record)`. Sequence starts at zero and
 `previous` is zero only there; every subsequent record links its predecessor.
-Input and output vectors point to individually canonical object records.
+Input and output vector roots are recomputed from the ordered digest slices in
+the aligned call detail; those digests point to individually canonical evidence
+leaves. Vector wrappers are not separately stored objects.
 Version is 1; phases are acquisition 1 and utility 2; operation codes are the
 numeric codes frozen in the ledger table; statuses
 are success 1, semantic-failure-or-row-rejection 2, and cache-hit 3;
@@ -913,14 +1013,33 @@ counter is 1 through 12. All integers are unsigned and big-endian where wider
 than one byte. Compound reservations are canonical input objects rather than
 mutable journal header fields.
 
-Call-detail packs start with `ARCD1\n` and have one exactly 256-byte record per
-journal sequence. A detail contains its call ID, semantic leaf kind, source
-task digest, and up to six ordered object/proof digests, with unused bytes zero.
+Call-detail packs start with `ARCD1\n` and have one exactly 320-byte record per
+journal sequence. Its frozen offsets are: call ID `[0,32)`, kind `uint16`
+`[32,34)`, phase/operation/status/counter bytes `[34,38)`, sequence `uint32`
+`[38,42)`, source-task digest `[42,74)`, input count `uint8` at 74, output count
+`uint8` at 75, zero bytes `[76,96)`,
+six ordered 32-byte evidence digests `[96,288)`, and zero bytes `[288,320)`.
+Counts sum to `0..6`; inputs precede outputs and unused digest slots are zero.
+The journal roots are SHA-256 of
+`["actionrelation-input-vector/v1",[digest...]]` and the corresponding output
+wire over these slices.
 Search nodes, edges, eligibility rows, certificate attempts, propagation cores,
 proof-map entries, terminal behaviors, and reservations use separate kind codes
 and therefore remain distinct logical leaves. A shard manifest fixes its
 inclusive sequence range. Journal and detail offsets are derived from fixed
 record sizes and sequence ranges; neither has a per-record index.
+
+Acquisition-table packs start with `ARTB1\n`. Each manifest fixes one row kind,
+record size, count, inclusive ordinal range, and Merkle root over
+`SHA-256(["actionrelation-table-leaf/v1",kind,ordinal,recordBytes])` in ordinal
+order, duplicating the final node at an odd level. The fixed tables are 13,920
+signed-literal rows at 128 bytes, 7,216 guard/observation results at 96 bytes,
+451 candidates at 128 bytes, 450 refinement edges at 96 bytes, 16 observation
+cores at 512 bytes, 32 view-evidence rows at 512 bytes, and at most 144 training
+transition/applicability/comparison rows at 256 bytes. A detail references the
+leaf digest. The verifier locates it by kind/ordinal and recomputes the table
+root, preserving individual verification. These rows are the exact CUE Store
+boundary; they are not duplicated in object packs or object indexes.
 
 An object-index row is exactly 96 bytes: digest (32), offset `uint64` (8),
 length `uint32` (4), kind `uint16` (2), pack ordinal `uint16` (2), and 48 zero
@@ -932,10 +1051,10 @@ complete index coverage, object uniqueness, journal and detail sequence
 alignment, journal hash-chain continuity, zero padding, absence of trailing
 bytes, and root closure.
 
-The evidence graph lists only regular committed pack and index files plus the
+The evidence payload lists only regular committed pack and index files plus the
 fixture root, execution manifests, review authority, competence root, and
 report prerequisites. Logical leaves remain individually addressable and
-digest-checked through pack indexes. The graph does not enumerate hundreds of
+digest-checked through pack indexes or fixed-table manifests. The graph does not enumerate hundreds of
 thousands of filesystem paths. Development, validation, and locked total-byte
 caps are enforced before publication.
 
@@ -956,7 +1075,8 @@ curriculum capacity table:
 | Class | Maximum | Bytes each | Maximum bytes |
 | --- | ---: | ---: | ---: |
 | operation journal | 60,992 | 128 | 7,806,976 |
-| call detail | 60,992 | 256 | 15,613,952 |
+| call detail | 60,992 | 320 | 19,517,440 |
+| acquisition fixed-row tables | 22,229 | kind-specific | 2,636,864 |
 | fixture state/action small object | 512 | 1,024 | 524,288 |
 | acquisition small object | 1,024 | 1,024 | 1,048,576 |
 | search/cache/proof small object | 2,048 | 1,024 | 2,097,152 |
@@ -966,15 +1086,18 @@ curriculum capacity table:
 | object index | 4,160 | 96 | 399,360 |
 | all pack headers and manifests | fixed aggregate cap | n/a | 1,048,576 |
 
-The event count is exactly
-`24,000 + 128 + 5*4,096 + 2*8,192 = 60,992`. The table totals 33,257,472
-bytes, below the frozen 34 MiB curriculum reservation. The panel additionally
-reserves 16 MiB for its report, receipts, and publication manifest; hence the
-exact development, validation, and locked caps are respectively 560, 832, and
-1,104 MiB as frozen in the manifest. The locked cap is approximately half of
+The table-row count is
+`13,920+7,216+451+450+16+32+144 = 22,229`; its byte total is the sum of
+the fixed classes above. The event count is exactly
+`24,000 + 128 + 5*4,096 + 2*8,192 = 60,992`. The capacity table totals
+39,797,824 bytes, below
+the frozen 38 MiB curriculum reservation. The panel additionally reserves 16
+MiB: at most 14 MiB for its report and 2 MiB aggregate for receipts and the
+publication manifest. Hence the exact
+development, validation, and locked caps are respectively 624, 928, and 1,232
+MiB as frozen in the manifest. The locked cap remains below
 revision 1's bound. Preflight runs before fixture construction or policy work;
-a
-logical record, pack, index shard, curriculum, or panel that cannot fit is
+a logical record, pack, index shard, curriculum, or panel that cannot fit is
 mechanically invalid rather than truncated.
 
 Plan acceptances are committed in `docs/actionrelations-plan-reviews.json` and
@@ -1042,7 +1165,7 @@ Canonical top-level wires are closed arrays, not extensible objects:
  sixOrderedWorldRowDigests,aggregateTerminal,curriculumWorkVector,
  curriculumTotal,behaviorEqual,budgetRemaining,operationRoot]
 ["actionrelation-evidence-payload/v1",fixtureRoot,executionCoreDigest,
- objectPackRoots,journalPackRoots,detailPackRoots,indexRoots,
+ objectPackRoots,journalPackRoots,detailPackRoots,acquisitionTableRoots,indexRoots,
  worldPolicyRowsRoot,curriculumPolicyRowsRoot]
 ["actionrelation-report/v1",panel,authority,manifestDigest,reviewDigests,
  buildDigest,fixtureRoot,runningReceiptDigest,curriculumPolicyRowsRoot,
@@ -1115,8 +1238,9 @@ Mechanical validity precedes empirical classification and requires:
 - production/oracle semantic and guard agreement;
 - exact work conservation and budget reservations;
 - immutable post-freeze artifacts and delayed scorer access;
-- zero false matched commutativity claims for the Nous artifact over every
-  reachable utility state/pair in the panel;
+- zero false complete relation-instance matches for the Nous artifact over every
+  reachable utility state/pair in the panel, including naturally occurring
+  inapplicable pattern/guard matches as rejected preconditions;
 - exact terminal-behavior equality for Nous, static, dynamic, complete, and
   learned-no-use policies; and
 - every accepted sleep propagation backed by a fresh valid certificate.
@@ -1151,7 +1275,7 @@ The only legal namespaces and zero-based field tuples are:
 | `randomization-swap` | replicate, curriculum | replicate `0..9999`, curriculum in report order; low bit chooses swap |
 | `power-outer-family-row` | outer, family, slot | outer `0..1999`, family `0..7`, slot `0..3`; select one of two development rows |
 | `power-inner-bootstrap-row` | outer, inner, family, slot | inner `0..1999`; select one of four synthetic family rows |
-| `power-inner-randomization-swap` | outer, inner, syntheticCurriculum | inner `0..1999`; low bit chooses swap |
+| `power-inner-randomization-swap` | outer, inner, syntheticCurriculum | inner `0..1999`; synthetic ordinal is `8*slot+family` in `0..31`; low bit chooses swap |
 
 Selection uses `pick(S(...),n) = floor(S(...)*n/2^64)`. No stream state,
 implicit increment, discarded draw, or other namespace exists. Bootstrap
@@ -1175,6 +1299,9 @@ denominator is 2,001. Inherited mechanical
 completion, behavior equality, and false-match status are required. Power is
 the fraction satisfying every locked positive predicate; progression needs at
 least 1,600 successes.
+Repeated selections retain distinct `(family,slot)` identities; inner ordering
+is slot-major then family, exactly ordinal `8*slot+family`, regardless of equal
+underlying curriculum digests.
 
 A mechanically valid locked result is `valid-positive` only when:
 
@@ -1222,6 +1349,9 @@ Before implementation review:
   rename, and duplicate-ordinal behavior is exact;
 - the total oriented observation table and every null/not-null position agree
   with the independent oracle;
+- presentation views normalize to their semantic core, cannot inflate support,
+  and leave relation/artifact bytes invariant; relation-instance matching
+  charges and requires both applicability rows and trace context;
 - all guard formulae, counts, polarity, normalization, 451 candidates, and 450
   canonical refinement edges are exhaustive and exact;
 - observation construction cannot omit, reorder, duplicate, or relabel any of
@@ -1249,8 +1379,8 @@ Before implementation review:
   every namespace/index schedule, family/attempt decoding, randomization ties,
   zero denominators, and nested power are golden-tested;
 - pack split, index, digest, truncation, duplicate, reordering, oversized-file,
-  journal-chain, sequence, call-range, capacity-preflight, and path traversal
-  attacks fail;
+  journal-chain, detail offsets/padding, table ordinal/Merkle proofs, sequence,
+  call-range, capacity-preflight, and path traversal attacks fail;
 - fixture/scorer access traces prove truth is committed before policy and
   unavailable until termination; utility validation cannot invoke the complete
   enumerator;
