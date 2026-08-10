@@ -10,6 +10,7 @@ import (
 
 	"github.com/chazu/nous/internal/actionrelationacquire"
 	"github.com/chazu/nous/internal/actionrelationcertify"
+	"github.com/chazu/nous/internal/actionrelationmatch"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
@@ -52,6 +53,54 @@ func TestLearnedArtifactFiltersCertifiedSleepWithoutChangingBehavior(t *testing.
 	control, err := actionrelationsearch.Search(world, actionrelationsearch.LearnedNoUse, actionrelationsearch.Artifact{Relations: relations})
 	if err != nil || !slices.Equal(control.TerminalDigests, complete.TerminalDigests) || control.SleepPropagations != 0 {
 		t.Fatalf("learned-no-use=%+v err=%v", control, err)
+	}
+}
+
+func TestLearnedSearchCanRequireCUEEligibilityAndCertificates(t *testing.T) {
+	acquisition, err := actionrelationacquire.Execute("../../domains", "cue-learned-search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactUnit := acquisition.Store.Get(acquisition.Artifact)
+	var relations []actionrelations.Relation
+	for _, name := range artifactUnit.GetStrings("relationUnits") {
+		relation, _ := actionrelations.ParseRelation([]byte(acquisition.Store.Get(name).GetString("relation")))
+		relations = append(relations, relation)
+	}
+	world := actionrelations.World{
+		State:   actionrelations.State{Cells: []actionrelations.Cell{{Name: "a", Value: 0}, {Name: "b", Value: 0}, {Name: "c", Value: 0}}},
+		Actions: []actionrelations.Action{{Name: "one", Kind: "add", X: "a", N: 1}, {Name: "two", Kind: "add", X: "b", N: 1}, {Name: "three", Kind: "add", X: "c", N: 1}},
+	}
+	barriers := map[string]string{}
+	sequence := 0
+	pairKey := func(state actionrelations.State, left, right actionrelations.Occurrence) string {
+		stateDigest, _ := state.Digest()
+		left, right, _ = actionrelations.CanonicalPair(left, right)
+		leftDigest, _ := left.Digest()
+		rightDigest, _ := right.Digest()
+		return stateDigest + leftDigest + rightDigest
+	}
+	eligibility := func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error) {
+		sequence++
+		result, err := actionrelationmatch.Execute(acquisition.Store, acquisition.Artifact, state, left, right, fmt.Sprintf("learned-%d", sequence))
+		if result.Matched {
+			barriers[pairKey(state, left, right)] = acquisition.Store.Get(result.Barrier).GetString("objectDigest")
+		}
+		return result.Matched, err
+	}
+	operationDigest := sha256.Sum256([]byte("learned-certificate-operations"))
+	operationRoot := hex.EncodeToString(operationDigest[:])
+	certifier := func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error) {
+		barrierDigest := barriers[pairKey(state, left, right)]
+		witness, _ := json.Marshal([]any{"learned-witness/v1", barrierDigest})
+		sequence++
+		result, err := actionrelationcertify.Execute(acquisition.Store, state, left, right, witness, operationRoot, fmt.Sprintf("learned-cert-%d", sequence))
+		return result.Terminal == "certified", err
+	}
+	complete, _ := actionrelationsearch.Search(world, actionrelationsearch.Complete, actionrelationsearch.Artifact{})
+	nous, err := actionrelationsearch.SearchWithAdapters(world, actionrelationsearch.NousSleep, actionrelationsearch.Artifact{Relations: relations}, eligibility, certifier)
+	if err != nil || sequence == 0 || nous.SleepPropagations == 0 || !slices.Equal(nous.TerminalDigests, complete.TerminalDigests) {
+		t.Fatalf("nous=%+v complete=%+v sequence=%d err=%v", nous, complete, sequence, err)
 	}
 }
 

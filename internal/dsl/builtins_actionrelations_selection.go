@@ -159,7 +159,14 @@ func bARFreezeRelation(vm *VM) error {
 			vm.push(Nil())
 			return nil
 		}
-		name, err := arStoreCanonical(vm, fmt.Sprintf("%s.Relation.%d", requestedValue.AsString(), index), "GuardedActionRelation", canonical, map[string]any{"relation": string(canonical), "candidateResult": winnerName})
+		atoms := make([]string, len(guard.Literals))
+		polarities := make([]any, len(guard.Literals))
+		for literalIndex, literal := range guard.Literals {
+			atoms[literalIndex], polarities[literalIndex] = literal.Atom, literal.Polarity
+		}
+		name, err := arStoreCanonical(vm, fmt.Sprintf("%s.Relation.%d", requestedValue.AsString(), index), "GuardedActionRelation", canonical, map[string]any{
+			"relation": string(canonical), "candidateResult": winnerName, "pattern": string(mustCanonicalPattern(pattern)), "guard": string(mustCanonicalGuard(guard)), "atoms": atoms, "polarities": polarities,
+		})
 		if err != nil {
 			vm.push(Nil())
 			return nil

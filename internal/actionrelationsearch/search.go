@@ -50,12 +50,17 @@ type Artifact struct {
 }
 
 type CertificateFunc func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error)
+type EligibilityFunc func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error)
 
 func Search(world actionrelations.World, policy Policy, artifact Artifact) (Result, error) {
 	return SearchWithCertifier(world, policy, artifact, nil)
 }
 
 func SearchWithCertifier(world actionrelations.World, policy Policy, artifact Artifact, certifier CertificateFunc) (Result, error) {
+	return SearchWithAdapters(world, policy, artifact, nil, certifier)
+}
+
+func SearchWithAdapters(world actionrelations.World, policy Policy, artifact Artifact, eligibility EligibilityFunc, certifier CertificateFunc) (Result, error) {
 	normalized, err := world.Normalize()
 	if err != nil {
 		return Result{}, err
@@ -63,7 +68,7 @@ func SearchWithCertifier(world actionrelations.World, policy Policy, artifact Ar
 	if !onePolicy(policy) {
 		return Result{}, fmt.Errorf("unknown policy %q", policy)
 	}
-	search := searcher{policy: policy, artifact: artifact, certifier: certifier, memo: map[string][]string{}, certificateCache: map[string]bool{}}
+	search := searcher{policy: policy, artifact: artifact, eligibility: eligibility, certifier: certifier, memo: map[string][]string{}, certificateCache: map[string]bool{}}
 	terminals, err := search.visit(normalized.State, normalized.Occurrences, nil)
 	if err != nil {
 		return Result{}, err
@@ -78,6 +83,7 @@ type searcher struct {
 	policy           Policy
 	artifact         Artifact
 	certifier        CertificateFunc
+	eligibility      EligibilityFunc
 	result           Result
 	memo             map[string][]string
 	certificateCache map[string]bool
@@ -192,6 +198,9 @@ func (s *searcher) eligible(state actionrelations.State, left, right actionrelat
 	case StaticSleep:
 		return actionrelations.EvaluateAtom("read-write-disjoint", leftFacts, rightFacts)
 	case NousSleep, NoGuardSleep:
+		if s.policy == NousSleep && s.eligibility != nil {
+			return s.eligibility(state, left, right)
+		}
 		if len(state.Events) > 6 || len(s.artifact.Relations) == 0 {
 			return false, nil
 		}

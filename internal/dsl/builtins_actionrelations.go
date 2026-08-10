@@ -32,6 +32,8 @@ func init() {
 		"ar-close-guard-search":   bARCloseGuardSearch,
 		"ar-freeze-relation":      bARFreezeRelation,
 		"ar-certificate-assemble": bARCertificateAssemble,
+		"ar-pattern-match":        bARPatternMatch,
+		"ar-close-relation-use":   bARCloseRelationUse,
 	})
 }
 
@@ -338,7 +340,7 @@ func bARGuardMatch(vm *VM) error {
 	guard, guardErr := actionrelations.ParseGuard([]byte(guardValue.AsString()))
 	observation := vm.Store.Get(observationValue.AsString())
 	leftUnit, rightUnit := vm.Store.Get(leftValue.AsString()), vm.Store.Get(rightValue.AsString())
-	if guardErr != nil || observation == nil || leftUnit == nil || rightUnit == nil || !vm.Store.IsA(observation.Name, "ActionRelationObservation") || observation.GetString("aFacts") != leftUnit.Name || observation.GetString("bFacts") != rightUnit.Name {
+	if guardErr != nil || observation == nil || leftUnit == nil || rightUnit == nil || !actionRelationFactContext(vm, observation.Name) || observation.GetString("aFacts") != leftUnit.Name || observation.GetString("bFacts") != rightUnit.Name || !actionrelationsDigest(observation.GetString("objectDigest")) {
 		vm.push(Nil())
 		return nil
 	}
@@ -377,7 +379,7 @@ func bARGuardResult(vm *VM) error {
 	guard, err := actionrelations.ParseGuard([]byte(guardValue.AsString()))
 	observation := vm.Store.Get(observationValue.AsString())
 	rows := rowsValue.AsList()
-	if err != nil || observation == nil || !vm.Store.IsA(observation.Name, "ActionRelationObservation") || len(rows) != len(guard.Literals) {
+	if err != nil || observation == nil || !actionRelationFactContext(vm, observation.Name) || !actionrelationsDigest(observation.GetString("objectDigest")) || len(rows) != len(guard.Literals) {
 		vm.push(Nil())
 		return nil
 	}
@@ -416,6 +418,10 @@ func valuesToStrings(values []Value) []string {
 		result[index] = value.AsString()
 	}
 	return result
+}
+
+func actionRelationFactContext(vm *VM, name string) bool {
+	return vm.Store.IsA(name, "ActionRelationObservation") || vm.Store.IsA(name, "ActionRelationMatchRequest")
 }
 
 func arStateOccurrence(stateValue, occurrenceValue Value) (actionrelations.State, actionrelations.Occurrence, bool) {

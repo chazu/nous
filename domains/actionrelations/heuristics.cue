@@ -337,4 +337,54 @@ units: [
 			else "failed" "request" @ "certificateTerminal" set-slot then
 			"""#
 	},
+	{
+		name: "AR-H-MatchGuardedRelations"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Match every retained relation through explicit applicability, fact, literal, and unanimous-use rows"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arMatch" =
+			"CurUnit" @ "ActionRelationMatchRequest" isa? and
+			"CurUnit" @ "matchTerminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "state" get-slot "state" !
+			"request" @ "aOccurrence" get-slot "a" !
+			"request" @ "bOccurrence" get-slot "b" !
+			"request" @ "artifactUnit" get-slot "artifact" !
+			"state" @ "a" @ "Match.Facts.A." "request" @ concat ar-action-facts "aFacts" !
+			"state" @ "b" @ "Match.Facts.B." "request" @ concat ar-action-facts "bFacts" !
+			"aFacts" @ "request" @ "aFacts" set-slot
+			"bFacts" @ "request" @ "bFacts" set-slot
+			"state" @ "a" @ "Match.App.A." "request" @ concat ar-applicable? "aApp" !
+			"state" @ "b" @ "Match.App.B." "request" @ concat ar-applicable? "bApp" !
+			0 list-of "matchRows" !
+			"artifact" @ "relationUnits" get-slot each
+				it "relation" !
+				"relation" @ "guard" get-slot "guard" !
+				"relation" @ "atoms" get-slot "atoms" !
+				"relation" @ "polarities" get-slot "polarities" !
+				0 list-of "literalRows" !
+				"atoms" @ list-length iota each
+					it "literalIndex" !
+					"Match.Literal." "request" @ concat "." concat "relation" @ concat "." concat "literalIndex" @ concat "literalRequest" !
+					"guard" @ "request" @ "aFacts" @ "bFacts" @ "atoms" @ "literalIndex" @ list-get "polarities" @ "literalIndex" @ list-get "literalRequest" @ ar-guard-match "literalRow" !
+					"literalRows" @ "literalRow" @ list-append "literalRows" !
+				end
+				"Match.Relation." "request" @ concat "." concat "relation" @ concat "matchRequest" !
+				"relation" @ "state" @ "a" @ "b" @ "aFacts" @ "bFacts" @ "aApp" @ "bApp" @ "literalRows" @ "matchRequest" @ ar-pattern-match "matchRow" !
+				"matchRows" @ "matchRow" @ list-append "matchRows" !
+			end
+			"artifact" @ "matchRows" @ "Match.Barrier." "request" @ concat ar-close-relation-use "barrierResult" !
+			"barrierResult" @ nil !=
+			if
+				"barrierResult" @ 0 list-get "request" @ "useBarrier" set-slot
+				"barrierResult" @ 1 list-get "request" @ "matched" set-slot
+				"completed" "request" @ "matchTerminal" set-slot
+			else "failed" "request" @ "matchTerminal" set-slot then
+			"matchRows" @ "request" @ "matchRows" set-slot
+			"""#
+	},
 ]
