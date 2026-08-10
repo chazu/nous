@@ -287,4 +287,54 @@ units: [
 			"winners" @ "experiment" @ "winnerResultUnits" set-slot
 			"""#
 	},
+	{
+		name: "AR-H-CertifyLocalDiamond"
+		worth: 700
+		isA: ["Heuristic", "Anything"]
+		english: "Build one fresh local diamond certificate through explicit applicability, transition, and equality calls"
+		overallRecord: {successes: 0, failures: 0}
+		ifWorkingOnTask: #"""
+			"CurSlot" @ "arCertify" =
+			"CurUnit" @ "ActionRelationCertificateRequest" isa? and
+			"CurUnit" @ "certificateTerminal" get-slot nil = and
+			"""#
+		thenCompute: #"""
+			"CurUnit" @ "request" !
+			"request" @ "state" get-slot "state" !
+			"request" @ "aOccurrence" get-slot "a" !
+			"request" @ "bOccurrence" get-slot "b" !
+			"Cert.App.A." "request" @ concat "aAppRequest" !
+			"Cert.App.B." "request" @ concat "bAppRequest" !
+			"state" @ "a" @ "aAppRequest" @ ar-applicable? "aApp" !
+			"state" @ "b" @ "bAppRequest" @ ar-applicable? "bApp" !
+			"state" @ "a" @ "aApp" @ "Cert.Transition.A." "request" @ concat "Cert.State.AfterA." "request" @ concat ar-apply "aResult" !
+			"state" @ "b" @ "bApp" @ "Cert.Transition.B." "request" @ concat "Cert.State.AfterB." "request" @ concat ar-apply "bResult" !
+			"aResult" @ 0 list-get "aInitial" ! "aResult" @ 1 list-get "afterAUnit" !
+			"bResult" @ 0 list-get "bInitial" ! "bResult" @ 1 list-get "afterBUnit" !
+			"" "bAfterA" ! "" "aAfterB" ! "" "equality" !
+			"afterAUnit" @ "" != "afterBUnit" @ "" != and
+			if
+				"afterAUnit" @ "state" get-slot "afterA" !
+				"afterBUnit" @ "state" get-slot "afterB" !
+				"afterA" @ "b" @ "Cert.App.BAfterA." "request" @ concat ar-applicable? "bCrossApp" !
+				"afterB" @ "a" @ "Cert.App.AAfterB." "request" @ concat ar-applicable? "aCrossApp" !
+				"afterA" @ "b" @ "bCrossApp" @ "Cert.Transition.BAfterA." "request" @ concat "Cert.State.AB." "request" @ concat ar-apply "bCrossResult" !
+				"afterB" @ "a" @ "aCrossApp" @ "Cert.Transition.AAfterB." "request" @ concat "Cert.State.BA." "request" @ concat ar-apply "aCrossResult" !
+				"bCrossResult" @ 0 list-get "bAfterA" ! "bCrossResult" @ 1 list-get "abUnit" !
+				"aCrossResult" @ 0 list-get "aAfterB" ! "aCrossResult" @ 1 list-get "baUnit" !
+				"abUnit" @ "" != "baUnit" @ "" != and
+				if
+					"abUnit" @ "state" get-slot "abState" !
+					"baUnit" @ "state" get-slot "baState" !
+					"abState" @ "baState" @ "Cert.Equality." "request" @ concat ar-state-equal? "equality" !
+				then
+			then
+			"state" @ "a" @ "b" @ "request" @ "witness" get-slot "aInitial" @ "bInitial" @ "bAfterA" @ "aAfterB" @ "equality" @ "a" @ "request" @ "operationRoot" get-slot "AR.Certificate." "request" @ concat ar-certificate-assemble "certificate" !
+			"certificate" @ nil !=
+			if
+				"certificate" @ "request" @ "certificateUnit" set-slot
+				"certified" "request" @ "certificateTerminal" set-slot
+			else "failed" "request" @ "certificateTerminal" set-slot then
+			"""#
+	},
 ]

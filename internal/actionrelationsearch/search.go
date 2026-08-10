@@ -49,7 +49,13 @@ type Artifact struct {
 	Relations []actionrelations.Relation
 }
 
+type CertificateFunc func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error)
+
 func Search(world actionrelations.World, policy Policy, artifact Artifact) (Result, error) {
+	return SearchWithCertifier(world, policy, artifact, nil)
+}
+
+func SearchWithCertifier(world actionrelations.World, policy Policy, artifact Artifact, certifier CertificateFunc) (Result, error) {
 	normalized, err := world.Normalize()
 	if err != nil {
 		return Result{}, err
@@ -57,7 +63,7 @@ func Search(world actionrelations.World, policy Policy, artifact Artifact) (Resu
 	if !onePolicy(policy) {
 		return Result{}, fmt.Errorf("unknown policy %q", policy)
 	}
-	search := searcher{policy: policy, artifact: artifact, memo: map[string][]string{}, certificateCache: map[string]bool{}}
+	search := searcher{policy: policy, artifact: artifact, certifier: certifier, memo: map[string][]string{}, certificateCache: map[string]bool{}}
 	terminals, err := search.visit(normalized.State, normalized.Occurrences, nil)
 	if err != nil {
 		return Result{}, err
@@ -71,6 +77,7 @@ func Search(world actionrelations.World, policy Policy, artifact Artifact) (Resu
 type searcher struct {
 	policy           Policy
 	artifact         Artifact
+	certifier        CertificateFunc
 	result           Result
 	memo             map[string][]string
 	certificateCache map[string]bool
@@ -227,14 +234,22 @@ func (s *searcher) certify(state actionrelations.State, left, right actionrelati
 		s.result.CertificateHits++
 		return result, nil
 	}
-	stateJSON, _ := state.CanonicalJSON()
-	leftJSON, _ := left.Action.CanonicalJSON()
-	rightJSON, _ := right.Action.CanonicalJSON()
-	observation, err := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
-	if err != nil {
-		return false, err
+	result := false
+	if s.certifier != nil {
+		result, err = s.certifier(state, left, right)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		stateJSON, _ := state.CanonicalJSON()
+		leftJSON, _ := left.Action.CanonicalJSON()
+		rightJSON, _ := right.Action.CanonicalJSON()
+		observation, oracleErr := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
+		if oracleErr != nil {
+			return false, oracleErr
+		}
+		result = observation.Label == "commutes"
 	}
-	result := observation.Label == "commutes"
 	s.certificateCache[key] = result
 	return result, nil
 }

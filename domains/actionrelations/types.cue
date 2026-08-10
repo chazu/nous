@@ -24,6 +24,7 @@ units: [
 	{name: "GuardedActionRelation", worth: 700, isA: ["Anything"]},
 	{name: "GuardedActionArtifact", worth: 800, isA: ["Anything"]},
 	{name: "ActionRelationCertificate", worth: 700, isA: ["Anything"]},
+	{name: "ActionRelationCertificateRequest", worth: 650, isA: ["Anything"]},
 	{name: "ActionRelationSearchNode", worth: 600, isA: ["Anything"]},
 	{name: "ActionRelationExperiment", worth: 700, isA: ["Anything"]},
 ]
