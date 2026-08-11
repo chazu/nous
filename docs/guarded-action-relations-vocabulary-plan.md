@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 11.
+Status: provisional Part 3 Vocabulary 3 plan, revision 14.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -83,6 +83,21 @@ lacked a retained authority location and audit isolation did not exclude every
 primary output. Revision 11 makes the fixture root a capped top-level ref and
 requires a capability-isolated full temporary audit namespace before any
 comparison or deduplication.
+
+Revisions 12 and 13 close interrupted-attempt recovery and preserve the one
+authorized protected fixture construction before capability destruction. They
+were accepted together at exact commit
+`15808faae785fe22b025b6de3a6751ed6d365c00`. Revision 14 repairs two physical-
+capacity contradictions discovered by the first real retained-evidence run.
+A subtree root now retains only its node's directly submitted child edges in
+deterministic loop order; the recursively named completed-subtree roots
+reconstruct the same complete DFS and terminal union without copying every
+descendant digest into every ancestor. The certificate-attempt wire removes
+the redundant ordered-operation-digest array: its already-required operation
+range reconstructs those rows byte-for-byte. Both objects therefore fit the
+frozen 1,024-byte small-object class without weakening replay or any aggregate
+cap. Revision 14 requires a fresh unanimous exact-commit plan review before
+its implementation can be accepted or any panel can run.
 
 This plan narrows and, in revision 5, explicitly amends the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). The
@@ -746,7 +761,11 @@ A completed subtree is constructible only after every reachable submitted edge
 under that earlier sibling has terminated or been validly sleep-blocked and its
 terminal-set root is closed. `subtreeRoot` is SHA-256 of
 `["sleep-subtree-root/v1",rootNodeDigest,[edgeDigest...]]` in recorded DFS
-preorder; `terminalSetRoot` is SHA-256 of
+loop order, where the listed edges are exactly the root node's direct submitted
+children. Each edge's matching completed-subtree row recursively names the
+child subtree, so a depth-first traversal reconstructs the complete global DFS
+preorder without repeating descendant edge digests in every ancestor.
+`terminalSetRoot` is SHA-256 of
 `["sleep-terminal-set/v1",[terminalBehaviorDigest...]]` in sorted unique order.
 
 Every failed, absent, stale, or ineligible certificate drops `u`; there is no
@@ -1552,7 +1571,7 @@ Object-index kind is a separate closed decoder enum:
 | 41 | `action-literal-evaluation-row/v1` |
 | 42 | `action-relation-match-row/v1` |
 | 43 | `action-unanimous-use/v1` |
-| 44 | `local-diamond-certificate-attempt/v2` |
+| 44 | `local-diamond-certificate-attempt/v3` |
 | 45 | `action-raw-input/v1` |
 | 46 | `actionrelation-operation-root/v1` |
 | 47 | `actionrelation-curriculum-fixture/v1` |
@@ -1593,9 +1612,8 @@ The descriptive wires in that table are exactly:
  aOccurrenceDigest,bOccurrenceDigest,aFactsDigest,bFactsDigest,result,status]
 ["action-work-terminal/v1",runID,phase,rejectedReservationDigest,
  "budget-exhausted",workVector,total,budgetRemaining]
-["local-diamond-certificate-attempt/v2",stateDigest,aOccurrenceDigest,
- bOccurrenceDigest,witnessDigest,orderedOperationRowDigests,
- certificateOperationRootDigest,result,
+["local-diamond-certificate-attempt/v3",stateDigest,aOccurrenceDigest,
+ bOccurrenceDigest,witnessDigest,certificateOperationRootDigest,result,
  certificateDigestOrZero,status]
 ["action-raw-input/v1",objectClass,base64urlNoPadding]
 ```
@@ -1644,11 +1662,15 @@ The named miss call and attempt must use the identical world, policy, state,
 and oriented pair. Its kind-46 range starts at the first pair-specific
 eligibility call, or code 18 for dynamic, contains the unique miss and the exact
 contiguous proof calls through equality, and excludes code 25. Journal/detail
-records expand that retained root and reconstruct `orderedOperationRowDigests`.
+records expand that retained root and reconstruct the exact ordered operation
+rows formerly duplicated in the v2 attempt wire.
 The certificate, attempt, code-25 envelope, and cache row all name the same
 root; construction order is calls, root, certificate, attempt, finalization,
 then propagation. The worst code-25 envelope is 623 bytes and remains in the
-1,024-byte class. The kind-36 verifier requires exactly 66 embedded draw rows,
+1,024-byte class. A kind-25 subtree root names at most eight direct child edges,
+and a kind-44 v3 attempt names one bounded operation range, so both remain in
+the 1,024-byte class independently of descendant search size. The kind-36
+verifier requires exactly 66 embedded draw rows,
 consecutive ordinals, the frozen namespace/index schedule and context, exact
 recomputed `F` words, and matching `drawRoot`; even the locked-context encoding
 is at most 14,712 bytes, within the 65,536-byte large-object cap.
