@@ -1165,6 +1165,14 @@ Part 3 is a clearer map of which reasoning operations Nous can genuinely
 acquire, even if none of the vocabularies points toward a single application
 destination.
 
+The recorded Vocabulary 3 entry for **Compress order** is `invalid`. Its
+reviewed semantic competence passed, but the public development attempt
+terminalized before policy work when the isolated-worker sandbox denied an
+absolute-path ancestor metadata lookup. The canonical outcome and non-retry
+consequence are recorded in the
+[guarded action-relations result](guarded-action-relations-vocabulary-results.md);
+no preservation or marginal-utility claim is authorized.
+
 ## Reading guide
 
 The papers linked above are research anchors and sources for conventional
