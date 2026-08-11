@@ -2244,10 +2244,14 @@ same directory. Its bytes are exactly
 no-replace link of that inode to the final basename is the persistent attempt
 transition and precedes fixture construction or any evidence write. Before
 that link, failure removes the temporary file and remains retryable. After the
-link, the in-memory protected capability is destroyed and any locked preimage
-is descriptor-relatively erased before construction. Recovery likewise erases
-an exact still-present preimage; it neither requires nor recreates one already
-erased. Cleanup/fsync, capability destruction, namespace, construction,
+link, a fresh protected attempt may consume the in-memory capability exactly
+once to construct only its sealed fixture. The capability and any locked
+preimage are then destroyed descriptor-relatively before any policy namespace
+or worker starts; construction failure also destroys them before invalid
+terminalization. Recovery never reconstructs a fixture or remints a capability:
+it erases an exact still-present preimage left by interruption before
+destruction, and neither requires nor recreates one already erased. Marker
+cleanup/fsync, construction, capability destruction, namespace,
 isolated-execution, comparison, and pre-success-publication failures enter
 idempotent terminalization.
 
