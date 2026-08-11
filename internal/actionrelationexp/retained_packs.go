@@ -647,9 +647,12 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				return nil, fmt.Errorf("charged reservation is outside run scope: %s/%s", record.RunID, call.source)
 			}
 			markUsed[call.source] = true
-			for _, output := range call.outputs {
+			for outputIndex, output := range call.outputs {
 				object, own := ownObjects[output]
 				if !own {
+					if retainedAcquisitionTableOutput(authority, call, outputIndex, output, retainedTableLeaves) {
+						continue
+					}
 					if !allowedCrossScope[output] || call.operation != 10 || output != authority.artifact {
 						return nil, fmt.Errorf("charged output is outside run scope: %s/%s", record.RunID, output)
 					}
@@ -779,6 +782,39 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	}
 	slices.Sort(paths)
 	return paths, nil
+}
+
+func retainedAcquisitionTableOutput(authority retainedRunAuthority, call retainedCall, outputIndex int, digest string, tables map[string][]retainedTableLeaf) bool {
+	if authority.phase != 1 {
+		return false
+	}
+	var kind uint16
+	switch {
+	case call.operation == 1 && outputIndex == 1:
+		kind = 103
+	case call.operation == 2 && outputIndex == 0:
+		kind = 103
+	case call.operation == 3 && outputIndex == 1:
+		kind = 104
+	case (call.operation == 4 || call.operation == 5 || call.operation == 6) && outputIndex == 0:
+		kind = 107
+	case call.operation == 7 && outputIndex == 0:
+		kind = 101
+	case call.operation == 20 && outputIndex == 0:
+		kind = 108
+	case call.operation == 22 && outputIndex == 0:
+		kind = 102
+	default:
+		return false
+	}
+	matches := 0
+	for _, leaf := range tables[digest] {
+		leafDigest := TableLeafDigest(leaf.kind, leaf.ordinal, leaf.record)
+		if hex.EncodeToString(leafDigest[:]) == digest && leaf.curriculum == authority.curriculum && leaf.scope == authority.policy && leaf.kind == kind {
+			matches++
+		}
+	}
+	return matches == 1
 }
 
 // retainedObjectsForRun preserves the physical object capability boundary during

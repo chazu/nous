@@ -284,6 +284,16 @@ func (r *retainedDFSReplay) visit(state string, remaining []string, proof map[st
 			if !eligible {
 				continue
 			}
+			witnessKind := uint16(16)
+			switch r.authority.policy {
+			case "static-rw-sleep":
+				witnessKind = 15
+			case "nous-guarded-sleep", "no-guard-sleep":
+				witnessKind = 14
+			}
+			if err := r.mark(witnessKind, shaHex(witness)); err != nil {
+				return retainedDFSVisit{}, fmt.Errorf("current eligibility witness: %w", err)
+			}
 			certified, certificate, err := r.consumeCertificate(state, taken, sleeper, witness, eligibilityStart)
 			if err != nil {
 				return retainedDFSVisit{}, err
@@ -393,7 +403,7 @@ func (r *retainedDFSReplay) consumeEligibility(node, state, taken, sleeper, appl
 			left, right = right, left
 		}
 		attempt.A, attempt.B = left, right
-		count, ok := retainedEligibilitySchedule(r.authority, attempt, calls, r.objects, false)
+		count, ok := retainedEligibilitySchedule(r.authority, attempt, taken, sleeper, calls, r.objects, false)
 		if !ok || count != len(calls) {
 			return false, nil, fmt.Errorf("ordered DFS learned eligibility differs from artifact")
 		}
@@ -413,7 +423,10 @@ func (r *retainedDFSReplay) consumeEligibility(node, state, taken, sleeper, appl
 		if err != nil {
 			return false, nil, err
 		}
-		barrier, _ := json.Marshal([]any{"action-unanimous-use/v1", r.authority.artifact, state, attempt.A, attempt.B, root, true, "valid"})
+		barrier, _ := json.Marshal([]any{"action-unanimous-use/v1", r.authority.artifact, state, taken, sleeper, root, true, "valid"})
+		if err := r.mark(43, shaHex(barrier)); err != nil {
+			return false, nil, fmt.Errorf("current learned barrier: %w", err)
+		}
 		witness, _ := json.Marshal([]any{"learned-witness/v1", shaHex(barrier)})
 		return true, witness, nil
 	default:

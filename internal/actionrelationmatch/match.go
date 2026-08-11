@@ -35,12 +35,11 @@ func ExecuteMetered(store *unit.Store, artifactName string, state actionrelation
 	if err != nil {
 		return Result{}, err
 	}
-	a, b, err = actionrelations.CanonicalPair(a, b)
-	if err != nil || a == b {
+	aJSON, aErr := a.CanonicalJSON()
+	bJSON, bErr := b.CanonicalJSON()
+	if aErr != nil || bErr != nil || a == b {
 		return Result{}, actionrelations.ErrInvalid
 	}
-	aJSON, _ := a.CanonicalJSON()
-	bJSON, _ := b.CanonicalJSON()
 	stateDigest, _ := state.Digest()
 	aDigest, _ := a.Digest()
 	bDigest, _ := b.Digest()

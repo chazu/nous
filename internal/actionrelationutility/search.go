@@ -142,6 +142,15 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 	}
 	if artifactName != "" {
 		if err := runner.chargeArtifactLoad(boundaryName, artifactName); err != nil {
+			var exhausted *budgetExhaustedError
+			if errors.As(err, &exhausted) {
+				terminal, terminalErr := session.TerminateBudget(exhausted.Reservation)
+				if terminalErr != nil {
+					session.Abort()
+					return SearchRun{}, terminalErr
+				}
+				return finishSearchRun(evidenceRoot, session, runID, worldDigest, policy, budget.PriorPhysical, runner.result, runner.proofRoots, runner.structural, "budget-exhausted", terminal)
+			}
 			session.Abort()
 			return SearchRun{}, err
 		}

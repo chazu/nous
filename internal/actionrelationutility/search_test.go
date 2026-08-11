@@ -194,6 +194,60 @@ func TestNoGuardUtilityUsesItsSeparateRootOnlyAcquisitionAuthority(t *testing.T)
 	}
 }
 
+func TestLearnedArtifactLoadBudgetExhaustionStaysTypedAcrossWorlds(t *testing.T) {
+	session, err := actionrelationacquire.BeginFor("../../domains", "learned-artifact-budget", 0, 9, "development", actionrelationexp.PlanCommit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquisition, err := actionrelationexp.CompleteAcquisition(session, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary, err := actionrelationexp.BuildAcquisitionBoundary(acquisition, 9, "nous")
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialWork, err := MeterWorkVector(acquisition.Run.MeterRecords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundaryDigest := acquisition.Run.Store.Get(boundary.BoundaryUnit).GetString("objectDigest")
+	artifactDigest := acquisition.Run.Store.Get(acquisition.Run.Artifact).GetString("objectDigest")
+	assertArtifactTerminal := func(t *testing.T, run SearchRun) {
+		t.Helper()
+		if run.Terminal != "budget-exhausted" || len(run.Records) != 1 || run.Records[0].Code != 19 || actionrelationexp.ValidateObject(49, run.WorkTerminal.Canonical) != nil {
+			t.Fatalf("artifact-load exhaustion escaped typed terminalization: %+v", run)
+		}
+		rejected := run.WorkTerminal.RejectedReservation
+		wire, _ := json.Marshal([]any{"actionrelation-utility-task/v1", run.RunID, "artifact-load", []any{boundaryDigest, artifactDigest}, []uint8{10}})
+		if rejected.Status != "rejected-cap" || !slices.Equal(rejected.OperationCodes, []uint8{10}) || rejected.TaskDigest != digestBytesText(wire) {
+			t.Fatalf("budget terminal does not bind rejected artifact load: %+v", rejected)
+		}
+	}
+
+	const physicalCap = 100
+	first, err := ExecuteLearnedPolicyWithBudget(
+		acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, independentUtilityWorld(), actionrelationsearch.NousSleep,
+		"development", actionrelationexp.PlanCommit, 9, 0, initialWork,
+		WorkBudget{LifecycleCap: 2_000_000, PhysicalCap: physicalCap, PriorPhysical: physicalCap - 2, ReservedTerminals: 1},
+		"learned-artifact-budget-first",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertArtifactTerminal(t, first)
+	second, err := ExecuteLearnedPolicyWithBudget(
+		acquisition.Run.Store, acquisition.Run.Artifact, boundary.BoundaryUnit, independentUtilityWorld(), actionrelationsearch.NousSleep,
+		"development", actionrelationexp.PlanCommit, 9, 1, first.WorkVector,
+		WorkBudget{LifecycleCap: 2_000_000, PhysicalCap: physicalCap, PriorPhysical: physicalCap - 1},
+		"learned-artifact-budget-second",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertArtifactTerminal(t, second)
+}
+
 func TestCertifiedUtilityPoliciesRetainFreshOrientedSleepProofs(t *testing.T) {
 	world := independentUtilityWorld()
 	complete, err := actionrelationsearch.Search(world, actionrelationsearch.Complete, actionrelationsearch.Artifact{})

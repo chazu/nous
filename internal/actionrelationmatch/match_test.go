@@ -1,6 +1,7 @@
 package actionrelationmatch
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/chazu/nous/internal/actionrelationacquire"
@@ -63,5 +64,29 @@ func TestLearnedMatchRetainsExactUtilityDecoderWires(t *testing.T) {
 		if err := actionrelationexp.ValidateObject(38, []byte(row.GetString("canonicalObject"))); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	reversed, err := Execute(acquisition.Store, acquisition.Artifact, state, occurrences[1], occurrences[0], "wire-reversed")
+	if err != nil || !reversed.Matched {
+		t.Fatalf("reversed result=%+v err=%v", reversed, err)
+	}
+	request = acquisition.Store.Get(reversed.Request)
+	wantA, _ := occurrences[1].CanonicalJSON()
+	wantB, _ := occurrences[0].CanonicalJSON()
+	if request.GetString("aOccurrence") != string(wantA) || request.GetString("bOccurrence") != string(wantB) {
+		t.Fatal("learned match canonicalized its oriented taken/sleeper request")
+	}
+	takenDigest, _ := occurrences[1].Digest()
+	sleeperDigest, _ := occurrences[0].Digest()
+	var barrierRow []json.RawMessage
+	barrier = acquisition.Store.Get(reversed.Barrier)
+	if barrier == nil || json.Unmarshal([]byte(barrier.GetString("canonicalObject")), &barrierRow) != nil || len(barrierRow) != 8 {
+		t.Fatal("reversed learned match lacks its barrier")
+	}
+	var gotTaken, gotSleeper string
+	_ = json.Unmarshal(barrierRow[3], &gotTaken)
+	_ = json.Unmarshal(barrierRow[4], &gotSleeper)
+	if gotTaken != takenDigest || gotSleeper != sleeperDigest {
+		t.Fatalf("learned barrier orientation=(%s,%s) want=(%s,%s)", gotTaken, gotSleeper, takenDigest, sleeperDigest)
 	}
 }

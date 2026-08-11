@@ -1,6 +1,7 @@
 package actionrelationexp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -203,15 +204,63 @@ func TestRetainedLearnedEligibilityRequiresEveryArtifactRelationInOrder(t *testi
 	}
 	authority := retainedRunAuthority{policy: "nous-guarded-sleep", artifact: artifactDigest}
 	attempt := decodedCertificateAttempt{State: stateDigest, A: aDigest, B: bDigest}
-	if count, ok := retainedEligibilitySchedule(authority, attempt, calls, objects, true); !ok || count != len(calls) {
+	if count, ok := retainedEligibilitySchedule(authority, attempt, aDigest, bDigest, calls, objects, true); !ok || count != len(calls) {
 		t.Fatal("valid learned eligibility schedule did not reconstruct")
 	}
-	if _, ok := retainedEligibilitySchedule(authority, attempt, calls[:2], objects, true); ok {
+	if _, ok := retainedEligibilitySchedule(authority, attempt, aDigest, bDigest, calls[:2], objects, true); ok {
 		t.Fatal("accepted learned eligibility with its artifact relation omitted")
 	}
 	reordered := slices.Clone(calls)
 	reordered[1], reordered[2] = reordered[2], reordered[1]
-	if _, ok := retainedEligibilitySchedule(authority, attempt, reordered, objects, true); ok {
+	if _, ok := retainedEligibilitySchedule(authority, attempt, aDigest, bDigest, reordered, objects, true); ok {
 		t.Fatal("accepted learned eligibility outside artifact order")
+	}
+	reverseMatchCanonical, _ := json.Marshal([]any{"action-relation-match-row/v1", relationDigest, stateDigest, bFactsDigest, aFactsDigest, bAppDigest, aAppDigest, true, true, []string{}, true, "valid"})
+	reverseMatchDigest := shaHex(reverseMatchCanonical)
+	objects[reverseMatchDigest] = retainedObjectValue{kind: 42, canonical: reverseMatchCanonical}
+	reversed := []retainedCall{
+		{operation: 21, status: 1, payload: payload("relation-instance-applicable", stateDigest, bDigest), outputs: []string{bAppDigest}},
+		{operation: 21, status: 1, payload: payload("relation-instance-applicable", stateDigest, aDigest), outputs: []string{aAppDigest}},
+		{operation: 9, status: 1, payload: payload("relation-match", relationDigest, stateDigest, bFactsDigest, aFactsDigest, bAppDigest, aAppDigest, []string{}), outputs: []string{reverseMatchDigest}},
+	}
+	if count, ok := retainedEligibilitySchedule(authority, attempt, bDigest, aDigest, reversed, objects, true); !ok || count != len(reversed) {
+		t.Fatal("valid reverse-oriented learned eligibility did not reconstruct")
+	}
+	if _, ok := retainedEligibilitySchedule(authority, attempt, aDigest, bDigest, reversed, objects, true); ok {
+		t.Fatal("accepted learned eligibility under the wrong taken/sleeper orientation")
+	}
+}
+
+func TestRetainedStaticCacheUseReconstructsFreshNodeWitness(t *testing.T) {
+	world := testAuthorityDigest("static-world")
+	state := testAuthorityDigest("static-state")
+	taken := testAuthorityDigest("static-taken")
+	sleeper := testAuthorityDigest("static-sleeper")
+	aFacts := testAuthorityDigest("static-a-facts")
+	bFacts := testAuthorityDigest("static-b-facts")
+	objects := map[string]retainedObjectValue{}
+	makeUse := func(node string) ([]retainedCall, []byte) {
+		footprint, _ := json.Marshal([]any{"action-static-footprint-row/v1", world, node, state, taken, sleeper, aFacts, bFacts, true, "valid"})
+		if err := ValidateObject(48, footprint); err != nil {
+			t.Fatal(err)
+		}
+		digest := shaHex(footprint)
+		objects[digest] = retainedObjectValue{kind: 48, canonical: footprint}
+		calls := []retainedCall{{operation: 24, outputs: []string{digest}}}
+		witness, kind, ok := retainedCurrentEligibilityWitness(retainedRunAuthority{policy: "static-rw-sleep"}, taken, sleeper, calls, objects)
+		if !ok || kind != 15 {
+			t.Fatal("static use did not reconstruct its current witness")
+		}
+		objects[shaHex(witness)] = retainedObjectValue{kind: kind, canonical: witness}
+		return calls, witness
+	}
+	_, original := makeUse(testAuthorityDigest("static-node-original"))
+	currentCalls, current := makeUse(testAuthorityDigest("static-node-current"))
+	if bytes.Equal(original, current) {
+		t.Fatal("static witnesses failed to bind their distinct current nodes")
+	}
+	rebuilt, kind, ok := retainedCurrentEligibilityWitness(retainedRunAuthority{policy: "static-rw-sleep"}, taken, sleeper, currentCalls, objects)
+	if !ok || kind != 15 || !bytes.Equal(rebuilt, current) || bytes.Equal(rebuilt, original) || objects[shaHex(rebuilt)].kind != 15 {
+		t.Fatal("cache reuse did not retain the fresh current witness independently of the cached attempt")
 	}
 }

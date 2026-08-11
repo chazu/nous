@@ -2,6 +2,7 @@ package actionrelationexp
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -215,6 +216,65 @@ func TestRetainedRunObjectsPreservePhysicalScope(t *testing.T) {
 	}
 	if _, ok := objects[otherStateDigest]; ok {
 		t.Fatal("utility replay borrowed an authority object from another curriculum")
+	}
+}
+
+func TestRetainedAcquisitionTableOutputsRequireExactScopeKindAndSlot(t *testing.T) {
+	record := make([]byte, tableRecordSizes[103])
+	copy(record[0:32], bytes.Repeat([]byte{1}, 32))
+	copy(record[32:64], bytes.Repeat([]byte{3}, 32))
+	copy(record[64:96], bytes.Repeat([]byte{2}, 32))
+	binary.BigEndian.PutUint16(record[96:98], 7)
+	record[99] = 1
+	if err := ValidateTableRecord(103, record); err != nil {
+		t.Fatal(err)
+	}
+	leafDigest := TableLeafDigest(103, 7, record)
+	digest := fmt.Sprintf("%x", leafDigest)
+	authority := retainedRunAuthority{curriculum: 2, phase: 1, policy: "nous"}
+	call := retainedCall{operation: 1, outputs: []string{testAuthorityDigest("guard"), digest}}
+	tables := map[string][]retainedTableLeaf{
+		digest: {{kind: 103, curriculum: 2, scope: "nous", ordinal: 7, record: record}},
+	}
+	if !retainedAcquisitionTableOutput(authority, call, 1, digest, tables) {
+		t.Fatal("rejected exact acquisition-bound table output")
+	}
+	for name, mutate := range map[string]func(retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf) (retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf){
+		"wrong curriculum": func(a retainedRunAuthority, c retainedCall, m map[string][]retainedTableLeaf) (retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf) {
+			a.curriculum++
+			return a, c, m
+		},
+		"wrong scope": func(a retainedRunAuthority, c retainedCall, m map[string][]retainedTableLeaf) (retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf) {
+			a.policy = "no-guard"
+			return a, c, m
+		},
+		"wrong kind": func(a retainedRunAuthority, c retainedCall, m map[string][]retainedTableLeaf) (retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf) {
+			m[digest][0].kind = 104
+			return a, c, m
+		},
+		"wrong operation": func(a retainedRunAuthority, c retainedCall, m map[string][]retainedTableLeaf) (retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf) {
+			c.operation = 2
+			return a, c, m
+		},
+		"wrong slot": func(a retainedRunAuthority, c retainedCall, m map[string][]retainedTableLeaf) (retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf) {
+			return a, c, m
+		},
+		"duplicate leaf": func(a retainedRunAuthority, c retainedCall, m map[string][]retainedTableLeaf) (retainedRunAuthority, retainedCall, map[string][]retainedTableLeaf) {
+			m[digest] = append(m[digest], m[digest][0])
+			return a, c, m
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			copyTables := map[string][]retainedTableLeaf{digest: slices.Clone(tables[digest])}
+			a, c, m := mutate(authority, call, copyTables)
+			index := 1
+			if name == "wrong slot" {
+				index = 0
+			}
+			if retainedAcquisitionTableOutput(a, c, index, digest, m) {
+				t.Fatal("accepted table output outside its exact physical boundary")
+			}
+		})
 	}
 }
 

@@ -646,7 +646,7 @@ func retainedUnanimousBarrierDigests(authority retainedRunAuthority, calls []ret
 			return nil, fmt.Errorf("learned eligibility lacks its ordered applicability pair")
 		}
 		attempt := decodedCertificateAttempt{State: rawText(calls[cursor].payload[1]), A: rawText(calls[cursor].payload[2]), B: rawText(calls[cursor+1].payload[2])}
-		count, ok := retainedEligibilitySchedule(authority, attempt, calls[cursor:], objects, false)
+		count, ok := retainedEligibilitySchedule(authority, attempt, attempt.A, attempt.B, calls[cursor:], objects, false)
 		if !ok || count <= 2 || cursor+count > len(calls) {
 			return nil, fmt.Errorf("learned eligibility differs from full artifact order")
 		}
@@ -847,8 +847,8 @@ func retainedDynamicWitnessCurrent(calls []retainedCall, attempt decodedCertific
 
 // retainedEligibilitySchedule verifies the complete charged policy-specific
 // eligibility prefix and returns the exact cache-lookup offset within calls.
-func retainedEligibilitySchedule(authority retainedRunAuthority, attempt decodedCertificateAttempt, calls []retainedCall, objects map[string]retainedObjectValue, requireEligible bool) (int, bool) {
-	if len(calls) == 0 {
+func retainedEligibilitySchedule(authority retainedRunAuthority, attempt decodedCertificateAttempt, taken, sleeper string, calls []retainedCall, objects map[string]retainedObjectValue, requireEligible bool) (int, bool) {
+	if len(calls) == 0 || taken == sleeper || !sameDigestPair(taken, sleeper, attempt.A, attempt.B) {
 		return 0, false
 	}
 	switch authority.policy {
@@ -859,8 +859,8 @@ func retainedEligibilitySchedule(authority retainedRunAuthority, attempt decoded
 			return 0, false
 		}
 		p := calls[0].payload
-		nodeDigest, state, taken, sleeper := rawText(p[2]), rawText(p[3]), rawText(p[4]), rawText(p[5])
-		if state != attempt.State || !sameDigestPair(taken, sleeper, attempt.A, attempt.B) {
+		nodeDigest, state, gotTaken, gotSleeper := rawText(p[2]), rawText(p[3]), rawText(p[4]), rawText(p[5])
+		if state != attempt.State || gotTaken != taken || gotSleeper != sleeper {
 			return 0, false
 		}
 		nodeObject := objects[nodeDigest]
@@ -878,7 +878,7 @@ func retainedEligibilitySchedule(authority retainedRunAuthority, attempt decoded
 		if err != nil || artifactObject.kind != 10 || len(calls) < 3 || calls[0].operation != 21 || calls[1].operation != 21 {
 			return 0, false
 		}
-		for index, occurrence := range []string{attempt.A, attempt.B} {
+		for index, occurrence := range []string{taken, sleeper} {
 			call := calls[index]
 			if len(call.payload) != 3 || rawText(call.payload[1]) != attempt.State || rawText(call.payload[2]) != occurrence || !retainedOutputBoolStatus(call, objects, 3, 4) {
 				return 0, false
@@ -914,7 +914,7 @@ func retainedEligibilitySchedule(authority retainedRunAuthority, attempt decoded
 			matchPayload := calls[cursor].payload
 			aFacts, aErr := actionrelations.ParseLocalFacts(objects[rawText(matchPayload[3])].canonical)
 			bFacts, bErr := actionrelations.ParseLocalFacts(objects[rawText(matchPayload[4])].canonical)
-			if aErr != nil || bErr != nil || aFacts.StateDigest != attempt.State || bFacts.StateDigest != attempt.State || aFacts.OccurrenceDigest != attempt.A || bFacts.OccurrenceDigest != attempt.B ||
+			if aErr != nil || bErr != nil || aFacts.StateDigest != attempt.State || bFacts.StateDigest != attempt.State || aFacts.OccurrenceDigest != taken || bFacts.OccurrenceDigest != sleeper ||
 				rawText(matchPayload[5]) != calls[0].outputs[0] || rawText(matchPayload[6]) != calls[1].outputs[0] {
 				return 0, false
 			}
@@ -933,6 +933,72 @@ func retainedEligibilitySchedule(authority retainedRunAuthority, attempt decoded
 		return cursor, true
 	default:
 		return 0, false
+	}
+}
+
+func retainedEligibilityOrientation(authority retainedRunAuthority, attempt decodedCertificateAttempt, calls []retainedCall, objects map[string]retainedObjectValue) (string, string, bool) {
+	switch authority.policy {
+	case "dynamic-diamond-sleep":
+		var witnessRow, applicabilityRow []json.RawMessage
+		witness := objects[attempt.Witness]
+		if witness.kind != 16 || json.Unmarshal(witness.canonical, &witnessRow) != nil || len(witnessRow) != 3 {
+			return "", "", false
+		}
+		applicability := objects[rawText(witnessRow[2])]
+		if applicability.kind != 38 || json.Unmarshal(applicability.canonical, &applicabilityRow) != nil || len(applicabilityRow) != 5 {
+			return "", "", false
+		}
+		sleeper := rawText(applicabilityRow[2])
+		if sleeper == attempt.A {
+			return attempt.B, sleeper, true
+		}
+		if sleeper == attempt.B {
+			return attempt.A, sleeper, true
+		}
+		return "", "", false
+	case "static-rw-sleep":
+		if len(calls) < 1 || len(calls[0].payload) != 8 || calls[0].operation != 24 {
+			return "", "", false
+		}
+		return rawText(calls[0].payload[4]), rawText(calls[0].payload[5]), true
+	case "nous-guarded-sleep", "no-guard-sleep":
+		if len(calls) < 2 || len(calls[0].payload) != 3 || len(calls[1].payload) != 3 || calls[0].operation != 21 || calls[1].operation != 21 {
+			return "", "", false
+		}
+		return rawText(calls[0].payload[2]), rawText(calls[1].payload[2]), true
+	default:
+		return "", "", false
+	}
+}
+
+func retainedCurrentEligibilityWitness(authority retainedRunAuthority, taken, sleeper string, calls []retainedCall, objects map[string]retainedObjectValue) ([]byte, uint16, bool) {
+	switch authority.policy {
+	case "static-rw-sleep":
+		if len(calls) < 1 || calls[0].operation != 24 || len(calls[0].outputs) != 1 || objects[calls[0].outputs[0]].kind != 48 {
+			return nil, 0, false
+		}
+		wire, _ := json.Marshal([]any{"static-witness/v1", calls[0].outputs[0]})
+		return wire, 15, true
+	case "nous-guarded-sleep", "no-guard-sleep":
+		matches := []string{}
+		for _, call := range calls {
+			if call.operation == 9 && len(call.outputs) == 1 {
+				matches = append(matches, call.outputs[0])
+			}
+		}
+		root, err := actionrelationwire.RootDigest("unanimous-relation-matches", matches)
+		if err != nil {
+			return nil, 0, false
+		}
+		barrier, _ := json.Marshal([]any{"action-unanimous-use/v1", authority.artifact, rawText(calls[0].payload[1]), taken, sleeper, root, true, "valid"})
+		barrierDigest := shaHex(barrier)
+		if object := objects[barrierDigest]; object.kind != 43 || !bytes.Equal(object.canonical, barrier) {
+			return nil, 0, false
+		}
+		wire, _ := json.Marshal([]any{"learned-witness/v1", barrierDigest})
+		return wire, 14, true
+	default:
+		return nil, 0, false
 	}
 }
 
@@ -982,18 +1048,27 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 			if start < 0 {
 				return nil, fmt.Errorf("cache hit lacks its current eligibility prefix")
 			}
-			offset, scheduleOK := retainedEligibilitySchedule(authority, attempt, calls[start:call.sequence+1], objects, true)
-			if !scheduleOK || start+offset != call.sequence || !certificateWitnessMatchesRange(authority, attempt, calls[start:call.sequence+1], objects[decision.witness].canonical, objects) {
+			currentRange := calls[start : call.sequence+1]
+			taken, sleeper, oriented := retainedEligibilityOrientation(authority, attempt, currentRange, objects)
+			offset, scheduleOK := retainedEligibilitySchedule(authority, attempt, taken, sleeper, currentRange, objects, true)
+			if !oriented || !scheduleOK || start+offset != call.sequence {
 				return nil, fmt.Errorf("cache hit lacks its exact current eligibility authority")
+			}
+			if authority.policy != "dynamic-diamond-sleep" {
+				witness, kind, current := retainedCurrentEligibilityWitness(authority, taken, sleeper, currentRange, objects)
+				if !current {
+					return nil, fmt.Errorf("cache hit lacks its fresh current eligibility witness")
+				}
+				object := objects[shaHex(witness)]
+				if object.kind != kind || !bytes.Equal(object.canonical, witness) {
+					return nil, fmt.Errorf("cache hit lacks its fresh current eligibility witness")
+				}
 			}
 			if authority.policy == "static-rw-sleep" {
 				footprint := calls[start].payload
 				if !retainedPriorApplicable(calls[:start], rawText(footprint[2]), rawText(footprint[3]), rawText(footprint[4]), objects) || !retainedPriorApplicable(calls[:start], rawText(footprint[2]), rawText(footprint[3]), rawText(footprint[5]), objects) {
 					return nil, fmt.Errorf("cache-hit static eligibility lacks enabled pair")
 				}
-			}
-			if authority.policy == "dynamic-diamond-sleep" && !retainedDynamicWitnessCurrent(calls[:call.sequence], attempt, objects[decision.witness].canonical, objects) {
-				return nil, fmt.Errorf("cache-hit dynamic eligibility lacks its current enabled pair")
 			}
 			decision.uses = append(decision.uses, call.sequence)
 			decisions[key] = decision
@@ -1025,8 +1100,9 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 			return nil, fmt.Errorf("certificate operation range has wrong bounds or eligibility start")
 		}
 		rangeCalls := calls[int(root.Start):call.sequence]
-		missOffset, scheduleOK := retainedEligibilitySchedule(authority, attempt, rangeCalls, objects, true)
-		if !scheduleOK || missOffset >= len(rangeCalls) || rangeCalls[missOffset].callID != missID {
+		taken, sleeper, oriented := retainedEligibilityOrientation(authority, attempt, rangeCalls, objects)
+		missOffset, scheduleOK := retainedEligibilitySchedule(authority, attempt, taken, sleeper, rangeCalls, objects, true)
+		if !oriented || !scheduleOK || missOffset >= len(rangeCalls) || rangeCalls[missOffset].callID != missID {
 			return nil, fmt.Errorf("certificate range differs from exact policy eligibility schedule")
 		}
 		if authority.policy == "static-rw-sleep" {
@@ -1068,7 +1144,7 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 		} else if authority.policy == "dynamic-diamond-sleep" {
 			wantWitnessKind = 16
 		}
-		if !witnessOK || witnessObject.kind != wantWitnessKind || !certificateWitnessMatchesRange(authority, attempt, rangeCalls, witnessObject.canonical, objects) {
+		if !witnessOK || witnessObject.kind != wantWitnessKind || !certificateWitnessMatchesRange(authority, attempt, taken, sleeper, rangeCalls, witnessObject.canonical, objects) {
 			return nil, fmt.Errorf("certificate attempt lacks its exact policy witness")
 		}
 		if authority.policy == "dynamic-diamond-sleep" && !retainedDynamicWitnessCurrent(calls[:root.Start], attempt, witnessObject.canonical, objects) {
@@ -1112,9 +1188,9 @@ func certificateAttemptMatchesFinalization(attempt decodedCertificateAttempt, pa
 	return attempt.State == rawText(payload[3]) && attempt.Operation == rootDigest && slices.Min(pair) == rawText(payload[4]) && slices.Max(pair) == rawText(payload[5])
 }
 
-func certificateWitnessMatchesRange(authority retainedRunAuthority, attempt decodedCertificateAttempt, calls []retainedCall, witness []byte, objects map[string]retainedObjectValue) bool {
+func certificateWitnessMatchesRange(authority retainedRunAuthority, attempt decodedCertificateAttempt, taken, sleeper string, calls []retainedCall, witness []byte, objects map[string]retainedObjectValue) bool {
 	var row []json.RawMessage
-	if json.Unmarshal(witness, &row) != nil || len(calls) == 0 {
+	if json.Unmarshal(witness, &row) != nil || len(calls) == 0 || taken == sleeper || !sameDigestPair(taken, sleeper, attempt.A, attempt.B) {
 		return false
 	}
 	switch authority.policy {
@@ -1125,13 +1201,13 @@ func certificateWitnessMatchesRange(authority retainedRunAuthority, attempt deco
 		app := objects[rawText(row[2])]
 		var appRow []json.RawMessage
 		var applicable bool
-		return app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && rawText(appRow[1]) == attempt.State && (rawText(appRow[2]) == attempt.A || rawText(appRow[2]) == attempt.B) && json.Unmarshal(appRow[3], &applicable) == nil && applicable && rawText(appRow[4]) == "valid"
+		return app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && rawText(appRow[1]) == attempt.State && rawText(appRow[2]) == sleeper && json.Unmarshal(appRow[3], &applicable) == nil && applicable && rawText(appRow[4]) == "valid"
 	case "static-rw-sleep":
 		if len(row) != 2 || rawText(row[0]) != "static-witness/v1" || len(calls[0].outputs) != 1 || rawText(row[1]) != calls[0].outputs[0] || calls[0].operation != 24 {
 			return false
 		}
 		p := calls[0].payload
-		return len(p) == 8 && rawText(p[1]) == authority.world && rawText(p[3]) == attempt.State && sameDigestPair(rawText(p[4]), rawText(p[5]), attempt.A, attempt.B)
+		return len(p) == 8 && rawText(p[1]) == authority.world && rawText(p[3]) == attempt.State && rawText(p[4]) == taken && rawText(p[5]) == sleeper
 	case "nous-guarded-sleep", "no-guard-sleep":
 		if len(row) != 2 || rawText(row[0]) != "learned-witness/v1" {
 			return false
@@ -1139,7 +1215,7 @@ func certificateWitnessMatchesRange(authority retainedRunAuthority, attempt deco
 		barrier := objects[rawText(row[1])]
 		var barrierRow []json.RawMessage
 		var result bool
-		if barrier.kind != 43 || json.Unmarshal(barrier.canonical, &barrierRow) != nil || len(barrierRow) != 8 || rawText(barrierRow[2]) != attempt.State || !sameDigestPair(rawText(barrierRow[3]), rawText(barrierRow[4]), attempt.A, attempt.B) || json.Unmarshal(barrierRow[6], &result) != nil || !result || rawText(barrierRow[7]) != "valid" {
+		if barrier.kind != 43 || json.Unmarshal(barrier.canonical, &barrierRow) != nil || len(barrierRow) != 8 || rawText(barrierRow[2]) != attempt.State || rawText(barrierRow[3]) != taken || rawText(barrierRow[4]) != sleeper || json.Unmarshal(barrierRow[6], &result) != nil || !result || rawText(barrierRow[7]) != "valid" {
 			return false
 		}
 		var matches []string
@@ -1913,7 +1989,7 @@ func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedC
 		currentUse := slices.ContainsFunc(decision.uses, func(sequence int) bool {
 			return slices.ContainsFunc(nodeSequences[child], func(childSequence int) bool { return sequence < childSequence })
 		})
-		if !ok || decision.certificate != certificate || !currentUse || !propagationWitnessMatches(authority, decision, taken, sleeper, objects) {
+		if !ok || decision.certificate != certificate || !currentUse {
 			return fmt.Errorf("sleep propagation lacks its exact finalized certificate decision")
 		}
 	}
@@ -1929,42 +2005,6 @@ func edgeChildForPropagation(propagation string, edges []actionrelationsearch.Ev
 		}
 	}
 	return ""
-}
-
-func propagationWitnessMatches(authority retainedRunAuthority, decision retainedCertificateDecision, taken, sleeper string, objects map[string]retainedObjectValue) bool {
-	witness := objects[decision.witness]
-	var row []json.RawMessage
-	if json.Unmarshal(witness.canonical, &row) != nil {
-		return false
-	}
-	switch authority.policy {
-	case "dynamic-diamond-sleep":
-		if len(row) != 3 {
-			return false
-		}
-		app := objects[rawText(row[2])]
-		var appRow []json.RawMessage
-		var result bool
-		return app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && rawText(appRow[1]) == decision.state && rawText(appRow[2]) == sleeper && json.Unmarshal(appRow[3], &result) == nil && result && rawText(appRow[4]) == "valid"
-	case "static-rw-sleep":
-		if len(row) != 2 {
-			return false
-		}
-		footprint := objects[rawText(row[1])]
-		var footprintRow []json.RawMessage
-		var result bool
-		return footprint.kind == 48 && json.Unmarshal(footprint.canonical, &footprintRow) == nil && len(footprintRow) == 10 && rawText(footprintRow[3]) == decision.state && rawText(footprintRow[4]) == taken && rawText(footprintRow[5]) == sleeper && json.Unmarshal(footprintRow[8], &result) == nil && result && rawText(footprintRow[9]) == "valid"
-	case "nous-guarded-sleep", "no-guard-sleep":
-		if len(row) != 2 {
-			return false
-		}
-		barrier := objects[rawText(row[1])]
-		var barrierRow []json.RawMessage
-		var result bool
-		return barrier.kind == 43 && json.Unmarshal(barrier.canonical, &barrierRow) == nil && len(barrierRow) == 8 && rawText(barrierRow[1]) == authority.artifact && rawText(barrierRow[2]) == decision.state && sameDigestPair(rawText(barrierRow[3]), rawText(barrierRow[4]), taken, sleeper) && json.Unmarshal(barrierRow[6], &result) == nil && result && rawText(barrierRow[7]) == "valid"
-	default:
-		return false
-	}
 }
 
 // Budget exhaustion may leave an open DFS spine, but every retained closed
@@ -2185,7 +2225,7 @@ func verifyRetainedPartialSearchGraph(authority retainedRunAuthority, calls []re
 			}
 		}
 		lookupAfterFinalization := slices.ContainsFunc(nodeSequences[child], func(sequence int) bool { return sequence > decision.finalization })
-		if !ok || decision.certificate != rawText(row[6]) || child == "" || !lookupAfterFinalization || !propagationWitnessMatches(authority, decision, taken, sleeper, objects) {
+		if !ok || decision.certificate != rawText(row[6]) || child == "" || !lookupAfterFinalization {
 			return fmt.Errorf("partial propagation lacks exact certificate")
 		}
 		if rawText(row[4]) == "prior-sleep" {
