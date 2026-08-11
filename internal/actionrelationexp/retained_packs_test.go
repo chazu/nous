@@ -143,7 +143,7 @@ func TestRetainedPartialSearchGraphRequiresExactSemanticPrefix(t *testing.T) {
 	if err := verifyRetainedPartialSearchGraph(authority, calls, objects, structural, nil); err != nil {
 		t.Fatalf("valid partial DFS prefix: %v", err)
 	}
-	if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, structural); err != nil {
+	if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, structural, nil); err != nil {
 		t.Fatalf("valid partial structural set: %v", err)
 	}
 
@@ -166,8 +166,48 @@ func TestRetainedPartialSearchGraphRequiresExactSemanticPrefix(t *testing.T) {
 	extraDigest := shaHex(extraState)
 	extraObjects[extraDigest] = retainedObjectValue{kind: 1, canonical: extraState}
 	extraStructural[fmt.Sprintf("1:%s", extraDigest)] = true
-	if err := verifyRetainedStructuralCompleteness(authority, calls, extraObjects, nil, extraStructural); err == nil {
+	if err := verifyRetainedStructuralCompleteness(authority, calls, extraObjects, nil, extraStructural, nil); err == nil {
 		t.Fatal("accepted an attributed but unproduced utility object")
+	}
+}
+
+func TestRetainedStructuralCompletenessOwnsCurrentAndTailWitnessesExactly(t *testing.T) {
+	authority, calls, objects, structural := retainedPartialSearchFixture(t, 0)
+	authority.policy = "static-rw-sleep"
+	world := authority.world
+	state := authority.initialState
+	taken, sleeper := authority.initialOccurrences[0], authority.initialOccurrences[1]
+	footprint, _ := json.Marshal([]any{
+		"action-static-footprint-row/v1", world, testAuthorityDigest("current-witness-node"), state, taken, sleeper,
+		testAuthorityDigest("current-witness-a-facts"), testAuthorityDigest("current-witness-b-facts"), true, "valid",
+	})
+	if err := ValidateObject(48, footprint); err != nil {
+		t.Fatal(err)
+	}
+	footprintDigest := shaHex(footprint)
+	objects[footprintDigest] = retainedObjectValue{kind: 48, canonical: footprint}
+	witness, _ := json.Marshal([]any{"static-witness/v1", footprintDigest})
+	witnessDigest := shaHex(witness)
+	objects[witnessDigest] = retainedObjectValue{kind: 15, canonical: witness}
+	witnessKey := fmt.Sprintf("15:%s", witnessDigest)
+	structural[witnessKey] = true
+	calls = append(calls, retainedCall{operation: 24, outputs: []string{footprintDigest}})
+
+	completed := &retainedDFSWitnessAuthority{current: map[string]bool{witnessKey: true}, completed: map[string]bool{witnessKey: true}}
+	if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, structural, completed); err != nil {
+		t.Fatalf("completed cache-hit witness was not owned: %v", err)
+	}
+	tail := &retainedDFSWitnessAuthority{current: map[string]bool{witnessKey: true}, completed: map[string]bool{}}
+	if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, structural, tail); err != nil {
+		t.Fatalf("unique budget tail witness was not owned: %v", err)
+	}
+	completedRun := authority
+	completedRun.terminal = "completed"
+	if err := verifyRetainedStructuralCompleteness(completedRun, calls, objects, nil, structural, tail); err == nil {
+		t.Fatal("accepted an incomplete tail witness in a completed run")
+	}
+	if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, structural, &retainedDFSWitnessAuthority{current: map[string]bool{}, completed: map[string]bool{}}); err == nil {
+		t.Fatal("accepted a valid-looking witness absent from ordered DFS authority")
 	}
 }
 

@@ -22,18 +22,32 @@ type retainedDFSVisit struct {
 }
 
 type retainedDFSReplay struct {
-	runID      string
-	authority  retainedRunAuthority
-	calls      []retainedCall
-	objects    map[string]retainedObjectValue
-	structural map[string]bool
-	cursor     int
-	memo       map[string]retainedDFSVisit
-	consumed   map[string]bool
+	runID              string
+	authority          retainedRunAuthority
+	calls              []retainedCall
+	objects            map[string]retainedObjectValue
+	structural         map[string]bool
+	cursor             int
+	memo               map[string]retainedDFSVisit
+	consumed           map[string]bool
+	currentWitnesses   map[string]bool
+	completedWitnesses map[string]bool
+}
+
+type retainedDFSWitnessAuthority struct {
+	current   map[string]bool
+	completed map[string]bool
 }
 
 func verifyRetainedOrderedDFS(runID string, authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool) error {
-	r := &retainedDFSReplay{runID: runID, authority: authority, calls: calls, objects: objects, structural: structural, memo: map[string]retainedDFSVisit{}, consumed: map[string]bool{}}
+	return verifyRetainedOrderedDFSWithWitnesses(runID, authority, calls, objects, structural, nil)
+}
+
+func verifyRetainedOrderedDFSWithWitnesses(runID string, authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool, witnessAuthority *retainedDFSWitnessAuthority) error {
+	r := &retainedDFSReplay{
+		runID: runID, authority: authority, calls: calls, objects: objects, structural: structural,
+		memo: map[string]retainedDFSVisit{}, consumed: map[string]bool{}, currentWitnesses: map[string]bool{}, completedWitnesses: map[string]bool{},
+	}
 	exhausted := false
 	if authority.policy == "nous-guarded-sleep" || authority.policy == "no-guard-sleep" || authority.policy == "learned-no-use" {
 		boundary := ""
@@ -95,6 +109,10 @@ func verifyRetainedOrderedDFS(runID string, authority retainedRunAuthority, call
 		if slices.Contains([]uint16{5, 18, 19, 21, 22, 24, 25}, kind) && !r.consumed[key] {
 			return fmt.Errorf("ordered DFS carries unreachable structural object %s", key)
 		}
+	}
+	if witnessAuthority != nil {
+		witnessAuthority.current = r.currentWitnesses
+		witnessAuthority.completed = r.completedWitnesses
 	}
 	return nil
 }
@@ -294,10 +312,13 @@ func (r *retainedDFSReplay) visit(state string, remaining []string, proof map[st
 			if err := r.mark(witnessKind, shaHex(witness)); err != nil {
 				return retainedDFSVisit{}, fmt.Errorf("current eligibility witness: %w", err)
 			}
+			witnessKey := fmt.Sprintf("%d:%s", witnessKind, shaHex(witness))
+			r.currentWitnesses[witnessKey] = true
 			certified, certificate, err := r.consumeCertificate(state, taken, sleeper, witness, eligibilityStart)
 			if err != nil {
 				return retainedDFSVisit{}, err
 			}
+			r.completedWitnesses[witnessKey] = true
 			if !certified {
 				continue
 			}

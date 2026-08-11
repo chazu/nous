@@ -357,6 +357,7 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 			return err
 		}
 	}
+	var orderedWitnesses *retainedDFSWitnessAuthority
 	if authority.phase == 2 && structural != nil {
 		decisions, err := verifyRetainedCacheRanges(record.RunID, authority, calls, objects)
 		if err != nil {
@@ -367,12 +368,14 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 				return err
 			}
 		}
-		if err := verifyRetainedOrderedDFS(record.RunID, authority, calls, objects, structural); err != nil {
+		ordered := &retainedDFSWitnessAuthority{}
+		if err := verifyRetainedOrderedDFSWithWitnesses(record.RunID, authority, calls, objects, structural, ordered); err != nil {
 			return err
 		}
+		orderedWitnesses = ordered
 	}
 	if structural != nil {
-		if err := verifyRetainedStructuralCompleteness(authority, calls, objects, tables, structural); err != nil {
+		if err := verifyRetainedStructuralCompleteness(authority, calls, objects, tables, structural, orderedWitnesses); err != nil {
 			return err
 		}
 	}
@@ -432,7 +435,7 @@ func retainedRunEffectiveCap(authority retainedRunAuthority) int {
 	return cap
 }
 
-func verifyRetainedStructuralCompleteness(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, tables map[string][]retainedTableLeaf, structural map[string]bool) error {
+func verifyRetainedStructuralCompleteness(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, tables map[string][]retainedTableLeaf, structural map[string]bool, orderedWitnesses *retainedDFSWitnessAuthority) error {
 	actual := map[string]bool{}
 	byKind := map[uint16][]string{}
 	for digest, object := range objects {
@@ -582,6 +585,15 @@ func verifyRetainedStructuralCompleteness(authority retainedRunAuthority, calls 
 				return err
 			}
 		}
+		if orderedWitnesses == nil {
+			orderedWitnesses = &retainedDFSWitnessAuthority{current: map[string]bool{}, completed: map[string]bool{}}
+		}
+		for key := range orderedWitnesses.completed {
+			if !orderedWitnesses.current[key] || !actual[key] {
+				return fmt.Errorf("completed current eligibility witness lacks ordered structural authority")
+			}
+			expected[key] = true
+		}
 		unreferencedWitnesses := 0
 		for _, kind := range []uint16{14, 15, 16} {
 			for _, digest := range byKind[kind] {
@@ -590,7 +602,7 @@ func verifyRetainedStructuralCompleteness(authority retainedRunAuthority, calls 
 					continue
 				}
 				var row []json.RawMessage
-				if json.Unmarshal(objects[digest].canonical, &row) != nil || !retainedTailWitnessMatches(kind, row, outputDigests, barriers, objects) {
+				if !orderedWitnesses.current[key] || json.Unmarshal(objects[digest].canonical, &row) != nil || !retainedTailWitnessMatches(kind, row, outputDigests, barriers, objects) {
 					return fmt.Errorf("unbound utility witness kind %d", kind)
 				}
 				unreferencedWitnesses++
