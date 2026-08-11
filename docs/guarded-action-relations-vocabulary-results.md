@@ -107,5 +107,9 @@ env -i GOMAXPROCS=1 LC_ALL=C \
   -repo-root /Users/chazu/dev/go/nous
 ```
 
-These commands document the recorded attempt; the execute command now only
-recovers the terminal-invalid receipt and cannot create a second V1 attempt.
+These commands document the recorded attempt. The idempotent recovery check was
+performed at prerequisite commit `d7274357a3d6befc0bd7f8397aa8ecf5cb718cc2`
+before this result record changed the umbrella document and therefore the
+working source checkout. The persistent marker and committed invalid receipt
+still forbid a second V1 attempt; the command is not an instruction to rewrite
+the current checkout or recreate the recorded namespace.
