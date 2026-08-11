@@ -227,7 +227,11 @@ func TestIsolatedSandboxAllowsOnlyWorkerOutputAndDeniesPrimaryRead(t *testing.T)
 	if err := os.WriteFile(secret, []byte("primary"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	privateScorer := filepath.Join(inputs, "private-scorer.json")
+	scorerRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateScorer := filepath.Join(scorerRoot, "sealed-panel.json")
 	if err := os.WriteFile(privateScorer, []byte("sealed truth"), 0o400); err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +248,9 @@ func TestIsolatedSandboxAllowsOnlyWorkerOutputAndDeniesPrimaryRead(t *testing.T)
 	}
 	if err := run(`IFS= read -r value < "$1"`, privateScorer); err == nil {
 		t.Fatal("sandbox exposed private scorer input to policy worker")
+	}
+	if err := run(`test -e "$1"`, privateScorer); err == nil {
+		t.Fatal("sandbox exposed private scorer metadata to policy worker")
 	}
 	if err := run(`printf escaped > "$1"`, outside); err == nil {
 		t.Fatal("sandbox allowed a write outside the isolated namespace")

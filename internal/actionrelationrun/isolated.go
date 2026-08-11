@@ -44,6 +44,7 @@ func executeIsolatedPair(ctx context.Context, prerequisites panelPrerequisites, 
 		return isolatedPanelResult{}, err
 	}
 	defer removeIsolatedInputs(inputRoot)
+	defer removeIsolatedInputs(filepath.Dir(scorerPath))
 	primaryRoot, err := os.MkdirTemp(scratchParent, ".actionrelation-primary-")
 	if err != nil {
 		return isolatedPanelResult{}, err
@@ -107,8 +108,14 @@ func prepareIsolatedInputs(prerequisites panelPrerequisites, sealed actionrelati
 	if err != nil {
 		return "", "", "", "", err
 	}
+	scorerRoot, err := os.MkdirTemp(filepath.Join(prerequisites.Root, ".nous"), ".actionrelation-scorer-")
+	if err != nil {
+		removeIsolatedInputs(root)
+		return "", "", "", "", err
+	}
 	fail := func(err error) (string, string, string, string, error) {
 		removeIsolatedInputs(root)
+		removeIsolatedInputs(scorerRoot)
 		return "", "", "", "", err
 	}
 	binarySource := filepath.Join(prerequisites.Root, filepath.FromSlash(actionrelationexp.PanelBinaryPath))
@@ -144,7 +151,11 @@ func prepareIsolatedInputs(prerequisites panelPrerequisites, sealed actionrelati
 	if err := writeExclusiveSyncedMode(fixturePath, sealed.Public().Canonical(), 0o444); err != nil {
 		return fail(err)
 	}
-	scorerPath := filepath.Join(root, "private-scorer.json")
+	// The scorer lives in a distinct supervisor-only capability namespace. Its
+	// parent is neither passed to the worker nor covered by the sandbox's input
+	// metadata grant, so even its path and truth-dependent byte length are absent
+	// from policy execution.
+	scorerPath := filepath.Join(scorerRoot, "sealed-panel.json")
 	if err := writeExclusiveSyncedMode(scorerPath, sealed.Canonical(), 0o400); err != nil {
 		return fail(err)
 	}

@@ -289,6 +289,9 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 		return fmt.Errorf("charged work vector does not match score row")
 	}
 	if authority.phase == 2 {
+		if _, err := retainedUnanimousBarrierDigests(authority, calls, objects); err != nil {
+			return fmt.Errorf("learned eligibility schedule: %w", err)
+		}
 		certificates, err := retainedCertificateCounts(calls, objects)
 		if err != nil || certificates != authority.certificates {
 			return fmt.Errorf("certificate counts differ from retained cache evidence")
@@ -363,7 +366,8 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 			if err := verifyRetainedSearchGraph(authority, calls, objects, structural, decisions); err != nil {
 				return err
 			}
-		} else if err := verifyRetainedPartialSearchGraph(authority, calls, objects, structural, decisions); err != nil {
+		}
+		if err := verifyRetainedOrderedDFS(record.RunID, authority, calls, objects, structural); err != nil {
 			return err
 		}
 	}
@@ -606,14 +610,20 @@ func verifyRetainedStructuralCompleteness(authority retainedRunAuthority, calls 
 func retainedTailWitnessMatches(kind uint16, row []json.RawMessage, outputs, barriers map[string]bool, objects map[string]retainedObjectValue) bool {
 	switch kind {
 	case 14:
-		return len(row) == 2 && rawText(row[0]) == "learned-witness/v1" && barriers[rawText(row[1])]
+		barrier := objects[rawText(row[1])]
+		var barrierRow []json.RawMessage
+		var result bool
+		return len(row) == 2 && rawText(row[0]) == "learned-witness/v1" && barriers[rawText(row[1])] && barrier.kind == 43 && json.Unmarshal(barrier.canonical, &barrierRow) == nil && len(barrierRow) == 8 && json.Unmarshal(barrierRow[6], &result) == nil && result && rawText(barrierRow[7]) == "valid"
 	case 15:
 		footprint := objects[rawText(row[1])]
 		var footprintRow []json.RawMessage
 		var result bool
 		return len(row) == 2 && rawText(row[0]) == "static-witness/v1" && outputs[rawText(row[1])] && footprint.kind == 48 && json.Unmarshal(footprint.canonical, &footprintRow) == nil && len(footprintRow) == 10 && json.Unmarshal(footprintRow[8], &result) == nil && result
 	case 16:
-		return len(row) == 3 && rawText(row[0]) == "dynamic-witness/v1" && rawText(row[1]) == "all-pairs" && outputs[rawText(row[2])] && objects[rawText(row[2])].kind == 38
+		app := objects[rawText(row[2])]
+		var appRow []json.RawMessage
+		var result bool
+		return len(row) == 3 && rawText(row[0]) == "dynamic-witness/v1" && rawText(row[1]) == "all-pairs" && outputs[rawText(row[2])] && app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && json.Unmarshal(appRow[3], &result) == nil && result && rawText(appRow[4]) == "valid"
 	default:
 		return false
 	}
@@ -624,70 +634,43 @@ func retainedUnanimousBarrierDigests(authority retainedRunAuthority, calls []ret
 	if authority.policy != "nous-guarded-sleep" && authority.policy != "no-guard-sleep" {
 		return result, nil
 	}
-	type trace struct {
-		state, a, b string
-		matches     []string
-		all         bool
-	}
-	current := trace{all: true}
-	finish := func() error {
-		if current.state == "" {
-			return nil
-		}
-		if current.a == "" || current.b == "" || len(current.matches) == 0 {
-			return fmt.Errorf("learned structural barrier has incomplete charged trace")
-		}
-		root, err := actionrelationwire.RootDigest("unanimous-relation-matches", current.matches)
-		if err != nil {
-			return err
-		}
-		wire, _ := json.Marshal([]any{"action-unanimous-use/v1", authority.artifact, current.state, current.a, current.b, root, current.all, "valid"})
-		result[shaHex(wire)] = true
-		current = trace{all: true}
-		return nil
-	}
-	for _, call := range calls {
-		if call.operation == 21 {
-			if current.b != "" {
-				if err := finish(); err != nil {
-					return nil, err
-				}
+	for cursor := 0; cursor < len(calls); {
+		if calls[cursor].operation != 21 {
+			if calls[cursor].operation == 9 || calls[cursor].operation == 15 {
+				return nil, fmt.Errorf("learned eligibility operation is outside an exact artifact block")
 			}
-			if len(call.outputs) != 1 {
-				return nil, fmt.Errorf("learned applicability lacks structural trace row")
-			}
-			var row []json.RawMessage
-			if json.Unmarshal(objects[call.outputs[0]].canonical, &row) != nil || len(row) != 5 {
-				return nil, fmt.Errorf("learned applicability structural trace does not decode")
-			}
-			if current.state == "" {
-				current.state, current.a = rawText(row[1]), rawText(row[2])
-			} else if current.state != rawText(row[1]) {
-				return nil, fmt.Errorf("learned structural trace changes state")
-			} else {
-				current.b = rawText(row[2])
-			}
+			cursor++
+			continue
 		}
-		if call.operation == 9 {
-			if current.b == "" || len(call.outputs) != 1 {
-				return nil, fmt.Errorf("relation match is outside a learned structural trace")
+		if cursor+1 >= len(calls) || calls[cursor+1].operation != 21 {
+			return nil, fmt.Errorf("learned eligibility lacks its ordered applicability pair")
+		}
+		attempt := decodedCertificateAttempt{State: rawText(calls[cursor].payload[1]), A: rawText(calls[cursor].payload[2]), B: rawText(calls[cursor+1].payload[2])}
+		count, ok := retainedEligibilitySchedule(authority, attempt, calls[cursor:], objects, false)
+		if !ok || count <= 2 || cursor+count > len(calls) {
+			return nil, fmt.Errorf("learned eligibility differs from full artifact order")
+		}
+		matches := []string{}
+		all := true
+		for _, call := range calls[cursor : cursor+count] {
+			if call.operation != 9 {
+				continue
 			}
 			var row []json.RawMessage
 			var matched bool
-			if json.Unmarshal(objects[call.outputs[0]].canonical, &row) != nil || len(row) != 12 || rawText(row[2]) != current.state || json.Unmarshal(row[10], &matched) != nil {
-				return nil, fmt.Errorf("relation match differs from learned structural trace")
+			if len(call.outputs) != 1 || json.Unmarshal(objects[call.outputs[0]].canonical, &row) != nil || len(row) != 12 || json.Unmarshal(row[10], &matched) != nil {
+				return nil, fmt.Errorf("learned relation result does not decode")
 			}
-			aFacts, aErr := actionrelations.ParseLocalFacts(objects[rawText(row[3])].canonical)
-			bFacts, bErr := actionrelations.ParseLocalFacts(objects[rawText(row[4])].canonical)
-			if aErr != nil || bErr != nil || aFacts.StateDigest != current.state || bFacts.StateDigest != current.state || aFacts.OccurrenceDigest != current.a || bFacts.OccurrenceDigest != current.b {
-				return nil, fmt.Errorf("relation match facts differ from learned structural trace")
-			}
-			current.matches = append(current.matches, call.outputs[0])
-			current.all = current.all && matched
+			matches = append(matches, call.outputs[0])
+			all = all && matched
 		}
-	}
-	if err := finish(); err != nil {
-		return nil, err
+		root, err := actionrelationwire.RootDigest("unanimous-relation-matches", matches)
+		if err != nil {
+			return nil, err
+		}
+		wire, _ := json.Marshal([]any{"action-unanimous-use/v1", authority.artifact, attempt.State, attempt.A, attempt.B, root, all, "valid"})
+		result[shaHex(wire)] = true
+		cursor += count
 	}
 	return result, nil
 }
@@ -804,8 +787,153 @@ func retainedUtilityMatchCounts(calls []retainedCall, objects map[string]retaine
 
 type retainedCertificateDecision struct {
 	world, policy, state, minimum, maximum string
+	a, b                                   string
 	witness, certificate, cache            string
 	finalization                           int
+	uses                                   []int
+}
+
+func retainedOutputBoolStatus(call retainedCall, objects map[string]retainedObjectValue, resultIndex, statusIndex int) bool {
+	result, valid := retainedOutputResult(call, objects, resultIndex, statusIndex)
+	return valid && result
+}
+
+func retainedOutputResult(call retainedCall, objects map[string]retainedObjectValue, resultIndex, statusIndex int) (bool, bool) {
+	if len(call.outputs) != 1 {
+		return false, false
+	}
+	var row []json.RawMessage
+	var result bool
+	object := objects[call.outputs[0]]
+	valid := json.Unmarshal(object.canonical, &row) == nil && resultIndex < len(row) && statusIndex < len(row) &&
+		json.Unmarshal(row[resultIndex], &result) == nil && rawText(row[statusIndex]) == "valid"
+	return result, valid
+}
+
+func retainedPriorApplicable(calls []retainedCall, node, state, occurrence string, objects map[string]retainedObjectValue) bool {
+	for index := len(calls) - 1; index >= 0; index-- {
+		call := calls[index]
+		if call.operation == 23 && len(call.payload) == 6 && rawText(call.payload[3]) == node && rawText(call.payload[4]) == state && rawText(call.payload[5]) == occurrence && retainedOutputBoolStatus(call, objects, 3, 4) {
+			return true
+		}
+	}
+	return false
+}
+
+func retainedDynamicWitnessCurrent(calls []retainedCall, attempt decodedCertificateAttempt, witness []byte, objects map[string]retainedObjectValue) bool {
+	var witnessRow []json.RawMessage
+	if json.Unmarshal(witness, &witnessRow) != nil || len(witnessRow) != 3 {
+		return false
+	}
+	applicabilityDigest := rawText(witnessRow[2])
+	for _, call := range calls {
+		if call.operation != 23 || !slices.Equal(call.outputs, []string{applicabilityDigest}) || len(call.payload) != 6 || rawText(call.payload[4]) != attempt.State {
+			continue
+		}
+		node, occurrence := rawText(call.payload[3]), rawText(call.payload[5])
+		if occurrence != attempt.A && occurrence != attempt.B || !retainedOutputBoolStatus(call, objects, 3, 4) {
+			continue
+		}
+		other := attempt.A
+		if occurrence == other {
+			other = attempt.B
+		}
+		if retainedPriorApplicable(calls, node, attempt.State, other, objects) {
+			return true
+		}
+	}
+	return false
+}
+
+// retainedEligibilitySchedule verifies the complete charged policy-specific
+// eligibility prefix and returns the exact cache-lookup offset within calls.
+func retainedEligibilitySchedule(authority retainedRunAuthority, attempt decodedCertificateAttempt, calls []retainedCall, objects map[string]retainedObjectValue, requireEligible bool) (int, bool) {
+	if len(calls) == 0 {
+		return 0, false
+	}
+	switch authority.policy {
+	case "dynamic-diamond-sleep":
+		return 0, true
+	case "static-rw-sleep":
+		if len(calls) < 2 || calls[0].operation != 24 || calls[1].operation != 18 || len(calls[0].payload) != 8 || !retainedOutputBoolStatus(calls[0], objects, 8, 9) {
+			return 0, false
+		}
+		p := calls[0].payload
+		nodeDigest, state, taken, sleeper := rawText(p[2]), rawText(p[3]), rawText(p[4]), rawText(p[5])
+		if state != attempt.State || !sameDigestPair(taken, sleeper, attempt.A, attempt.B) {
+			return 0, false
+		}
+		nodeObject := objects[nodeDigest]
+		var nodeRow, remainingRow []json.RawMessage
+		var remaining []string
+		if nodeObject.kind != 20 || json.Unmarshal(nodeObject.canonical, &nodeRow) != nil || len(nodeRow) != 4 || rawText(nodeRow[1]) != state ||
+			json.Unmarshal(objects[rawText(nodeRow[2])].canonical, &remainingRow) != nil || len(remainingRow) != 2 || json.Unmarshal(remainingRow[1], &remaining) != nil ||
+			!slices.Contains(remaining, taken) || !slices.Contains(remaining, sleeper) {
+			return 0, false
+		}
+		return 1, true
+	case "nous-guarded-sleep", "no-guard-sleep":
+		artifactObject := objects[authority.artifact]
+		artifact, err := actionrelations.ParseArtifact(artifactObject.canonical)
+		if err != nil || artifactObject.kind != 10 || len(calls) < 3 || calls[0].operation != 21 || calls[1].operation != 21 {
+			return 0, false
+		}
+		for index, occurrence := range []string{attempt.A, attempt.B} {
+			call := calls[index]
+			if len(call.payload) != 3 || rawText(call.payload[1]) != attempt.State || rawText(call.payload[2]) != occurrence || !retainedOutputBoolStatus(call, objects, 3, 4) {
+				return 0, false
+			}
+		}
+		cursor := 2
+		for _, relationDigest := range artifact.RelationDigests {
+			relationObject := objects[relationDigest]
+			relation, err := actionrelations.ParseRelation(relationObject.canonical)
+			if err != nil || relationObject.kind != 9 {
+				return 0, false
+			}
+			literalStart := cursor
+			literalDigests := make([]string, len(relation.Guard.Literals))
+			for literalIndex, literal := range relation.Guard.Literals {
+				if cursor >= len(calls) || calls[cursor].operation != 15 || len(calls[cursor].payload) != 6 || rawText(calls[cursor].payload[1]) != attempt.State || rawText(calls[cursor].payload[4]) != literal.Atom {
+					return 0, false
+				}
+				var polarity bool
+				if json.Unmarshal(calls[cursor].payload[5], &polarity) != nil || polarity != literal.Polarity || len(calls[cursor].outputs) != 1 {
+					return 0, false
+				}
+				literalDigests[literalIndex] = calls[cursor].outputs[0]
+				cursor++
+			}
+			if cursor >= len(calls) {
+				return 0, false
+			}
+			matched, valid := retainedOutputResult(calls[cursor], objects, 10, 11)
+			if calls[cursor].operation != 9 || len(calls[cursor].payload) != 8 || rawText(calls[cursor].payload[1]) != relationDigest || rawText(calls[cursor].payload[2]) != attempt.State || !valid || requireEligible && !matched {
+				return 0, false
+			}
+			matchPayload := calls[cursor].payload
+			aFacts, aErr := actionrelations.ParseLocalFacts(objects[rawText(matchPayload[3])].canonical)
+			bFacts, bErr := actionrelations.ParseLocalFacts(objects[rawText(matchPayload[4])].canonical)
+			if aErr != nil || bErr != nil || aFacts.StateDigest != attempt.State || bFacts.StateDigest != attempt.State || aFacts.OccurrenceDigest != attempt.A || bFacts.OccurrenceDigest != attempt.B ||
+				rawText(matchPayload[5]) != calls[0].outputs[0] || rawText(matchPayload[6]) != calls[1].outputs[0] {
+				return 0, false
+			}
+			for index := range relation.Guard.Literals {
+				literalPayload := calls[literalStart+index].payload
+				if rawText(literalPayload[2]) != rawText(matchPayload[3]) || rawText(literalPayload[3]) != rawText(matchPayload[4]) {
+					return 0, false
+				}
+			}
+			var gotLiterals []string
+			if json.Unmarshal(calls[cursor].payload[7], &gotLiterals) != nil || !slices.Equal(gotLiterals, literalDigests) {
+				return 0, false
+			}
+			cursor++
+		}
+		return cursor, true
+	default:
+		return 0, false
+	}
 }
 
 func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue) (map[string]retainedCertificateDecision, error) {
@@ -830,6 +958,45 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 			if finalized[key] == "" || !slices.Equal(call.outputs, []string{finalized[key]}) {
 				return nil, fmt.Errorf("cache hit precedes or differs from finalization")
 			}
+			decision := decisions[key]
+			attempt := decodedCertificateAttempt{State: decision.state, A: decision.a, B: decision.b, Witness: decision.witness, Certificate: decision.certificate}
+			start := call.sequence
+			switch authority.policy {
+			case "static-rw-sleep":
+				start--
+			case "nous-guarded-sleep", "no-guard-sleep":
+				artifact, err := actionrelations.ParseArtifact(objects[authority.artifact].canonical)
+				if err != nil {
+					return nil, fmt.Errorf("cache-hit artifact does not resolve")
+				}
+				count := 2 + len(artifact.RelationDigests)
+				for _, digest := range artifact.RelationDigests {
+					relation, err := actionrelations.ParseRelation(objects[digest].canonical)
+					if err != nil {
+						return nil, fmt.Errorf("cache-hit relation does not resolve")
+					}
+					count += len(relation.Guard.Literals)
+				}
+				start -= count
+			}
+			if start < 0 {
+				return nil, fmt.Errorf("cache hit lacks its current eligibility prefix")
+			}
+			offset, scheduleOK := retainedEligibilitySchedule(authority, attempt, calls[start:call.sequence+1], objects, true)
+			if !scheduleOK || start+offset != call.sequence || !certificateWitnessMatchesRange(authority, attempt, calls[start:call.sequence+1], objects[decision.witness].canonical, objects) {
+				return nil, fmt.Errorf("cache hit lacks its exact current eligibility authority")
+			}
+			if authority.policy == "static-rw-sleep" {
+				footprint := calls[start].payload
+				if !retainedPriorApplicable(calls[:start], rawText(footprint[2]), rawText(footprint[3]), rawText(footprint[4]), objects) || !retainedPriorApplicable(calls[:start], rawText(footprint[2]), rawText(footprint[3]), rawText(footprint[5]), objects) {
+					return nil, fmt.Errorf("cache-hit static eligibility lacks enabled pair")
+				}
+			}
+			if authority.policy == "dynamic-diamond-sleep" && !retainedDynamicWitnessCurrent(calls[:call.sequence], attempt, objects[decision.witness].canonical, objects) {
+				return nil, fmt.Errorf("cache-hit dynamic eligibility lacks its current enabled pair")
+			}
+			decision.uses = append(decision.uses, call.sequence)
+			decisions[key] = decision
 		}
 		if call.operation != 25 {
 			continue
@@ -845,32 +1012,45 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 		if !rootOK || rootObject.kind != 46 {
 			return nil, fmt.Errorf("certificate range root does not resolve")
 		}
-		root, err := decodeOperationRoot(mustObjectRow(rootObject.canonical))
-		firstOperation := uint8(21)
-		if authority.policy == "static-rw-sleep" {
-			firstOperation = 24
-		} else if authority.policy == "dynamic-diamond-sleep" {
-			firstOperation = 18
+		attemptObject, attemptOK := objects[attemptDigest]
+		if !attemptOK || attemptObject.kind != 44 {
+			return nil, fmt.Errorf("certificate attempt does not resolve")
 		}
-		if err != nil || root.Variant != "range" || root.RunID != runID || root.Phase != 2 || root.Count < 1 || int(root.Start)+root.Count != call.sequence || int(root.Start) > miss.sequence || miss.sequence >= call.sequence || calls[root.Start].operation != firstOperation {
+		attempt, attemptErr := decodeCertificateAttempt(mustObjectRow(attemptObject.canonical))
+		if attemptErr != nil || !certificateAttemptMatchesFinalization(attempt, p, rootDigest) {
+			return nil, fmt.Errorf("certificate attempt differs from finalization")
+		}
+		root, err := decodeOperationRoot(mustObjectRow(rootObject.canonical))
+		if err != nil || root.Variant != "range" || root.RunID != runID || root.Phase != 2 || root.Count < 5 || int(root.Start)+root.Count != call.sequence || int(root.Start) > miss.sequence || miss.sequence >= call.sequence {
 			return nil, fmt.Errorf("certificate operation range has wrong bounds or eligibility start")
+		}
+		rangeCalls := calls[int(root.Start):call.sequence]
+		missOffset, scheduleOK := retainedEligibilitySchedule(authority, attempt, rangeCalls, objects, true)
+		if !scheduleOK || missOffset >= len(rangeCalls) || rangeCalls[missOffset].callID != missID {
+			return nil, fmt.Errorf("certificate range differs from exact policy eligibility schedule")
+		}
+		if authority.policy == "static-rw-sleep" {
+			footprint := rangeCalls[0].payload
+			node, state, taken, sleeper := rawText(footprint[2]), rawText(footprint[3]), rawText(footprint[4]), rawText(footprint[5])
+			if !retainedPriorApplicable(calls[:root.Start], node, state, taken, objects) || !retainedPriorApplicable(calls[:root.Start], node, state, sleeper, objects) {
+				return nil, fmt.Errorf("static eligibility lacks both exact prior enabledness rows")
+			}
 		}
 		callIDs := make([]string, root.Count)
 		operationRows := []string{}
-		missCount := 0
 		for index := 0; index < root.Count; index++ {
-			item := calls[int(root.Start)+index]
+			item := rangeCalls[index]
 			callIDs[index] = item.callID
-			if item.operation == 18 {
-				missCount++
-				if item.callID != missID || item.status != 1 || len(item.outputs) != 0 {
+			if index == missOffset {
+				if item.operation != 18 || item.callID != missID || item.status != 1 || len(item.outputs) != 0 {
 					return nil, fmt.Errorf("certificate range contains wrong cache miss")
 				}
+				continue
 			}
-			if item.operation == 25 {
-				return nil, fmt.Errorf("certificate range includes finalization")
-			}
-			if item.operation == 12 || item.operation == 13 || item.operation == 14 {
+			if index > missOffset {
+				if item.operation != 12 && item.operation != 13 && item.operation != 14 {
+					return nil, fmt.Errorf("certificate range contains an unrelated proof operation")
+				}
 				if len(item.outputs) == 0 {
 					return nil, fmt.Errorf("certificate proof operation lacks row")
 				}
@@ -878,16 +1058,8 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 			}
 		}
 		wantRoot, err := BuildOperationRange(runID, 2, root.Start, callIDs)
-		if err != nil || wantRoot.Digest != rootDigest || missCount != 1 {
+		if err != nil || wantRoot.Digest != rootDigest {
 			return nil, fmt.Errorf("certificate operation root does not reconstruct")
-		}
-		attemptObject, attemptOK := objects[attemptDigest]
-		if !attemptOK || attemptObject.kind != 44 {
-			return nil, fmt.Errorf("certificate attempt does not resolve")
-		}
-		attempt, err := decodeCertificateAttempt(mustObjectRow(attemptObject.canonical))
-		if err != nil || !certificateAttemptMatchesFinalization(attempt, p, rootDigest) {
-			return nil, fmt.Errorf("certificate attempt differs from finalization")
 		}
 		witnessObject, witnessOK := objects[attempt.Witness]
 		wantWitnessKind := uint16(14)
@@ -896,8 +1068,11 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 		} else if authority.policy == "dynamic-diamond-sleep" {
 			wantWitnessKind = 16
 		}
-		if !witnessOK || witnessObject.kind != wantWitnessKind || !certificateWitnessMatchesRange(authority, attempt, calls[root.Start:call.sequence], witnessObject.canonical, objects) {
+		if !witnessOK || witnessObject.kind != wantWitnessKind || !certificateWitnessMatchesRange(authority, attempt, rangeCalls, witnessObject.canonical, objects) {
 			return nil, fmt.Errorf("certificate attempt lacks its exact policy witness")
+		}
+		if authority.policy == "dynamic-diamond-sleep" && !retainedDynamicWitnessCurrent(calls[:root.Start], attempt, witnessObject.canonical, objects) {
+			return nil, fmt.Errorf("dynamic certificate lacks its current enabled pair")
 		}
 		stateObject, stateOK := objects[attempt.State]
 		aObject, aOK := objects[attempt.A]
@@ -920,10 +1095,10 @@ func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, cal
 			return nil, fmt.Errorf("certificate cache finalization changed world or policy")
 		}
 		finalized[key] = call.outputs[0]
-		decisions[key] = retainedCertificateDecision{world: rawText(p[1]), policy: rawText(p[2]), state: rawText(p[3]), minimum: rawText(p[4]), maximum: rawText(p[5]), witness: attempt.Witness, certificate: attempt.Certificate, cache: call.outputs[0], finalization: call.sequence}
+		decisions[key] = retainedCertificateDecision{world: rawText(p[1]), policy: rawText(p[2]), state: rawText(p[3]), minimum: rawText(p[4]), maximum: rawText(p[5]), a: attempt.A, b: attempt.B, witness: attempt.Witness, certificate: attempt.Certificate, cache: call.outputs[0], finalization: call.sequence, uses: []int{call.sequence}}
 		delete(misses, missID)
 	}
-	if len(misses) != 0 {
+	if len(misses) != 0 && (authority.terminal != "budget-exhausted" || len(misses) != 1) {
 		return nil, fmt.Errorf("run retains unfinalized cache miss")
 	}
 	return decisions, nil
@@ -1194,6 +1369,19 @@ func verifyRetainedCallSemantics(authority retainedRunAuthority, call retainedCa
 		if d(1) != authority.world || d(2) == "" || authority.policy != "static-rw-sleep" {
 			return fmt.Errorf("static footprint crossed run context")
 		}
+		nodeBytes, err := canonical(d(2), 20)
+		if err != nil {
+			return err
+		}
+		var nodeRow, remainingRow []json.RawMessage
+		var remaining []string
+		if json.Unmarshal(nodeBytes, &nodeRow) != nil || len(nodeRow) != 4 || rawText(nodeRow[1]) != d(3) {
+			return fmt.Errorf("static footprint node/state mismatch")
+		}
+		remainingBytes, err := canonical(rawText(nodeRow[2]), 5)
+		if err != nil || json.Unmarshal(remainingBytes, &remainingRow) != nil || len(remainingRow) != 2 || json.Unmarshal(remainingRow[1], &remaining) != nil || !slices.Contains(remaining, d(4)) || !slices.Contains(remaining, d(5)) {
+			return fmt.Errorf("static footprint pair is absent from current node")
+		}
 		aFacts, err := exactFacts(d(3), d(4), d(6), objects)
 		if err != nil {
 			return err
@@ -1459,6 +1647,35 @@ func verifyRetainedAcquisitionCall(scope string, curriculum int, call retainedCa
 	return nil
 }
 
+func verifyRetainedInitialSearchNode(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue) (string, error) {
+	if !digestText(authority.initialState) || len(authority.initialOccurrences) == 0 || !uniqueDigestList(authority.initialOccurrences) || !slices.IsSorted(authority.initialOccurrences) {
+		return "", fmt.Errorf("fixture initial search authority is incomplete")
+	}
+	remainingCanonical, _ := json.Marshal([]any{"remaining-occurrences/v1", authority.initialOccurrences})
+	proofCanonical, _ := json.Marshal([]any{"sleep-proof-map/v1", []any{}})
+	remainingDigest, proofDigest := shaHex(remainingCanonical), shaHex(proofCanonical)
+	nodeCanonical, _ := json.Marshal([]any{"sleep-search-node/v1", authority.initialState, remainingDigest, proofDigest})
+	nodeDigest := shaHex(nodeCanonical)
+	remainingObject, remainingOK := objects[remainingDigest]
+	proofObject, proofOK := objects[proofDigest]
+	nodeObject, nodeOK := objects[nodeDigest]
+	if !remainingOK || remainingObject.kind != 5 || !bytes.Equal(remainingObject.canonical, remainingCanonical) ||
+		!proofOK || proofObject.kind != 19 || !bytes.Equal(proofObject.canonical, proofCanonical) ||
+		!nodeOK || nodeObject.kind != 20 || !bytes.Equal(nodeObject.canonical, nodeCanonical) {
+		return "", fmt.Errorf("fixture initial node preimages do not resolve exactly")
+	}
+	for _, call := range calls {
+		if call.operation != 16 {
+			continue
+		}
+		if len(call.payload) != 4 || rawText(call.payload[1]) != authority.initialState || rawText(call.payload[2]) != remainingDigest || rawText(call.payload[3]) != proofDigest || !slices.Equal(call.outputs, []string{nodeDigest}) {
+			return "", fmt.Errorf("first search-node lookup is not the fixture root")
+		}
+		return nodeDigest, nil
+	}
+	return "", fmt.Errorf("utility transcript lacks its fixture-root lookup")
+}
+
 func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool, decisions map[string]retainedCertificateDecision) error {
 	toEvidence := func(digest string, kind uint16) (actionrelationsearch.EvidenceObject, error) {
 		object, ok := objects[digest]
@@ -1493,12 +1710,12 @@ func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedC
 			}
 		}
 	}
-	rootNode := ""
+	rootNode, err := verifyRetainedInitialSearchNode(authority, calls, objects)
+	if err != nil {
+		return err
+	}
 	for _, call := range calls {
 		if call.operation == 16 {
-			if rootNode == "" {
-				rootNode = call.outputs[0]
-			}
 			if err := add(20, call.outputs[0]); err != nil {
 				return err
 			}
@@ -1693,8 +1910,10 @@ func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedC
 		key := authority.world + authority.policy + state + keyParts[0] + keyParts[1]
 		decision, ok := decisions[key]
 		child := edgeChildForPropagation(object.Digest, collections[21])
-		lookupAfterFinalization := slices.ContainsFunc(nodeSequences[child], func(sequence int) bool { return sequence > decision.finalization })
-		if !ok || decision.certificate != certificate || !lookupAfterFinalization || !propagationWitnessMatches(authority, decision, taken, sleeper, objects) {
+		currentUse := slices.ContainsFunc(decision.uses, func(sequence int) bool {
+			return slices.ContainsFunc(nodeSequences[child], func(childSequence int) bool { return sequence < childSequence })
+		})
+		if !ok || decision.certificate != certificate || !currentUse || !propagationWitnessMatches(authority, decision, taken, sleeper, objects) {
 			return fmt.Errorf("sleep propagation lacks its exact finalized certificate decision")
 		}
 	}
@@ -1725,21 +1944,24 @@ func propagationWitnessMatches(authority retainedRunAuthority, decision retained
 		}
 		app := objects[rawText(row[2])]
 		var appRow []json.RawMessage
-		return app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && rawText(appRow[2]) == sleeper
+		var result bool
+		return app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && rawText(appRow[1]) == decision.state && rawText(appRow[2]) == sleeper && json.Unmarshal(appRow[3], &result) == nil && result && rawText(appRow[4]) == "valid"
 	case "static-rw-sleep":
 		if len(row) != 2 {
 			return false
 		}
 		footprint := objects[rawText(row[1])]
 		var footprintRow []json.RawMessage
-		return footprint.kind == 48 && json.Unmarshal(footprint.canonical, &footprintRow) == nil && len(footprintRow) == 10 && rawText(footprintRow[4]) == taken && rawText(footprintRow[5]) == sleeper
+		var result bool
+		return footprint.kind == 48 && json.Unmarshal(footprint.canonical, &footprintRow) == nil && len(footprintRow) == 10 && rawText(footprintRow[3]) == decision.state && rawText(footprintRow[4]) == taken && rawText(footprintRow[5]) == sleeper && json.Unmarshal(footprintRow[8], &result) == nil && result && rawText(footprintRow[9]) == "valid"
 	case "nous-guarded-sleep", "no-guard-sleep":
 		if len(row) != 2 {
 			return false
 		}
 		barrier := objects[rawText(row[1])]
 		var barrierRow []json.RawMessage
-		return barrier.kind == 43 && json.Unmarshal(barrier.canonical, &barrierRow) == nil && len(barrierRow) == 8 && sameDigestPair(rawText(barrierRow[3]), rawText(barrierRow[4]), taken, sleeper)
+		var result bool
+		return barrier.kind == 43 && json.Unmarshal(barrier.canonical, &barrierRow) == nil && len(barrierRow) == 8 && rawText(barrierRow[1]) == authority.artifact && rawText(barrierRow[2]) == decision.state && sameDigestPair(rawText(barrierRow[3]), rawText(barrierRow[4]), taken, sleeper) && json.Unmarshal(barrierRow[6], &result) == nil && result && rawText(barrierRow[7]) == "valid"
 	default:
 		return false
 	}
@@ -1750,6 +1972,10 @@ func propagationWitnessMatches(authority retainedRunAuthority, decision retained
 func verifyRetainedPartialSearchGraph(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool, decisions map[string]retainedCertificateDecision) error {
 	if authority.historyCount != 0 || authority.terminalSet != zeroObjectDigest {
 		return fmt.Errorf("budget-exhausted search carries a completed result summary")
+	}
+	rootNode, err := verifyRetainedInitialSearchNode(authority, calls, objects)
+	if err != nil {
+		return err
 	}
 	type nodeValue struct{ state, remaining, proof string }
 	type edgeValue struct {
@@ -1864,6 +2090,9 @@ func verifyRetainedPartialSearchGraph(authority retainedRunAuthority, calls []re
 		if !seenNodes[digest] || objects[node.state].kind != 1 || remaining[node.remaining] == nil || proofs[node.proof] == nil {
 			return fmt.Errorf("partial node does not close its charged lookup/state/remaining/proof")
 		}
+	}
+	if nodes[rootNode].state == "" {
+		return fmt.Errorf("partial search omits its exact fixture root")
 	}
 	completionByParentTaken := map[string]string{}
 	setForSubtree := map[string]string{}

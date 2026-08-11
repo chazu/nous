@@ -52,8 +52,14 @@ func CertifyCached(session *Session, cache *CertificateCache, worldDigest, polic
 	lookupTask, _ := json.Marshal([]any{"actionrelation-cache-lookup-task/v1", session.RunID, worldDigest, policy, stateDigest, minDigest, maxDigest})
 	lookupHash := sha256.Sum256(lookupTask)
 	reservation, err := session.Reserve(hex.EncodeToString(lookupHash[:]), []uint8{18})
-	if err != nil || reservation.Status != "reserved" {
+	if err != nil {
 		return CacheDecision{}, fmt.Errorf("reserve certificate cache lookup: %w", err)
+	}
+	if reservation.Status == "rejected-cap" {
+		return CacheDecision{}, &budgetExhaustedError{Reservation: reservation}
+	}
+	if reservation.Status != "reserved" {
+		return CacheDecision{}, fmt.Errorf("reserve certificate cache lookup returned %s", reservation.Status)
 	}
 	inputs := [][]byte{[]byte(worldDigest), []byte(policy), []byte(stateDigest), []byte(minDigest), []byte(maxDigest)}
 	if rowName := cache.rows[key]; rowName != "" {
@@ -88,8 +94,14 @@ func CertifyCached(session *Session, cache *CertificateCache, worldDigest, polic
 	finalizeTask, _ := json.Marshal([]any{"actionrelation-cache-finalize-task/v1", session.RunID, worldDigest, policy, stateDigest, minDigest, maxDigest, missCallID, attempt.GetString("objectDigest"), certificate.OperationRoot.Digest})
 	finalizeHash := sha256.Sum256(finalizeTask)
 	reservation, err = session.Reserve(hex.EncodeToString(finalizeHash[:]), []uint8{25})
-	if err != nil || reservation.Status != "reserved" {
+	if err != nil {
 		return CacheDecision{}, fmt.Errorf("reserve certificate cache finalization: %w", err)
+	}
+	if reservation.Status == "rejected-cap" {
+		return CacheDecision{}, &budgetExhaustedError{Reservation: reservation}
+	}
+	if reservation.Status != "reserved" {
+		return CacheDecision{}, fmt.Errorf("reserve certificate cache finalization returned %s", reservation.Status)
 	}
 	requestName := "AR.CacheRequest." + token
 	request := unit.New(requestName)

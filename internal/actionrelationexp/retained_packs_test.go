@@ -154,6 +154,11 @@ func TestRetainedPartialSearchGraphRequiresExactSemanticPrefix(t *testing.T) {
 	if err := verifyRetainedPartialSearchGraph(authority, calls[:len(calls)-1], objects, structural, nil); err == nil {
 		t.Fatal("accepted a retained terminal without its charged construction call")
 	}
+	wrongRoot := authority
+	wrongRoot.initialState = testAuthorityDigest("wrong-fixture-state")
+	if err := verifyRetainedPartialSearchGraph(wrongRoot, calls, objects, structural, nil); err == nil {
+		t.Fatal("accepted a partial DFS rooted outside the fixture initial state")
+	}
 	extraObjects := cloneRetainedObjects(objects)
 	extraStructural := mapsCloneBool(structural)
 	extraState, _ := (actionrelations.State{Cells: []actionrelations.Cell{{Name: "extra", Value: 0}}}).CanonicalJSON()
@@ -162,6 +167,54 @@ func TestRetainedPartialSearchGraphRequiresExactSemanticPrefix(t *testing.T) {
 	extraStructural[fmt.Sprintf("1:%s", extraDigest)] = true
 	if err := verifyRetainedStructuralCompleteness(authority, calls, extraObjects, nil, extraStructural); err == nil {
 		t.Fatal("accepted an attributed but unproduced utility object")
+	}
+}
+
+func TestRetainedRunObjectsPreservePhysicalScope(t *testing.T) {
+	stateCanonical, _ := (actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: 0}}}).CanonicalJSON()
+	stateDigest := shaHex(stateCanonical)
+	truthCanonical, _ := json.Marshal([]any{"action-scorer-truth-shard/v1", testAuthorityDigest("world")})
+	truthDigest := shaHex(truthCanonical)
+	reservationCanonical, _ := json.Marshal([]any{"compound-work-reservation/v1", testAuthorityDigest("reservation")})
+	reservationDigest := shaHex(reservationCanonical)
+	foreignDigest := testAuthorityDigest("foreign")
+	scopes := map[string]map[string]retainedObjectValue{
+		"authority": {
+			stateDigest: {kind: 1, canonical: stateCanonical},
+			truthDigest: {kind: 29, canonical: truthCanonical},
+		},
+		"utility": {
+			reservationDigest: {kind: 27, canonical: reservationCanonical},
+		},
+		"acquisition-nous-preboundary": {
+			foreignDigest: {kind: 1, canonical: stateCanonical},
+		},
+	}
+	objects, _, err := retainedObjectsForRun(retainedRunAuthority{phase: 2, policy: "complete"}, scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if objects[stateDigest].kind != 1 || objects[reservationDigest].kind != 27 {
+		t.Fatal("run lost an authorized fixture or utility object")
+	}
+	if _, ok := objects[truthDigest]; ok {
+		t.Fatal("utility replay gained scorer-truth authority")
+	}
+	if _, ok := objects[foreignDigest]; ok {
+		t.Fatal("utility replay crossed into an unrelated acquisition scope")
+	}
+	otherStateCanonical, _ := (actionrelations.State{Cells: []actionrelations.Cell{{Name: "other", Value: 1}}}).CanonicalJSON()
+	otherStateDigest := shaHex(otherStateCanonical)
+	curricula := []map[string]map[string]retainedObjectValue{
+		scopes,
+		{"authority": {otherStateDigest: {kind: 1, canonical: otherStateCanonical}}},
+	}
+	objects, _, err = retainedObjectsForRun(retainedRunAuthority{curriculum: 0, phase: 2, policy: "complete"}, curricula[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := objects[otherStateDigest]; ok {
+		t.Fatal("utility replay borrowed an authority object from another curriculum")
 	}
 }
 
@@ -350,6 +403,7 @@ func retainedPartialSearchFixture(t *testing.T, selected int) (retainedRunAuthor
 
 	stateDigest, _ := state.Digest()
 	childStateDigest, _ := childState.Digest()
+	terminalStateDigest, _ := terminalState.Digest()
 	semanticDigests := make([]string, len(occurrences))
 	for index, occurrence := range occurrences {
 		semanticDigests[index], _ = occurrence.Digest()
@@ -361,12 +415,12 @@ func retainedPartialSearchFixture(t *testing.T, selected int) (retainedRunAuthor
 		return result
 	}
 	calls := []retainedCall{
-		{sequence: 0, operation: 16, outputs: []string{rootNode.Digest}},
+		{sequence: 0, operation: 16, payload: payload("search-node-lookup", stateDigest, rootRemaining.Digest, emptyProof.Digest), outputs: []string{rootNode.Digest}},
 		{sequence: 1, operation: 23, payload: payload("search-applicable", testAuthorityDigest("world"), "complete", rootNode.Digest, stateDigest, semanticDigests[0])},
 		{sequence: 2, operation: 23, payload: payload("search-applicable", testAuthorityDigest("world"), "complete", rootNode.Digest, stateDigest, semanticDigests[1])},
-		{sequence: 3, operation: 16, outputs: []string{childNode.Digest}},
+		{sequence: 3, operation: 16, payload: payload("search-node-lookup", childStateDigest, childRemaining.Digest, emptyProof.Digest), outputs: []string{childNode.Digest}},
 		{sequence: 4, operation: 23, payload: payload("search-applicable", testAuthorityDigest("world"), "complete", childNode.Digest, childStateDigest, otherDigest)},
-		{sequence: 5, operation: 16, outputs: []string{terminalNode.Digest}},
+		{sequence: 5, operation: 16, payload: payload("search-node-lookup", terminalStateDigest, emptyRemaining.Digest, emptyProof.Digest), outputs: []string{terminalNode.Digest}},
 		{sequence: 6, operation: 19, payload: payload("terminal-construct"), outputs: []string{terminal.Digest}},
 	}
 	callIDs := make([]string, len(calls))
@@ -379,7 +433,9 @@ func retainedPartialSearchFixture(t *testing.T, selected int) (retainedRunAuthor
 		t.Fatal(err)
 	}
 	addBytes(46, runRoot.Canonical)
-	authority := retainedRunAuthority{terminal: "budget-exhausted", terminalSet: zeroObjectDigest, policy: "complete", world: testAuthorityDigest("world"), operationRoot: runRoot.Digest}
+	initialOccurrences := slices.Clone(semanticDigests)
+	slices.Sort(initialOccurrences)
+	authority := retainedRunAuthority{terminal: "budget-exhausted", terminalSet: zeroObjectDigest, policy: "complete", world: testAuthorityDigest("world"), operationRoot: runRoot.Digest, initialState: stateDigest, initialOccurrences: initialOccurrences}
 	return authority, calls, objects, structural
 }
 

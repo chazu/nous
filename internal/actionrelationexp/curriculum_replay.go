@@ -28,6 +28,7 @@ func VerifyCurriculumReplay(value CurriculumReplay) error {
 		return fmt.Errorf("invalid curriculum replay authority")
 	}
 	objects := map[string]retainedObjectValue{}
+	scopes := map[string]map[string]retainedObjectValue{}
 	for _, bundle := range value.Objects {
 		if bundle.Scope.Curriculum != value.Curriculum || VerifyObjectBundle(bundle) != nil {
 			return fmt.Errorf("invalid curriculum replay object bundle")
@@ -56,6 +57,10 @@ func VerifyCurriculumReplay(value CurriculumReplay) error {
 				}
 				prior.classes[bundle.Scope.Class] = true
 				objects[digest] = prior
+				if scopes[bundle.Scope.Class] == nil {
+					scopes[bundle.Scope.Class] = map[string]retainedObjectValue{}
+				}
+				scopes[bundle.Scope.Class][digest] = retainedObjectValue{kind: kind, canonical: payloads[digest]}
 			}
 		}
 	}
@@ -119,7 +124,11 @@ func VerifyCurriculumReplay(value CurriculumReplay) error {
 		if err != nil {
 			return err
 		}
-		if err := verifyRetainedRunReplay(record, expected, calls, objects, tables, structural[record.RunID]); err != nil {
+		runObjects, _, err := retainedObjectsForRun(expected, scopes)
+		if err != nil {
+			return fmt.Errorf("curriculum replay run %s scope: %w", record.RunID, err)
+		}
+		if err := verifyRetainedRunReplay(record, expected, calls, runObjects, tables, structural[record.RunID]); err != nil {
 			return fmt.Errorf("curriculum replay run %s policy=%s world=%d: %w", record.RunID, expected.policy, expected.worldOrdinal, err)
 		}
 		seen[record.RunID] = true

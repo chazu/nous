@@ -30,27 +30,29 @@ type retainedPhysicalObject struct {
 }
 
 type retainedRunAuthority struct {
-	curriculum       int
-	operationRoot    string
-	phase            uint8
-	workTerminal     string
-	work             [12]int
-	initialWork      [12]int
-	terminal         string
-	world            string
-	policy           string
-	terminalSet      string
-	historyCount     int
-	matches          [8]int
-	certificates     [4]int
-	sleepCount       int
-	truthPairs       map[string]string
-	truthTerminals   []string
-	trainingMatches  [5]int
-	worldOrdinal     int
-	acquisitionTotal int
-	remaining        int
-	artifact         string
+	curriculum         int
+	operationRoot      string
+	phase              uint8
+	workTerminal       string
+	work               [12]int
+	initialWork        [12]int
+	terminal           string
+	world              string
+	policy             string
+	terminalSet        string
+	historyCount       int
+	matches            [8]int
+	certificates       [4]int
+	sleepCount         int
+	truthPairs         map[string]string
+	truthTerminals     []string
+	trainingMatches    [5]int
+	worldOrdinal       int
+	acquisitionTotal   int
+	remaining          int
+	artifact           string
+	initialState       string
+	initialOccurrences []string
 }
 
 type retainedCurriculumAuthority struct {
@@ -129,6 +131,7 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	retainedObjects := map[string]retainedObjectValue{}
 	var physicalObjects []retainedPhysicalObject
 	retainedByCurriculum := make([]map[string]retainedObjectValue, curricula)
+	retainedByScope := make([]map[string]map[string]retainedObjectValue, curricula)
 	curriculumAuthorities := make([]retainedCurriculumAuthority, curricula)
 	trainingCores := make([]map[string]map[string]bool, curricula)
 	viewEvidence := make([]map[string]map[string]bool, curricula)
@@ -267,16 +270,24 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				if prior, ok := retainedObjects[digest]; ok && (prior.kind != kind || !bytes.Equal(prior.canonical, objectPayloads[digest])) {
 					return nil, fmt.Errorf("cross-kind retained object collision")
 				}
-				object := retainedObjects[digest]
-				if object.classes == nil {
-					object = retainedObjectValue{kind: kind, canonical: objectPayloads[digest], classes: map[string]bool{}}
-				}
-				object.classes[key.class] = true
+				object := retainedObjectValue{kind: kind, canonical: objectPayloads[digest]}
 				retainedObjects[digest] = object
 				if retainedByCurriculum[key.curriculum] == nil {
 					retainedByCurriculum[key.curriculum] = map[string]retainedObjectValue{}
 				}
-				retainedByCurriculum[key.curriculum][digest] = object
+				local := retainedByCurriculum[key.curriculum][digest]
+				if local.classes == nil {
+					local = retainedObjectValue{kind: kind, canonical: objectPayloads[digest], classes: map[string]bool{}}
+				}
+				local.classes[key.class] = true
+				retainedByCurriculum[key.curriculum][digest] = local
+				if retainedByScope[key.curriculum] == nil {
+					retainedByScope[key.curriculum] = map[string]map[string]retainedObjectValue{}
+				}
+				if retainedByScope[key.curriculum][key.class] == nil {
+					retainedByScope[key.curriculum][key.class] = map[string]retainedObjectValue{}
+				}
+				retainedByScope[key.curriculum][key.class][digest] = object
 			}
 		}
 		indexDigest, _ := indexRoot.Digest()
@@ -501,7 +512,7 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		}
 		key := scopeKey{curriculum: boundary.Curriculum, class: "acquisition-" + boundary.Scope + "-preboundary"}
 		indexAuthority, ok := indexAuthorities[key]
-		object, objectOK := retainedObjects[boundary.BoundaryDigest]
+		object, objectOK := retainedByCurriculum[boundary.Curriculum][boundary.BoundaryDigest]
 		if boundary.Curriculum != wantCurriculum || boundary.Scope != wantScope || !ok || boundary.PreboundaryIndexRoot != indexAuthority.digest || !objectOK || object.kind != 35 || len(object.classes) != 1 || !object.classes["authority"] {
 			return nil, fmt.Errorf("store boundary authority mismatch: %d/%s", boundary.Curriculum, boundary.Scope)
 		}
@@ -626,20 +637,50 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 			markUsed = usedAcquisition[authority.curriculum][authority.policy]
 			objectClass = "acquisition-" + authority.policy + "-preboundary"
 		}
+		ownObjects := retainedByScope[authority.curriculum][objectClass]
+		runObjects, allowedCrossScope, scopeErr := retainedObjectsForRun(authority, retainedByScope[authority.curriculum])
+		if scopeErr != nil {
+			return nil, fmt.Errorf("retained run %s physical scope: %w", record.RunID, scopeErr)
+		}
 		for _, call := range transcriptCalls[record.RunID] {
+			if _, exists := ownObjects[call.source]; !exists {
+				return nil, fmt.Errorf("charged reservation is outside run scope: %s/%s", record.RunID, call.source)
+			}
 			markUsed[call.source] = true
 			for _, output := range call.outputs {
-				if object, exists := retainedObjects[output]; exists {
+				object, own := ownObjects[output]
+				if !own {
+					if !allowedCrossScope[output] || call.operation != 10 || output != authority.artifact {
+						return nil, fmt.Errorf("charged output is outside run scope: %s/%s", record.RunID, output)
+					}
+					continue
+				}
+				if object.canonical != nil {
 					markUsed[output] = true
 					chargedOutputs[authority.curriculum][objectClass+":"+output] = true
-					_ = object
 				}
 			}
-			markRetainedPayloadDigests(call.payload, markUsed)
+			payloadDigests := map[string]bool{}
+			markRetainedPayloadDigests(call.payload, payloadDigests)
+			for digest := range payloadDigests {
+				if _, retained := retainedObjects[digest]; !retained {
+					continue
+				}
+				if _, allowed := runObjects[digest]; !allowed {
+					return nil, fmt.Errorf("charged payload object is outside run scope: %s/%s", record.RunID, digest)
+				}
+				if _, own := ownObjects[digest]; own {
+					markUsed[digest] = true
+				}
+			}
 		}
 		for key := range structuralObjects[record.RunID] {
 			if len(key) > 6 {
-				markUsed[key[strings.IndexByte(key, ':')+1:]] = true
+				digest := key[strings.IndexByte(key, ':')+1:]
+				if _, own := ownObjects[digest]; !own {
+					return nil, fmt.Errorf("structural object is outside run scope: %s/%s", record.RunID, digest)
+				}
+				markUsed[digest] = true
 			}
 		}
 		operation := OperationRoot{Canonical: operationObject.canonical, Digest: authority.operationRoot}
@@ -665,7 +706,7 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				}
 			}
 		}
-		if err := verifyRetainedRunReplay(record, authority, transcriptCalls[record.RunID], retainedByCurriculum[authority.curriculum], retainedTableLeaves, structuralObjects[record.RunID]); err != nil {
+		if err := verifyRetainedRunReplay(record, authority, transcriptCalls[record.RunID], runObjects, retainedTableLeaves, structuralObjects[record.RunID]); err != nil {
 			return nil, fmt.Errorf("retained run %s replay: %w", record.RunID, err)
 		}
 	}
@@ -740,6 +781,81 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	return paths, nil
 }
 
+// retainedObjectsForRun preserves the physical object capability boundary during
+// semantic replay. Acquisition runs can resolve only their own preboundary.
+// Utility runs can additionally resolve public fixture preimages and the exact
+// acquisition boundary/artifact closure that their charged artifact-load names.
+func retainedObjectsForRun(authority retainedRunAuthority, scopes map[string]map[string]retainedObjectValue) (map[string]retainedObjectValue, map[string]bool, error) {
+	class := "utility"
+	if authority.phase == 1 {
+		class = "acquisition-" + authority.policy + "-preboundary"
+	}
+	result := map[string]retainedObjectValue{}
+	for digest, object := range scopes[class] {
+		result[digest] = object
+	}
+	cross := map[string]bool{}
+	if authority.phase == 1 {
+		return result, cross, nil
+	}
+	artifactScope := ""
+	switch authority.policy {
+	case "nous-guarded-sleep", "learned-no-use":
+		artifactScope = "nous"
+	case "no-guard-sleep":
+		artifactScope = "no-guard"
+	}
+	for digest, object := range scopes["authority"] {
+		switch object.kind {
+		case 1, 2, 3, 4:
+			result[digest] = object
+		case 35:
+			if artifactScope == "" {
+				continue
+			}
+			boundary, err := decodeStoreBoundary(mustObjectRow(object.canonical))
+			if err != nil {
+				return nil, nil, err
+			}
+			if boundary.Curriculum == authority.curriculum && boundary.Scope == artifactScope {
+				result[digest], cross[digest] = object, true
+			}
+		}
+	}
+	if artifactScope == "" {
+		return result, cross, nil
+	}
+	preboundary := scopes["acquisition-"+artifactScope+"-preboundary"]
+	if artifact, ok := preboundary[authority.artifact]; !ok || artifact.kind != 10 {
+		return nil, nil, fmt.Errorf("utility artifact is absent from its acquisition scope")
+	}
+	queue := []string{authority.artifact}
+	seen := map[string]bool{}
+	for len(queue) != 0 {
+		digest := queue[0]
+		queue = queue[1:]
+		if seen[digest] {
+			continue
+		}
+		object, ok := preboundary[digest]
+		if !ok {
+			return nil, nil, fmt.Errorf("artifact closure leaves its acquisition scope: %s", digest)
+		}
+		seen[digest], cross[digest], result[digest] = true, true, object
+		references := map[string]bool{}
+		var row []json.RawMessage
+		if json.Unmarshal(object.canonical, &row) == nil {
+			markRetainedPayloadDigests(row, references)
+		}
+		for reference := range references {
+			if _, inScope := preboundary[reference]; inScope && !seen[reference] {
+				queue = append(queue, reference)
+			}
+		}
+	}
+	return result, cross, nil
+}
+
 func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, objects map[string]retainedObjectValue, result *retainedCurriculumAuthority) error {
 	if len(objects) == 0 || result == nil {
 		return fmt.Errorf("empty curriculum object set")
@@ -759,8 +875,10 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 	usedAuthority := map[string]bool{}
 	boundaryCount := 0
 	type retainedWorldTruth struct {
-		terminals []string
-		pairs     map[string]string
+		terminals   []string
+		pairs       map[string]string
+		state       string
+		occurrences []string
 	}
 	truthWorlds := map[string]retainedWorldTruth{}
 	for digest, object := range objects {
@@ -890,7 +1008,6 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				worldTruth.pairs[key] = pair.Label
 			}
 		}
-		truthWorlds[digest] = worldTruth
 		usedAuthority[digest] = true
 		var worldRow []json.RawMessage
 		if json.Unmarshal(objects[digest].canonical, &worldRow) != nil || len(worldRow) != 3 {
@@ -902,6 +1019,7 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 			return fmt.Errorf("fixture world %d state preimage is absent", ordinal)
 		}
 		usedAuthority[stateDigest] = true
+		worldTruth.state = stateDigest
 		var actionRows []json.RawMessage
 		if json.Unmarshal(worldRow[2], &actionRows) != nil {
 			return fmt.Errorf("fixture world %d actions do not decode", ordinal)
@@ -924,6 +1042,7 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 		if occurrenceErr != nil {
 			return occurrenceErr
 		}
+		worldTruth.occurrences = make([]string, len(occurrences))
 		for index, occurrence := range occurrences {
 			canonical, _ := occurrence.CanonicalJSON()
 			occurrenceDigest := shaHex(canonical)
@@ -931,7 +1050,10 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				return fmt.Errorf("fixture world %d occurrence %d preimage is absent", ordinal, index)
 			}
 			usedAuthority[occurrenceDigest] = true
+			worldTruth.occurrences[index] = occurrenceDigest
 		}
+		slices.Sort(worldTruth.occurrences)
+		truthWorlds[digest] = worldTruth
 		delete(truth, digest)
 	}
 	if len(truth) != 0 {
@@ -1050,6 +1172,7 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				matches: worldRow.Matches, certificates: worldRow.Certificates, sleepCount: worldRow.SleepCount,
 				truthPairs: truthWorlds[worldRow.World].pairs, truthTerminals: slices.Clone(truthWorlds[worldRow.World].terminals),
 				worldOrdinal: ordinal, acquisitionTotal: sumInts(row.AcquisitionWork[:]), remaining: worldRow.Remaining, artifact: row.Artifact,
+				initialState: truthWorlds[worldRow.World].state, initialOccurrences: slices.Clone(truthWorlds[worldRow.World].occurrences),
 			}
 			if err := addExpected(runID, authority); err != nil {
 				return fmt.Errorf("utility run authority %s/%d: %w", row.Policy, ordinal, err)

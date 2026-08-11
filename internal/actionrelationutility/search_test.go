@@ -2,6 +2,7 @@ package actionrelationutility
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -253,6 +254,46 @@ func TestUtilityBudgetExhaustionRejectsWholeBlockAndEmitsKind49(t *testing.T) {
 	rejectedDigest := terminalWire[3].(string)
 	if run.Records[1].SourceTaskDigest == rejectedDigest {
 		t.Fatal("rejected compound reservation was used as charged authority")
+	}
+}
+
+func TestUtilityBudgetExhaustionCoversEveryCertificateReservationStage(t *testing.T) {
+	seen := map[string]bool{}
+	for cap := 2; cap <= 128; cap++ {
+		run, err := ExecutePolicy("../../domains", independentUtilityWorld(), actionrelationsearch.DynamicSleep, "development", "authority", 8, 0, cap, "certificate-budget")
+		if err != nil {
+			t.Fatalf("cap %d: %v", cap, err)
+		}
+		if run.Terminal != "budget-exhausted" {
+			continue
+		}
+		if run.Records[len(run.Records)-1].Code != 19 {
+			t.Fatalf("cap %d lacks typed budget terminal", cap)
+		}
+		rejected := run.WorkTerminal.RejectedReservation
+		switch {
+		case slices.Equal(rejected.OperationCodes, []uint8{18}):
+			seen["cache-lookup"] = true
+		case slices.Equal(rejected.OperationCodes, []uint8{14}):
+			seen["equality-proof"] = true
+		case slices.Equal(rejected.OperationCodes, []uint8{25}):
+			seen["cache-finalize"] = true
+		case slices.Equal(rejected.OperationCodes, []uint8{13, 13, 12, 12}):
+			for _, stage := range []string{"initial", "cross"} {
+				for sequence := 0; sequence < cap; sequence++ {
+					request := fmt.Sprintf("AR.CertificateRequest.certificate-budget.%05d", sequence)
+					wire, _ := json.Marshal([]any{"actionrelation-certificate-stage/v1", run.RunID, request, stage, rejected.OperationCodes})
+					if rejected.TaskDigest == digestBytesText(wire) {
+						seen[stage+"-proof"] = true
+					}
+				}
+			}
+		}
+	}
+	for _, stage := range []string{"cache-lookup", "initial-proof", "cross-proof", "equality-proof", "cache-finalize"} {
+		if !seen[stage] {
+			t.Fatalf("no typed budget terminal exercised certificate stage %s; seen=%v", stage, seen)
+		}
 	}
 }
 

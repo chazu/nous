@@ -31,8 +31,14 @@ func Certify(session *Session, state actionrelations.State, a, b actionrelations
 		taskWire, _ := json.Marshal([]any{"actionrelation-certificate-stage/v1", session.RunID, request, stage, codes})
 		taskHash := sha256.Sum256(taskWire)
 		reservation, err := session.Reserve(hex.EncodeToString(taskHash[:]), codes)
-		if err != nil || reservation.Status != "reserved" {
+		if err != nil {
 			return fmt.Errorf("reserve certificate %s: %w", stage, err)
+		}
+		if reservation.Status == "rejected-cap" {
+			return &budgetExhaustedError{Reservation: reservation}
+		}
+		if reservation.Status != "reserved" {
+			return fmt.Errorf("reserve certificate %s returned %s", stage, reservation.Status)
 		}
 		return nil
 	}
