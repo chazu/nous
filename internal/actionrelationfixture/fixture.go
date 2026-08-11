@@ -46,6 +46,9 @@ type SkeletonCatalogs struct {
 }
 
 func BuildCurriculum(context DrawContext) (Curriculum, error) {
+	if context.Panel != "development" {
+		return Curriculum{}, fmt.Errorf("protected curriculum construction requires guarded capability")
+	}
 	draws, err := precommitDraws(context)
 	if err != nil {
 		return Curriculum{}, err
@@ -55,7 +58,7 @@ func BuildCurriculum(context DrawContext) (Curriculum, error) {
 	if err != nil {
 		return Curriculum{}, err
 	}
-	return BuildCurriculumFromCatalogs(context, draws, catalogs, nil)
+	return buildCurriculumFromCatalogs(context, draws, catalogs, nil)
 }
 
 func BuildSkeletonCatalogs(family int, reserve actionrelationfixturecore.WorkReservation) (SkeletonCatalogs, error) {
@@ -81,7 +84,7 @@ func BuildSkeletonCatalogs(family int, reserve actionrelationfixturecore.WorkRes
 	return result, nil
 }
 
-func BuildCurriculumFromCatalogs(context DrawContext, draws DrawBlock, catalogs SkeletonCatalogs, reserve actionrelationfixturecore.WorkReservation) (Curriculum, error) {
+func buildCurriculumFromCatalogs(context DrawContext, draws DrawBlock, catalogs SkeletonCatalogs, reserve actionrelationfixturecore.WorkReservation) (Curriculum, error) {
 	if err := validateDrawContext(context); err != nil || !equalDrawContexts(draws.Context, context) {
 		return Curriculum{}, fmt.Errorf("invalid measured curriculum context")
 	}

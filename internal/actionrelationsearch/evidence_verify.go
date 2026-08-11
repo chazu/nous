@@ -12,8 +12,31 @@ type parsedNode struct {
 }
 
 type parsedEdge struct {
-	parent, taken, child string
-	propagations         []string
+	digest, parent, taken, child string
+	propagations                 []string
+}
+
+type parsedPropagation struct {
+	digest, parent, taken, sleeper, source, authority, certificate, successor, childRemaining string
+}
+
+type parsedCompleted struct {
+	digest, parent, taken, subtree, terminalSet string
+}
+
+type parsedSubtree struct {
+	digest, node string
+	preorder     []string
+}
+
+type parsedTerminal struct {
+	digest, state, terminal string
+	remaining               []string
+}
+
+type verifiedSubtree struct {
+	terminals []string
+	histories int
 }
 
 func VerifyResultEvidence(result Result) error {
@@ -41,6 +64,16 @@ func VerifyResultEvidence(result Result) error {
 		return fmt.Errorf("missing root search evidence")
 	}
 
+	remainingRows := map[string][]string{}
+	for _, value := range result.RemainingSets {
+		row, err := evidenceRow(value, 2)
+		var occurrences []string
+		if err != nil || json.Unmarshal(row[1], &occurrences) != nil || !sortedUniqueOrEmpty(occurrences) {
+			return fmt.Errorf("invalid remaining-occurrence rows")
+		}
+		remainingRows[value.Digest] = occurrences
+	}
+
 	proofRows := map[string][]ProofEntry{}
 	for _, proofMap := range result.ProofMaps {
 		row, err := evidenceRow(proofMap, 2)
@@ -63,12 +96,15 @@ func VerifyResultEvidence(result Result) error {
 	nodes := map[string]parsedNode{}
 	for _, node := range result.Nodes {
 		row, err := evidenceRow(node, 4)
-		if err != nil {
-			return err
-		}
 		parsed := parsedNode{}
-		if json.Unmarshal(row[1], &parsed.state) != nil || json.Unmarshal(row[2], &parsed.remaining) != nil || json.Unmarshal(row[3], &parsed.proofMap) != nil || !digestText(parsed.state) || tags[parsed.remaining] != "remaining-occurrences/v1" || tags[parsed.proofMap] != "sleep-proof-map/v1" {
+		if err != nil || json.Unmarshal(row[1], &parsed.state) != nil || json.Unmarshal(row[2], &parsed.remaining) != nil || json.Unmarshal(row[3], &parsed.proofMap) != nil || !digestText(parsed.state) || tags[parsed.remaining] != "remaining-occurrences/v1" || tags[parsed.proofMap] != "sleep-proof-map/v1" {
 			return fmt.Errorf("invalid retained search node")
+		}
+		remainingSet := makeSet(remainingRows[parsed.remaining])
+		for _, proof := range proofRows[parsed.proofMap] {
+			if !remainingSet[proof.SleeperDigest] {
+				return fmt.Errorf("proof-map sleeper is absent from node remaining set")
+			}
 		}
 		nodes[node.Digest] = parsed
 	}
@@ -77,12 +113,18 @@ func VerifyResultEvidence(result Result) error {
 	edgeByParentTaken := map[string]parsedEdge{}
 	for _, edge := range result.SearchEdges {
 		row, err := evidenceRow(edge, 5)
-		if err != nil {
-			return err
-		}
-		parsed := parsedEdge{}
-		if json.Unmarshal(row[1], &parsed.parent) != nil || json.Unmarshal(row[2], &parsed.taken) != nil || json.Unmarshal(row[3], &parsed.propagations) != nil || json.Unmarshal(row[4], &parsed.child) != nil || nodes[parsed.parent].state == "" || nodes[parsed.child].state == "" || !digestText(parsed.taken) || !allDigests(parsed.propagations) {
+		parsed := parsedEdge{digest: edge.Digest}
+		if err != nil || json.Unmarshal(row[1], &parsed.parent) != nil || json.Unmarshal(row[2], &parsed.taken) != nil || json.Unmarshal(row[3], &parsed.propagations) != nil || json.Unmarshal(row[4], &parsed.child) != nil || nodes[parsed.parent].state == "" || nodes[parsed.child].state == "" || !digestText(parsed.taken) || !allDigests(parsed.propagations) {
 			return fmt.Errorf("invalid retained search edge")
+		}
+		key := parsed.parent + parsed.taken
+		if edgeByParentTaken[key].digest != "" {
+			return fmt.Errorf("duplicate parent/taken search edge")
+		}
+		parentRemaining := remainingRows[nodes[parsed.parent].remaining]
+		childRemaining := remainingRows[nodes[parsed.child].remaining]
+		if !slices.Contains(parentRemaining, parsed.taken) || !slices.Equal(removeDigest(parentRemaining, parsed.taken), childRemaining) || proofEntry(proofRows[nodes[parsed.parent].proofMap], parsed.taken).SleeperDigest != "" {
+			return fmt.Errorf("search edge does not remove one non-sleeping occurrence")
 		}
 		childProofs := proofRows[nodes[parsed.child].proofMap]
 		want := make([]string, len(childProofs))
@@ -92,74 +134,14 @@ func VerifyResultEvidence(result Result) error {
 		if !slices.Equal(parsed.propagations, want) {
 			return fmt.Errorf("edge/proof-map propagation mismatch")
 		}
-		edges[edge.Digest] = parsed
-		edgeByParentTaken[parsed.parent+parsed.taken] = parsed
+		edges[edge.Digest], edgeByParentTaken[key] = parsed, parsed
 	}
 
-	completed := map[string]bool{}
-	for _, value := range result.CompletedSubtrees {
-		row, err := evidenceRow(value, 6)
-		if err != nil {
-			return err
-		}
-		var parent, taken, subtree, terminalSet, status string
-		if json.Unmarshal(row[1], &parent) != nil || json.Unmarshal(row[2], &taken) != nil || json.Unmarshal(row[3], &subtree) != nil || json.Unmarshal(row[4], &terminalSet) != nil || json.Unmarshal(row[5], &status) != nil || status != "completed" || nodes[parent].state == "" || !digestText(taken) || tags[subtree] != "sleep-subtree-root/v1" || tags[terminalSet] != "sleep-terminal-set/v1" {
-			return fmt.Errorf("invalid completed subtree")
-		}
-		edge := edgeByParentTaken[parent+taken]
-		if edge.child == "" {
-			return fmt.Errorf("completed subtree lacks parent edge")
-		}
-		rootRow, _ := evidenceRow(objects[subtree], 3)
-		var subtreeNode string
-		_ = json.Unmarshal(rootRow[1], &subtreeNode)
-		if subtreeNode != edge.child {
-			return fmt.Errorf("completed subtree names wrong child")
-		}
-		completed[value.Digest] = true
-	}
-
-	for _, propagation := range result.Propagations {
-		row, err := evidenceRow(propagation, 9)
-		if err != nil {
-			return err
-		}
-		var parent, taken, sleeper, source, authority, certificate, successor, childRemaining string
-		values := []*string{&parent, &taken, &sleeper, &source, &authority, &certificate, &successor, &childRemaining}
-		for index := range values {
-			if json.Unmarshal(row[index+1], values[index]) != nil {
-				return fmt.Errorf("invalid propagation field")
-			}
-		}
-		edge := edgeByParentTaken[parent+taken]
-		if edge.child == "" || taken == sleeper || !slices.Contains(edge.propagations, propagation.Digest) || nodes[edge.child].state != successor || nodes[edge.child].remaining != childRemaining || !digestText(certificate) || source == "prior-sleep" && tags[authority] != "sleep-propagation-core/v1" || source == "earlier-sibling" && !completed[authority] || source != "prior-sleep" && source != "earlier-sibling" {
-			return fmt.Errorf("invalid propagation authority chain")
-		}
-	}
-
-	for _, subtree := range result.SubtreeRoots {
-		row, err := evidenceRow(subtree, 3)
-		if err != nil {
-			return err
-		}
-		var node string
-		var preorder []string
-		if json.Unmarshal(row[1], &node) != nil || json.Unmarshal(row[2], &preorder) != nil || nodes[node].state == "" || !allDigests(preorder) {
-			return fmt.Errorf("invalid subtree root")
-		}
-		for _, digest := range preorder {
-			if edges[digest].parent == "" {
-				return fmt.Errorf("subtree references unknown edge")
-			}
-		}
-	}
+	terminalSets := map[string][]string{}
 	for _, terminalSet := range result.TerminalSets {
 		row, err := evidenceRow(terminalSet, 2)
-		if err != nil {
-			return err
-		}
 		var terminals []string
-		if json.Unmarshal(row[1], &terminals) != nil || !sortedUniqueOrEmpty(terminals) {
+		if err != nil || json.Unmarshal(row[1], &terminals) != nil || !sortedUniqueOrEmpty(terminals) {
 			return fmt.Errorf("invalid terminal set rows")
 		}
 		for _, digest := range terminals {
@@ -167,18 +149,207 @@ func VerifyResultEvidence(result Result) error {
 				return fmt.Errorf("terminal set references unknown behavior")
 			}
 		}
+		terminalSets[terminalSet.Digest] = terminals
 	}
-	rootRow, _ := evidenceRow(result.RootSubtree, 3)
-	var rootNode string
-	_ = json.Unmarshal(rootRow[1], &rootNode)
-	if rootNode != result.RootNodeDigest {
-		return fmt.Errorf("root subtree/node mismatch")
+
+	terminals := map[string]parsedTerminal{}
+	terminalByNodeKey := map[string]string{}
+	for _, terminal := range result.TerminalBehaviors {
+		row, err := evidenceRow(terminal, 4)
+		var stateJSON json.RawMessage
+		parsed := parsedTerminal{digest: terminal.Digest}
+		if err != nil || json.Unmarshal(row[1], &stateJSON) != nil || json.Unmarshal(row[2], &parsed.remaining) != nil || json.Unmarshal(row[3], &parsed.terminal) != nil || !sortedUniqueOrEmpty(parsed.remaining) || parsed.terminal != "complete" && parsed.terminal != "deadlock" || (len(parsed.remaining) == 0) != (parsed.terminal == "complete") {
+			return fmt.Errorf("invalid terminal behavior")
+		}
+		parsed.state = shaHex(stateJSON)
+		remainingWire := evidenceWire([]any{"remaining-occurrences/v1", parsed.remaining})
+		key := parsed.state + remainingWire.Digest
+		if terminalByNodeKey[key] != "" {
+			return fmt.Errorf("duplicate terminal behavior authority")
+		}
+		terminals[terminal.Digest], terminalByNodeKey[key] = parsed, terminal.Digest
 	}
-	terminalRow, _ := evidenceRow(result.TerminalSet, 2)
-	var terminalDigests []string
-	_ = json.Unmarshal(terminalRow[1], &terminalDigests)
-	if !slices.Equal(terminalDigests, result.TerminalDigests) {
-		return fmt.Errorf("result terminal-set mismatch")
+
+	subtrees := map[string]parsedSubtree{}
+	subtreeByNode := map[string]string{}
+	for _, subtree := range result.SubtreeRoots {
+		row, err := evidenceRow(subtree, 3)
+		parsed := parsedSubtree{digest: subtree.Digest}
+		if err != nil || json.Unmarshal(row[1], &parsed.node) != nil || json.Unmarshal(row[2], &parsed.preorder) != nil || nodes[parsed.node].state == "" || !allDigests(parsed.preorder) {
+			return fmt.Errorf("invalid subtree root")
+		}
+		for _, digest := range parsed.preorder {
+			if edges[digest].parent == "" {
+				return fmt.Errorf("subtree references unknown edge")
+			}
+		}
+		if subtreeByNode[parsed.node] != "" {
+			return fmt.Errorf("multiple retained subtrees for one search node")
+		}
+		subtrees[subtree.Digest], subtreeByNode[parsed.node] = parsed, subtree.Digest
+	}
+
+	completed := map[string]parsedCompleted{}
+	completedByParentTaken := map[string]parsedCompleted{}
+	terminalSetForSubtree := map[string]string{result.RootSubtree.Digest: result.TerminalSet.Digest}
+	for _, value := range result.CompletedSubtrees {
+		row, err := evidenceRow(value, 6)
+		parsed := parsedCompleted{digest: value.Digest}
+		var status string
+		if err != nil || json.Unmarshal(row[1], &parsed.parent) != nil || json.Unmarshal(row[2], &parsed.taken) != nil || json.Unmarshal(row[3], &parsed.subtree) != nil || json.Unmarshal(row[4], &parsed.terminalSet) != nil || json.Unmarshal(row[5], &status) != nil || status != "completed" || nodes[parsed.parent].state == "" || !digestText(parsed.taken) || subtrees[parsed.subtree].node == "" {
+			return fmt.Errorf("invalid completed subtree")
+		}
+		if _, ok := terminalSets[parsed.terminalSet]; !ok {
+			return fmt.Errorf("completed subtree references unknown terminal set")
+		}
+		edge := edgeByParentTaken[parsed.parent+parsed.taken]
+		if edge.child == "" || subtrees[parsed.subtree].node != edge.child {
+			return fmt.Errorf("completed subtree names wrong child")
+		}
+		if prior := terminalSetForSubtree[parsed.subtree]; prior != "" && prior != parsed.terminalSet {
+			return fmt.Errorf("subtree has conflicting terminal-set authority")
+		}
+		key := parsed.parent + parsed.taken
+		if completedByParentTaken[key].digest != "" {
+			return fmt.Errorf("duplicate completed subtree")
+		}
+		terminalSetForSubtree[parsed.subtree] = parsed.terminalSet
+		completed[value.Digest], completedByParentTaken[key] = parsed, parsed
+	}
+
+	propagations := map[string]parsedPropagation{}
+	for _, propagation := range result.Propagations {
+		row, err := evidenceRow(propagation, 9)
+		parsed := parsedPropagation{digest: propagation.Digest}
+		values := []*string{&parsed.parent, &parsed.taken, &parsed.sleeper, &parsed.source, &parsed.authority, &parsed.certificate, &parsed.successor, &parsed.childRemaining}
+		for index := range values {
+			if err != nil || json.Unmarshal(row[index+1], values[index]) != nil {
+				return fmt.Errorf("invalid propagation field")
+			}
+		}
+		edge := edgeByParentTaken[parsed.parent+parsed.taken]
+		childProof := proofEntry(proofRows[nodes[edge.child].proofMap], parsed.sleeper)
+		if edge.child == "" || parsed.taken == parsed.sleeper || childProof.PropagationDigest != parsed.digest || nodes[edge.child].state != parsed.successor || nodes[edge.child].remaining != parsed.childRemaining || !digestText(parsed.certificate) {
+			return fmt.Errorf("invalid propagation edge binding")
+		}
+		if parsed.source == "prior-sleep" {
+			if proofEntry(proofRows[nodes[parsed.parent].proofMap], parsed.sleeper).PropagationDigest != parsed.authority {
+				return fmt.Errorf("prior-sleep propagation does not extend the parent proof")
+			}
+		} else if parsed.source == "earlier-sibling" {
+			if completed[parsed.authority].digest == "" || completed[parsed.authority] != completedByParentTaken[parsed.parent+parsed.sleeper] {
+				return fmt.Errorf("earlier-sibling propagation lacks the exact completed branch")
+			}
+		} else {
+			return fmt.Errorf("invalid propagation source")
+		}
+		propagations[propagation.Digest] = parsed
+	}
+
+	rootSubtree := subtrees[result.RootSubtree.Digest]
+	if rootSubtree.node != result.RootNodeDigest || len(proofRows[nodes[result.RootNodeDigest].proofMap]) != 0 {
+		return fmt.Errorf("root subtree/node/proof authority mismatch")
+	}
+	visited := map[string]map[string]bool{
+		"nodes": {}, "remaining": {}, "proofs": {}, "edges": {}, "propagations": {}, "completed": {}, "subtrees": {}, "terminal-sets": {}, "terminals": {},
+	}
+	verified := map[string]verifiedSubtree{}
+	visiting := map[string]bool{}
+	var verifySubtree func(string) (verifiedSubtree, error)
+	verifySubtree = func(subtreeDigest string) (verifiedSubtree, error) {
+		if value, ok := verified[subtreeDigest]; ok {
+			return value, nil
+		}
+		if visiting[subtreeDigest] {
+			return verifiedSubtree{}, fmt.Errorf("cyclic subtree authority")
+		}
+		visiting[subtreeDigest] = true
+		defer delete(visiting, subtreeDigest)
+		subtree := subtrees[subtreeDigest]
+		node := nodes[subtree.node]
+		setDigest := terminalSetForSubtree[subtreeDigest]
+		if node.state == "" || setDigest == "" {
+			return verifiedSubtree{}, fmt.Errorf("unbound subtree authority")
+		}
+		visited["subtrees"][subtreeDigest], visited["nodes"][subtree.node] = true, true
+		visited["remaining"][node.remaining], visited["proofs"][node.proofMap], visited["terminal-sets"][setDigest] = true, true, true
+		if len(subtree.preorder) == 0 {
+			terminalDigest := terminalByNodeKey[node.state+node.remaining]
+			want := []string{}
+			histories := 0
+			if terminalDigest != "" {
+				want, histories = []string{terminalDigest}, 1
+				visited["terminals"][terminalDigest] = true
+			}
+			if !slices.Equal(terminalSets[setDigest], want) {
+				return verifiedSubtree{}, fmt.Errorf("leaf terminal set does not match its node")
+			}
+			value := verifiedSubtree{terminals: want, histories: histories}
+			verified[subtreeDigest] = value
+			return value, nil
+		}
+		position := 0
+		seenTaken := map[string]bool{}
+		var union []string
+		histories := 0
+		for position < len(subtree.preorder) {
+			edge := edges[subtree.preorder[position]]
+			if edge.parent != subtree.node || seenTaken[edge.taken] {
+				return verifiedSubtree{}, fmt.Errorf("subtree preorder is not a DFS partition")
+			}
+			seenTaken[edge.taken] = true
+			completedRow := completedByParentTaken[edge.parent+edge.taken]
+			if completedRow.digest == "" {
+				return verifiedSubtree{}, fmt.Errorf("search edge lacks completed subtree")
+			}
+			childSubtree := subtrees[completedRow.subtree]
+			end := position + 1 + len(childSubtree.preorder)
+			if end > len(subtree.preorder) || !slices.Equal(subtree.preorder[position+1:end], childSubtree.preorder) {
+				return verifiedSubtree{}, fmt.Errorf("subtree preorder omits or reorders child DFS")
+			}
+			child, err := verifySubtree(completedRow.subtree)
+			if err != nil {
+				return verifiedSubtree{}, err
+			}
+			visited["edges"][edge.digest], visited["completed"][completedRow.digest] = true, true
+			for _, propagation := range edge.propagations {
+				if propagations[propagation].digest == "" {
+					return verifiedSubtree{}, fmt.Errorf("edge references unresolved propagation")
+				}
+				visited["propagations"][propagation] = true
+			}
+			union = append(union, child.terminals...)
+			histories += child.histories
+			position = end
+		}
+		slices.Sort(union)
+		union = slices.Compact(union)
+		if !slices.Equal(terminalSets[setDigest], union) {
+			return verifiedSubtree{}, fmt.Errorf("subtree terminal set is not the exact child union")
+		}
+		value := verifiedSubtree{terminals: union, histories: histories}
+		verified[subtreeDigest] = value
+		return value, nil
+	}
+	root, err := verifySubtree(result.RootSubtree.Digest)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(root.terminals, result.TerminalDigests) || !slices.Equal(root.terminals, terminalSets[result.TerminalSet.Digest]) || root.histories != result.HistoryCount {
+		return fmt.Errorf("result terminal or history summary mismatch")
+	}
+	for name, values := range map[string]map[string]any{
+		"nodes": keys(nodes), "remaining": keys(remainingRows), "proofs": keys(proofRows), "edges": keys(edges),
+		"propagations": keys(propagations), "completed": keys(completed), "subtrees": keys(subtrees), "terminal-sets": keys(terminalSets), "terminals": keys(terminals),
+	} {
+		for digest := range values {
+			if !visited[name][digest] {
+				return fmt.Errorf("unreachable retained %s evidence", name)
+			}
+		}
+	}
+	if result.ConstructedNodes != len(nodes) || result.Edges != len(edges) || result.NodeLookups != len(edges)+1 || result.SleepPropagations != len(propagations) {
+		return fmt.Errorf("search result counters do not reconstruct from evidence")
 	}
 	return nil
 }
@@ -205,4 +376,34 @@ func sortedUniqueOrEmpty(values []string) bool {
 		}
 	}
 	return true
+}
+
+func removeDigest(values []string, digest string) []string {
+	result := make([]string, 0, len(values)-1)
+	removed := false
+	for _, value := range values {
+		if !removed && value == digest {
+			removed = true
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+func proofEntry(entries []ProofEntry, sleeper string) ProofEntry {
+	for _, entry := range entries {
+		if entry.SleeperDigest == sleeper {
+			return entry
+		}
+	}
+	return ProofEntry{}
+}
+
+func keys[K comparable, V any](values map[K]V) map[K]any {
+	result := make(map[K]any, len(values))
+	for key := range values {
+		result[key] = nil
+	}
+	return result
 }

@@ -34,16 +34,21 @@ type CurriculumResult struct {
 
 func ExecuteCurriculum(domainsDir string, generated actionrelationfixture.GeneratedAttempt) (CurriculumResult, error) {
 	context := generated.Context
-	result := CurriculumResult{
-		Panel: context.Panel, Authority: context.Authority, Curriculum: context.Curriculum,
-		Family: generated.Curriculum.Family, Runs: map[actionrelationsearch.Policy][]actionrelationutility.SearchRun{},
-		OperationRoots: map[string]actionrelationexp.OperationRoot{},
-	}
 	// This exported helper is deliberately development-only. Validation and
 	// locked policy execution will be reachable solely from the staged guarded
 	// panel caller after implementation acceptance.
 	if context.Panel != "development" || context.Authority != "development-public-v1" || actionrelationfixture.VerifyCurriculumFixture(generated.Fixture) != nil || generated.Fixture.Panel != context.Panel || generated.Fixture.Curriculum != context.Curriculum || generated.Curriculum.Family != context.Curriculum%8 || len(generated.Curriculum.Worlds) != 6 || len(generated.Truth.Worlds) != 6 {
-		return result, fmt.Errorf("invalid scorer curriculum authority")
+		return CurriculumResult{}, fmt.Errorf("invalid scorer curriculum authority")
+	}
+	return executeCurriculum(domainsDir, generated)
+}
+
+func executeCurriculum(domainsDir string, generated actionrelationfixture.GeneratedAttempt) (CurriculumResult, error) {
+	context := generated.Context
+	result := CurriculumResult{
+		Panel: context.Panel, Authority: context.Authority, Curriculum: context.Curriculum,
+		Family: generated.Curriculum.Family, Runs: map[actionrelationsearch.Policy][]actionrelationutility.SearchRun{},
+		OperationRoots: map[string]actionrelationexp.OperationRoot{},
 	}
 	nous, err := executeAcquisition(domainsDir, context.Panel, context.Authority, context.Curriculum, result.Family, "nous")
 	if err != nil {
@@ -78,7 +83,7 @@ func ExecuteCurriculum(domainsDir string, generated actionrelationfixture.Genera
 		}
 		for worldOrdinal, view := range generated.Curriculum.Worlds {
 			world := actionrelations.World{State: view.State, Actions: view.Actions}
-			budget := actionrelationutility.WorkBudget{LifecycleCap: LifecycleCap, PhysicalCap: policyPhysicalCap(policy), PriorPhysical: priorPhysical}
+			budget := actionrelationutility.WorkBudget{LifecycleCap: LifecycleCap, PhysicalCap: policyPhysicalCap(policy), PriorPhysical: priorPhysical, ReservedTerminals: 5 - worldOrdinal}
 			token := fmt.Sprintf("score-c%04d-p%02d-w%d", context.Curriculum, policyOrdinal, worldOrdinal)
 			var run actionrelationutility.SearchRun
 			switch policy {

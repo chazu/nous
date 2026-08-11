@@ -44,6 +44,16 @@ func TestDevelopmentCurriculumExecutesExactAcquisitionAndSixWorldPolicyRows(t *t
 		if row.Policy == actionrelationsearch.NousSleep && row.MatchCounts.UtilityFalseMatches != 0 {
 			t.Fatalf("Nous false relation match in world %d", row.WorldOrdinal)
 		}
+		if !freshCertificateCounts(row.Policy, row) {
+			t.Fatalf("certificate counts do not reconstruct for %s world %d: %+v sleeps=%d", row.Policy, row.WorldOrdinal, row.CertificateCounts, row.SleepCount)
+		}
+	}
+	byPolicy := map[actionrelationsearch.Policy]CurriculumPolicyRow{}
+	for _, row := range result.CurriculumRows {
+		byPolicy[row.Policy] = row
+	}
+	if !immutableAcquisitionRows(byPolicy) {
+		t.Fatal("post-freeze acquisition artifact identity does not reconstruct")
 	}
 	evidence, err := BuildCurriculumEvidence(generated, result)
 	if err != nil {

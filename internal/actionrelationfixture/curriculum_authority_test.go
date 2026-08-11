@@ -68,7 +68,7 @@ func TestCurriculumFixtureCommitsAcceptedAttemptAndFrozenOrders(t *testing.T) {
 		phases = append(phases, GeneratorPhase{Name: vocabulary.name, StartWork: work, EndWork: work + 1, Predicate: vocabulary.predicate, Status: "passed"})
 		work++
 	}
-	ledger, err := SealAttemptLedger(context, draws, phases, "accepted")
+	ledger, err := sealAttemptLedger(context, draws, phases, "accepted")
 	if err != nil {
 		t.Fatal(err)
 	}

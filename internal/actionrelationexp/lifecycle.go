@@ -182,7 +182,7 @@ func VerifyTerminalReceipt(value TerminalReceipt) error {
 }
 
 func terminalReceiptCanonical(value TerminalReceipt) ([]byte, error) {
-	if !panelNames[value.Panel] || value.State != "published" && value.State != "invalid" || !digestText(value.SourceRoot) || !digestText(value.AttemptCommitment) || value.FixtureRoot.Verify() != nil || value.Report.Verify() != nil || value.EvidencePayload.Verify() != nil || !boundedASCII(value.Reason, 1024) {
+	if !panelNames[value.Panel] || value.State != "published" && value.State != "invalid" || !digestText(value.SourceRoot) || !digestText(value.AttemptCommitment) || value.FixtureRoot.Verify() != nil || value.Report.Verify() != nil || value.EvidencePayload.Verify() != nil || !boundedPrintableASCII(value.Reason, 1024) {
 		return nil, fmt.Errorf("invalid terminal receipt authority")
 	}
 	running := any(zeroAuthorityDigest)
@@ -306,6 +306,23 @@ func VerifyPublication(value Publication) error {
 	canonical, err := publicationCanonical(value)
 	if err != nil || len(value.Canonical) > 8192 || !bytes.Equal(canonical, value.Canonical) || value.Digest != shaHex(value.Canonical) {
 		return fmt.Errorf("invalid publication")
+	}
+	return nil
+}
+
+// VerifyPublicationTerminal closes the final publication edge against the
+// exact in-memory terminal receipt. Invalid receipts can never authorize a
+// publication, even when every other reference is structurally valid.
+func VerifyPublicationTerminal(publication Publication, receipt TerminalReceipt) error {
+	if VerifyPublication(publication) != nil || VerifyTerminalReceipt(receipt) != nil || publication.Panel != receipt.Panel || receipt.State != "published" {
+		return fmt.Errorf("publication does not resolve a published terminal")
+	}
+	if publication.RunningReceipt == nil != (receipt.RunningReceipt == nil) || publication.RunningReceipt != nil && *publication.RunningReceipt != *receipt.RunningReceipt {
+		return fmt.Errorf("publication and terminal running authority differ")
+	}
+	ref, err := Reference(ExpectedAuthorityPath(receipt.Panel, "terminal-receipt"), receipt.Canonical)
+	if err != nil || publication.TerminalReceipt != ref || publication.FixtureRoot != receipt.FixtureRoot || publication.Report != receipt.Report || publication.EvidencePayload != receipt.EvidencePayload {
+		return fmt.Errorf("publication terminal authority does not close")
 	}
 	return nil
 }

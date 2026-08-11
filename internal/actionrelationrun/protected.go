@@ -1,6 +1,7 @@
 package actionrelationrun
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -17,6 +17,7 @@ import (
 	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationfixture"
 	"github.com/chazu/nous/internal/actionrelationscore"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -46,88 +47,90 @@ func ExecuteProtected(ctx context.Context, repoRoot, panel string, argv []string
 	if err := requirePanelCapacity(prerequisites.Root, 2*capBytes); err != nil {
 		return actionrelationscore.Report{}, err
 	}
+	lifecycle, inspectedClaim, inspectedRunning, err := loadProtectedLifecycle(prerequisites, git, panel)
+	if err != nil {
+		return actionrelationscore.Report{}, err
+	}
+	start, existing, err := inspectPanelStart(prerequisites, panel, lifecycle)
+	if err != nil {
+		return actionrelationscore.Report{}, err
+	}
+	if existing {
+		if err := eraseRecoverySecret(prerequisites, panel, inspectedClaim, inspectedRunning); err != nil {
+			if terminalErr := publishInvalidPanel(prerequisites, panel, lifecycle, err); terminalErr != nil {
+				return actionrelationscore.Report{}, fmt.Errorf("%v; retain invalid terminal: %w", err, terminalErr)
+			}
+			return actionrelationscore.Report{}, err
+		}
+		return recoverStartedPanel(prerequisites, panel, lifecycle)
+	}
+	if err := requireFreshPanelOutputsAbsent(prerequisites, panel, lifecycle); err != nil {
+		return actionrelationscore.Report{}, err
+	}
 	token, claim, running, err := actionrelationcap.Authorize(ctx, prerequisites.Root, panel)
 	if err != nil {
 		return actionrelationscore.Report{}, err
 	}
-	runningPath := actionrelationexp.ExpectedAuthorityPath(panel, "running")
-	claimPath := actionrelationexp.ExpectedAuthorityPath(panel, "claim")
-	runningRef, _ := actionrelationexp.Reference(runningPath, running.Canonical)
-	claimRef, _ := actionrelationexp.Reference(claimPath, claim.Canonical)
-	lifecycle := panelLifecycleAuthority{ClaimRef: &claimRef, RunningRef: &runningRef, AttemptCommitment: running.AttemptCommitment}
+	if !bytes.Equal(claim.Canonical, inspectedClaim.Canonical) || !bytes.Equal(running.Canonical, inspectedRunning.Canonical) {
+		token.ReleaseForRetry()
+		return actionrelationscore.Report{}, fmt.Errorf("protected authority changed during authorization")
+	}
 	fail := func(cause error) (actionrelationscore.Report, error) {
-		terminalErr := publishInvalidProtected(prerequisites, panel, lifecycle, cause)
+		terminalErr := publishInvalidPanel(prerequisites, panel, lifecycle, cause)
 		if terminalErr != nil {
 			return actionrelationscore.Report{}, fmt.Errorf("%v; retain invalid terminal: %w", cause, terminalErr)
 		}
 		return actionrelationscore.Report{}, cause
 	}
-	evidenceRoot, _ := actionrelationexp.EvidenceRoot(panel)
-	primary := newPanelWriter(prerequisites.Root, evidenceRoot, capBytes)
-	fixturePath := actionrelationexp.ExpectedAuthorityPath(panel, "fixture-root")
-	preparePrimary := func(fixture actionrelationfixture.PanelFixture) error {
-		return primary.write(actionrelationexp.EvidenceFile{Path: fixturePath, Mode: "100644", Data: fixture.Canonical})
+	started, err := consumePanelStart(start)
+	if err != nil {
+		if !started {
+			token.ReleaseForRetry()
+			return actionrelationscore.Report{}, err
+		}
+		destroyErr := token.Destroy()
+		return fail(errors.Join(err, destroyErr))
 	}
-	consumePrimary := func(chunk actionrelationscore.PanelCurriculumEvidence) error {
-		return primary.writeAll(append(slices.Clone(chunk.ManifestFiles), chunk.PackFiles...))
+	sealed, err := actionrelationscore.PrepareProtectedPanel(token)
+	if err != nil {
+		return fail(errors.Join(err, token.Destroy()))
 	}
-	domains := filepath.Join(prerequisites.Root, "domains")
-	primarySummary, err := actionrelationscore.ExecuteProtectedPanel(domains, token, preparePrimary, consumePrimary)
+	if err := token.Destroy(); err != nil {
+		return fail(err)
+	}
+	isolated, err := executeIsolatedPair(ctx, prerequisites, sealed, capBytes)
 	if err != nil {
 		return fail(err)
 	}
-	if err := primary.write(primarySummary.RunEvidenceManifest); err != nil {
-		return fail(err)
-	}
-	if err := primary.write(primarySummary.RunEvidence.File); err != nil {
-		return fail(err)
-	}
-	auditRoot, err := os.MkdirTemp("", "nous-actionrelation-protected-audit-")
+	report, err := publishPanel(prerequisites, isolated.writer, isolated.summary, isolated.gates, lifecycle)
 	if err != nil {
-		return fail(err)
-	}
-	defer os.RemoveAll(auditRoot)
-	audit := newPanelWriter(auditRoot, evidenceRoot, capBytes)
-	prepareAudit := func(fixture actionrelationfixture.PanelFixture) error {
-		return audit.write(actionrelationexp.EvidenceFile{Path: fixturePath, Mode: "100644", Data: fixture.Canonical})
-	}
-	consumeAudit := func(chunk actionrelationscore.PanelCurriculumEvidence) error {
-		return audit.writeAll(append(slices.Clone(chunk.ManifestFiles), chunk.PackFiles...))
-	}
-	auditSummary, err := actionrelationscore.ExecuteProtectedPanel(domains, token, prepareAudit, consumeAudit)
-	if err != nil {
-		return fail(err)
-	}
-	if err := audit.write(auditSummary.RunEvidenceManifest); err != nil {
-		return fail(err)
-	}
-	if err := audit.write(auditSummary.RunEvidence.File); err != nil {
-		return fail(err)
-	}
-	if !reflect.DeepEqual(primarySummary, auditSummary) {
-		return fail(fmt.Errorf("primary and audit protected panel summaries differ"))
-	}
-	if err := comparePanelFiles(primary, audit); err != nil {
-		return fail(err)
-	}
-	report, err := publishPanel(prerequisites, primary, primarySummary, lifecycle)
-	if err != nil {
+		var committed publishedCommitError
+		if errors.As(err, &committed) {
+			return actionrelationscore.Report{}, err
+		}
 		return fail(err)
 	}
 	return report, nil
 }
 
-func publishInvalidProtected(prerequisites panelPrerequisites, panel string, lifecycle panelLifecycleAuthority, cause error) error {
-	reason := terminalReason(cause)
-	fixtureRef, err := ensureInvalidAuthorityRef(prerequisites.Root, actionrelationexp.ExpectedAuthorityPath(panel, "fixture-root"), panel, "fixture-root", reason)
+func publishInvalidPanel(prerequisites panelPrerequisites, panel string, lifecycle panelLifecycleAuthority, cause error) error {
+	publicationPath := filepath.Join(prerequisites.Root, filepath.FromSlash(actionrelationexp.ExpectedAuthorityPath(panel, "publication")))
+	if err := requireAbsentNoFollow(publicationPath); err != nil {
+		return fmt.Errorf("invalid terminal cannot coexist with publication: %w", err)
+	}
+	reason, err := invalidPanelReason(prerequisites, panel, lifecycle, terminalReason(cause))
 	if err != nil {
 		return err
 	}
-	payloadRef, err := ensureInvalidAuthorityRef(prerequisites.Root, actionrelationexp.ExpectedAuthorityPath(panel, "evidence-payload"), panel, "evidence-payload", reason)
+	fixtureRef, err := ensureInvalidAuthorityRef(prerequisites, actionrelationexp.ExpectedAuthorityPath(panel, "fixture-root"), panel, "fixture-root", lifecycle.AttemptCommitment, reason)
 	if err != nil {
 		return err
 	}
-	reportRef, err := ensureInvalidAuthorityRef(prerequisites.Root, actionrelationexp.ExpectedAuthorityPath(panel, "report"), panel, "report", reason)
+	payloadRef, err := ensureInvalidAuthorityRef(prerequisites, actionrelationexp.ExpectedAuthorityPath(panel, "evidence-payload"), panel, "evidence-payload", lifecycle.AttemptCommitment, reason)
+	if err != nil {
+		return err
+	}
+	reportRef, err := ensureInvalidAuthorityRef(prerequisites, actionrelationexp.ExpectedAuthorityPath(panel, "report"), panel, "report", lifecycle.AttemptCommitment, reason)
 	if err != nil {
 		return err
 	}
@@ -141,26 +144,100 @@ func publishInvalidProtected(prerequisites panelPrerequisites, panel string, lif
 	return writeExclusiveAuthority(filepath.Join(prerequisites.Root, filepath.FromSlash(actionrelationexp.ExpectedAuthorityPath(panel, "terminal-receipt"))), receipt.Canonical)
 }
 
-func ensureInvalidAuthorityRef(root, path, panel, kind, reason string) (actionrelationexp.AuthorityRef, error) {
-	physical := filepath.Join(root, filepath.FromSlash(path))
-	if info, err := os.Lstat(physical); err == nil {
-		data, readErr := os.ReadFile(physical)
-		if readErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
-			return actionrelationexp.AuthorityRef{}, fmt.Errorf("invalid partial authority path: %s", path)
+func invalidPanelReason(prerequisites panelPrerequisites, panel string, lifecycle panelLifecycleAuthority, fallback string) (string, error) {
+	reason := ""
+	adopt := func(candidate string) error {
+		if reason == "" {
+			reason = candidate
+			return nil
+		}
+		if reason != candidate {
+			return fmt.Errorf("partial invalid authority reasons disagree")
+		}
+		return nil
+	}
+	for _, kind := range []string{"fixture-root", "evidence-payload", "report"} {
+		path := actionrelationexp.ExpectedAuthorityPath(panel, kind)
+		data, readErr := readRegularNoFollow(filepath.Join(prerequisites.Root, filepath.FromSlash(path)), 0o644)
+		if errors.Is(readErr, unix.ENOENT) {
+			continue
+		}
+		if readErr != nil {
+			return "", readErr
+		}
+		failure, parseErr := actionrelationexp.ParseInvalidAuthority(data)
+		if parseErr == nil {
+			if failure.Panel != panel || failure.Kind != kind || failure.SourceRoot != prerequisites.Build.SourceRoot || failure.AttemptCommitment != lifecycle.AttemptCommitment {
+				return "", fmt.Errorf("partial invalid authority tuple changed: %s", path)
+			}
+			if err := adopt(failure.Reason); err != nil {
+				return "", err
+			}
+		}
+	}
+	receiptPath := actionrelationexp.ExpectedAuthorityPath(panel, "terminal-receipt")
+	data, readErr := readRegularNoFollow(filepath.Join(prerequisites.Root, filepath.FromSlash(receiptPath)), 0o644)
+	if readErr == nil {
+		receipt, parseErr := actionrelationexp.ParseTerminalReceipt(data)
+		if parseErr != nil || receipt.Panel != panel || receipt.State != "invalid" || receipt.SourceRoot != prerequisites.Build.SourceRoot || receipt.AttemptCommitment != lifecycle.AttemptCommitment {
+			return "", fmt.Errorf("existing terminal receipt is not the expected invalid authority")
+		}
+		if err := adopt(receipt.Reason); err != nil {
+			return "", err
+		}
+	} else if !errors.Is(readErr, unix.ENOENT) {
+		return "", readErr
+	}
+	if reason != "" {
+		return reason, nil
+	}
+	return fallback, nil
+}
+
+func ensureInvalidAuthorityRef(prerequisites panelPrerequisites, path, panel, kind, attemptCommitment, reason string) (actionrelationexp.AuthorityRef, error) {
+	physical := filepath.Join(prerequisites.Root, filepath.FromSlash(path))
+	if data, err := readRegularNoFollow(physical, 0o644); err == nil {
+		authority := "development-public-v1"
+		if panel == "validation" {
+			authority = "validation-public-v1"
+		} else if panel == "locked" {
+			authority = attemptCommitment
+		}
+		valid := false
+		if failure, parseErr := actionrelationexp.ParseInvalidAuthority(data); parseErr == nil {
+			valid = failure.Panel == panel && failure.Kind == kind && failure.SourceRoot == prerequisites.Build.SourceRoot && failure.AttemptCommitment == attemptCommitment && failure.Reason == reason
+		} else {
+			switch kind {
+			case "fixture-root":
+				fixture, parseErr := actionrelationfixture.ParsePanelFixture(data)
+				valid = parseErr == nil && fixture.Panel == panel && fixture.Authority == authority
+			case "evidence-payload":
+				_, parseErr := actionrelationexp.ParseEvidencePayload(panel, authority, data)
+				valid = parseErr == nil
+			case "report":
+				report, parseErr := actionrelationscore.ParseReport(data)
+				valid = parseErr == nil && report.Panel == panel && report.Authority == authority
+			}
+		}
+		if !valid {
+			return actionrelationexp.AuthorityRef{}, fmt.Errorf("existing partial authority does not match successful or invalid tuple: %s", path)
 		}
 		return actionrelationexp.Reference(path, data)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !errors.Is(err, unix.ENOENT) {
 		return actionrelationexp.AuthorityRef{}, err
 	}
-	data := []byte(fmt.Sprintf("[\"actionrelation-invalid-authority/v1\",%q,%q,%q]", panel, kind, reason))
-	if err := writeExclusiveAuthority(physical, data); err != nil {
+	failure, err := actionrelationexp.BuildInvalidAuthority(actionrelationexp.InvalidAuthority{Panel: panel, Kind: kind, SourceRoot: prerequisites.Build.SourceRoot, AttemptCommitment: attemptCommitment, Reason: reason})
+	if err != nil {
 		return actionrelationexp.AuthorityRef{}, err
 	}
-	return actionrelationexp.Reference(path, data)
+	if err := writeExclusiveAuthority(physical, failure.Canonical); err != nil {
+		return actionrelationexp.AuthorityRef{}, err
+	}
+	return actionrelationexp.Reference(path, failure.Canonical)
 }
 
 func terminalReason(cause error) string {
-	value := "protected execution failed"
+	value := "panel execution failed"
 	if cause != nil {
 		value = cause.Error()
 	}
@@ -174,6 +251,9 @@ func terminalReason(cause error) string {
 		if result.Len() >= 1000 {
 			break
 		}
+	}
+	if result.Len() == 0 {
+		return "panel execution failed"
 	}
 	return result.String()
 }
@@ -272,13 +352,10 @@ func PrepareProtected(ctx context.Context, repoRoot, panel string, argv []string
 			return actionrelationexp.Running{}, err
 		}
 		secretPath := filepath.Join(commonDir, filepath.FromSlash(location))
-		if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
-			return actionrelationexp.Running{}, err
-		}
 		if err := writeExclusiveSyncedMode(secretPath, secret, 0o600); err != nil {
 			return actionrelationexp.Running{}, fmt.Errorf("persist locked attempt root: %w", err)
 		}
-		readback, err := os.ReadFile(secretPath)
+		readback, err := readRegularNoFollow(secretPath, 0o600)
 		info, statErr := os.Lstat(secretPath)
 		if err != nil || statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !slices.Equal(readback, secret) {
 			return actionrelationexp.Running{}, fmt.Errorf("locked attempt root readback mismatch")
@@ -352,6 +429,9 @@ func verifyCommittedPanelOutcome(prerequisites panelPrerequisites, git func(...s
 	}
 	publication, err := actionrelationexp.ParsePublication(panel, publicationBytes)
 	if err != nil {
+		return err
+	}
+	if err := actionrelationexp.VerifyPublicationTerminal(publication, receipt); err != nil {
 		return err
 	}
 	wantReportRef, _ := actionrelationexp.Reference(reportPath, report.Canonical)
@@ -440,27 +520,48 @@ func verifyCommittedPanelOutcome(prerequisites panelPrerequisites, git func(...s
 	if err != nil || runPack.RunIDsRoot != primary.RunIDsRoot || runPack.TranscriptRowsRoot != primary.TranscriptRowsRoot || runPack.ResultRowsRoot != primary.ResultRowsRoot {
 		return fmt.Errorf("prior run evidence does not close execution roots")
 	}
-	manifestRefs := append([]actionrelationexp.AuthorityRef{}, payload.StructuralMaps...)
-	for _, ref := range payload.ObjectPackRoots {
-		manifestRefs = append(manifestRefs, actionrelationexp.AuthorityRef{Path: ref.Path, Digest: ref.Digest, Mode: "100644"})
+	readRetained := func(path string) ([]byte, error) {
+		return readCommittedWorking(prerequisites.Root, git, prerequisites.Head, path)
 	}
-	for _, group := range [][]actionrelationexp.TranscriptManifestRef{payload.JournalPackRoots, payload.InputPackRoots, payload.DetailPackRoots} {
-		for _, ref := range group {
-			manifestRefs = append(manifestRefs, actionrelationexp.AuthorityRef{Path: ref.Path, Digest: ref.Digest, Mode: "100644"})
-		}
+	reachable, err := actionrelationexp.VerifyRetainedPacks(actionrelationexp.RetainedPackRefs{
+		Panel: panel, Authority: report.Authority, RunEvidence: publication.RunEvidence,
+		ObjectRoots: payload.ObjectPackRoots, IndexRoots: payload.IndexRoots,
+		JournalRoots: payload.JournalPackRoots, InputRoots: payload.InputPackRoots, DetailRoots: payload.DetailPackRoots,
+		Tables: payload.AcquisitionTables, StructuralMaps: payload.StructuralMaps, StoreBoundaries: payload.StoreBoundaries,
+	}, readRetained)
+	if err != nil {
+		return fmt.Errorf("prior retained evidence DAG: %w", err)
 	}
-	for _, ref := range payload.AcquisitionTables {
-		manifestRefs = append(manifestRefs, actionrelationexp.AuthorityRef{Path: ref.Path, Digest: ref.Digest, Mode: "100644"})
+	authorityRoot := strings.TrimSuffix(publication.RunEvidence.Path, "/manifests/run-evidence-root.json") + "/authority"
+	reachable = append(reachable,
+		publication.FixtureRoot.Path, publication.PrimaryExecution.Path, publication.AuditExecution.Path,
+		publication.AuditAttestation.Path, publication.ExecutionCore.Path, publication.EvidencePayload.Path,
+		authorityRoot+"/publication.json",
+	)
+	slices.Sort(reachable)
+	evidenceRoot, _ := actionrelationexp.EvidenceRoot(panel)
+	tree, err := git("ls-tree", "-rz", "--name-only", prerequisites.Head, "--", evidenceRoot)
+	if err != nil {
+		return err
 	}
-	for _, ref := range payload.IndexRoots {
-		manifestRefs = append(manifestRefs, actionrelationexp.AuthorityRef{Path: ref.Path, Digest: ref.Digest, Mode: "100644"})
-	}
-	for _, ref := range manifestRefs {
-		if _, err := verifyCommittedReference(prerequisites, git, ref); err != nil {
-			return err
-		}
+	committedPaths := splitNULTerminated(tree)
+	if !slices.Equal(committedPaths, reachable) {
+		return fmt.Errorf("prior evidence namespace has missing or unreachable files")
 	}
 	return nil
+}
+
+func splitNULTerminated(data []byte) []string {
+	if len(data) == 0 || data[len(data)-1] != 0 {
+		return nil
+	}
+	parts := bytes.Split(data[:len(data)-1], []byte{0})
+	result := make([]string, len(parts))
+	for index, part := range parts {
+		result[index] = string(part)
+	}
+	slices.Sort(result)
+	return result
 }
 
 func verifyCommittedReference(prerequisites panelPrerequisites, git func(...string) ([]byte, error), ref actionrelationexp.AuthorityRef) ([]byte, error) {
@@ -521,35 +622,17 @@ func protectedGitCommonDir(git func(...string) ([]byte, error), root string) (st
 	if !filepath.IsAbs(directory) {
 		directory = filepath.Join(root, directory)
 	}
-	return filepath.Abs(directory)
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(absolute)
 }
 
 func writeExclusiveSyncedMode(path string, data []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		return err
+	directoryMode := os.FileMode(0o755)
+	if mode.Perm() == 0o600 {
+		directoryMode = 0o700
 	}
-	ok := false
-	defer func() {
-		_ = file.Close()
-		if !ok {
-			_ = file.Sync()
-		}
-	}()
-	if _, err := file.Write(data); err != nil {
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	ok = true
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return writeExclusiveNoFollow(path, data, mode, directoryMode)
 }

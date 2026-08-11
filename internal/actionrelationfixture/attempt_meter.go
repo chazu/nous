@@ -20,7 +20,7 @@ type AttemptMeter struct {
 	closed  bool
 }
 
-func BeginAttemptMeter(context DrawContext) (*AttemptMeter, error) {
+func beginAttemptMeter(context DrawContext) (*AttemptMeter, error) {
 	draws, err := precommitDraws(context)
 	if err != nil {
 		return nil, err
@@ -113,5 +113,5 @@ func (m *AttemptMeter) Close() (AttemptLedger, error) {
 	if !m.failed {
 		terminal = "accepted"
 	}
-	return SealAttemptLedger(m.context, m.draws, m.phases, terminal)
+	return sealAttemptLedger(m.context, m.draws, m.phases, terminal)
 }

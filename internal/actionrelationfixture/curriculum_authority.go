@@ -23,10 +23,13 @@ type CurriculumFixture struct {
 }
 
 func SealCurriculumFixture(context DrawContext, curriculum Curriculum, truth CurriculumTruth, ledgers []AttemptLedger) (CurriculumFixture, error) {
+	if context.Panel != "development" {
+		return CurriculumFixture{}, fmt.Errorf("protected fixture sealing requires guarded capability")
+	}
 	if err := validateDrawContext(context); err != nil || curriculum.Family != context.Curriculum%8 || curriculum.WithinFamilyOrdinal != context.Curriculum/8 || len(curriculum.Worlds) != 6 || len(truth.Worlds) != 6 {
 		return CurriculumFixture{}, fmt.Errorf("invalid curriculum fixture input")
 	}
-	wantTruth, err := SealCurriculumTruth(curriculum)
+	wantTruth, err := sealCurriculumTruthMeasured(curriculum, nil)
 	if err != nil || truth.Root != wantTruth.Root {
 		return CurriculumFixture{}, fmt.Errorf("curriculum scorer truth changed")
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationwire"
@@ -263,6 +264,9 @@ func reportClassification(panel string, gates MechanicalGates, inference Inferen
 	}
 	switch panel {
 	case "development":
+		if slices.ContainsFunc(inference.AmortizationRows, func(row AmortizationRow) bool { return row.Status == "incomplete" }) {
+			return "interim-power-unauthorized", nil
+		}
 		if compareFraction(inference.Power, Fraction{80, 100}) >= 0 {
 			return "interim-power-authorized", nil
 		}
@@ -270,6 +274,9 @@ func reportClassification(panel string, gates MechanicalGates, inference Inferen
 	case "validation":
 		return "interim-valid", nil
 	case "locked":
+		if slices.ContainsFunc(inference.AmortizationRows, func(row AmortizationRow) bool { return row.Status == "incomplete" }) {
+			return "valid-null", nil
+		}
 		if compareFraction(inference.PrimarySearchRatio, Fraction{85, 100}) <= 0 && compareFraction(inference.ConfidenceInterval[1], Fraction{1, 1}) < 0 && compareFraction(inference.SavingCoverage, Fraction{80, 100}) >= 0 && compareFraction(inference.RandomizationP, Fraction{5, 100}) < 0 {
 			return "valid-positive", nil
 		}
@@ -298,12 +305,20 @@ func verifyReportInference(panel string, inference Inference) error {
 	}
 	nousSearch, dynamicSearch, nousLifecycle := 0, 0, 0
 	savings := 0
+	incomplete := false
 	for curriculum, row := range inference.AmortizationRows {
-		if row.Panel != panel || row.Curriculum != curriculum || row.Family != curriculum%8 || row.Acquisition < 0 || row.DynamicSearch <= 0 || row.NousSearch < 0 || row.Status != "complete" {
+		if row.Panel != panel || row.Curriculum != curriculum || row.Family != curriculum%8 || row.Acquisition < 0 || row.DynamicSearch < 0 || row.NousSearch < 0 || row.Status != "complete" && row.Status != "incomplete" {
 			return fmt.Errorf("invalid amortization row")
 		}
 		difference := row.DynamicSearch - row.NousSearch
-		if difference <= 0 {
+		incomplete = incomplete || row.Status == "incomplete"
+		if row.Status == "incomplete" {
+			if !row.Infinite || row.Batches != 0 {
+				return fmt.Errorf("invalid incomplete amortization")
+			}
+		} else if row.DynamicSearch <= 0 {
+			return fmt.Errorf("complete amortization has zero dynamic search")
+		} else if difference <= 0 {
 			if !row.Infinite || row.Batches != 0 {
 				return fmt.Errorf("invalid infinite amortization")
 			}
@@ -316,6 +331,16 @@ func verifyReportInference(panel string, inference Inference) error {
 		nousSearch += row.NousSearch
 		dynamicSearch += row.DynamicSearch
 		nousLifecycle += row.NousSearch + row.Acquisition
+	}
+	if incomplete {
+		wantPower := Fraction{0, 1}
+		if panel == "development" {
+			wantPower = Fraction{0, PowerOuterReplicates}
+		}
+		if inference.PrimarySearchRatio != (Fraction{0, 1}) || inference.LifecycleRatio != (Fraction{0, 1}) || inference.ConfidenceInterval != ([2]Fraction{{0, 1}, {0, 1}}) || inference.RandomizationP != (Fraction{InferenceReplicates + 1, InferenceReplicates + 1}) || inference.RandomizationExtreme != InferenceReplicates || inference.SavingCoverage != (Fraction{0, want}) || inference.Power != wantPower {
+			return fmt.Errorf("incomplete inference sentinel changed")
+		}
+		return nil
 	}
 	if inference.PrimarySearchRatio != (Fraction{nousSearch, dynamicSearch}) || inference.LifecycleRatio != (Fraction{nousLifecycle, dynamicSearch}) || inference.SavingCoverage != (Fraction{savings, want}) {
 		return fmt.Errorf("aggregate inference does not reconstruct")

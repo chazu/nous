@@ -15,7 +15,7 @@ func TestCommittedPlanReviewManifestClosesExactVerdictBytes(t *testing.T) {
 	}
 	verdicts := map[string][]byte{}
 	for _, scope := range []string{"architecture", "action-semantics", "experimental-validity"} {
-		path := "docs/actionrelations-reviews/plan/round-11/" + scope + ".txt"
+		path := "docs/actionrelations-reviews/plan/round-13/" + scope + ".txt"
 		verdicts[path], err = os.ReadFile(filepath.Join("../..", path))
 		if err != nil {
 			t.Fatal(err)
@@ -25,7 +25,7 @@ func TestCommittedPlanReviewManifestClosesExactVerdictBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Kind != "plan" || manifest.Round != 11 || manifest.ReviewedCommit != PlanCommit {
+	if manifest.Kind != "plan" || manifest.Round != 13 || manifest.ReviewedCommit != PlanCommit {
 		t.Fatalf("manifest=%+v", manifest)
 	}
 	if err := VerifyReviewArchive("../..", manifest); err != nil {

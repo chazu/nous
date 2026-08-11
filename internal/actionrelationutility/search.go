@@ -40,9 +40,10 @@ type SearchRun struct {
 }
 
 type WorkBudget struct {
-	LifecycleCap  int
-	PhysicalCap   int
-	PriorPhysical int
+	LifecycleCap      int
+	PhysicalCap       int
+	PriorPhysical     int
+	ReservedTerminals int
 }
 
 func ExecuteComplete(domainsDir string, world actionrelations.World, panel, authority string, curriculum, worldOrdinal, cap int, token string) (SearchRun, error) {
@@ -109,12 +110,14 @@ func executePolicyOnStore(store *unit.Store, normalized actionrelations.Normaliz
 		return SearchRun{}, err
 	}
 	initialTotal := sumWorkVector(initialWork)
-	if budget.LifecycleCap < 1 || budget.PhysicalCap < 1 || budget.PriorPhysical < 0 || budget.PriorPhysical >= budget.PhysicalCap {
+	lifecycleCap := budget.LifecycleCap - budget.ReservedTerminals
+	physicalCap := budget.PhysicalCap - budget.ReservedTerminals
+	if budget.LifecycleCap < 1 || budget.PhysicalCap < 1 || budget.ReservedTerminals < 0 || lifecycleCap < 1 || physicalCap < 1 || budget.PriorPhysical < 0 || budget.PriorPhysical >= physicalCap {
 		return SearchRun{}, fmt.Errorf("invalid utility work budget")
 	}
-	effectiveCap := initialTotal + budget.PhysicalCap - budget.PriorPhysical
-	if budget.LifecycleCap < effectiveCap {
-		effectiveCap = budget.LifecycleCap
+	effectiveCap := initialTotal + physicalCap - budget.PriorPhysical
+	if lifecycleCap < effectiveCap {
+		effectiveCap = lifecycleCap
 	}
 	if initialTotal >= effectiveCap {
 		return SearchRun{}, fmt.Errorf("utility budget exhausted before run start")

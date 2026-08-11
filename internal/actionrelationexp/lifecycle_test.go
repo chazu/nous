@@ -40,6 +40,18 @@ func TestDevelopmentTerminalAndPublicationUseExactZeroReceiptAuthority(t *testin
 	if err != nil || VerifyPublication(publication) != nil {
 		t.Fatal(err)
 	}
+	if err := VerifyPublicationTerminal(publication, receipt); err != nil {
+		t.Fatal(err)
+	}
+	invalidReceipt := receipt
+	invalidReceipt.State = "invalid"
+	invalidReceipt, err = BuildTerminalReceipt(invalidReceipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if VerifyPublicationTerminal(publication, invalidReceipt) == nil {
+		t.Fatal("invalid receipt authorized publication")
+	}
 	if parsed, err := ParsePublication("development", publication.Canonical); err != nil || parsed.Digest != publication.Digest {
 		t.Fatalf("parse publication: %v", err)
 	}

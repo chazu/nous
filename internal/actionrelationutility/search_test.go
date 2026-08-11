@@ -274,6 +274,36 @@ func TestUtilityPhysicalCapIsSeparateAndCumulativeAcrossWorlds(t *testing.T) {
 	}
 }
 
+func TestUtilityBudgetReservesTypedTerminalForEveryRemainingWorld(t *testing.T) {
+	world := independentUtilityWorld()
+	initial := [12]int{}
+	initial[10] = 1
+	first, err := ExecutePolicyContinuing(
+		"../../domains", world, actionrelationsearch.Complete,
+		"development", "authority", 8, 4, initial,
+		WorkBudget{LifecycleCap: 3, PhysicalCap: 3, PriorPhysical: 1, ReservedTerminals: 1},
+		"reserved-terminal-first",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Terminal != "budget-exhausted" || first.WorkTotal != 2 || first.PhysicalWork != 1 {
+		t.Fatalf("first reserved terminal run=%+v", first)
+	}
+	second, err := ExecutePolicyContinuing(
+		"../../domains", world, actionrelationsearch.Complete,
+		"development", "authority", 8, 5, first.WorkVector,
+		WorkBudget{LifecycleCap: 3, PhysicalCap: 3, PriorPhysical: 2},
+		"reserved-terminal-second",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Terminal != "budget-exhausted" || second.WorkTotal != 3 || second.PhysicalWork != 1 {
+		t.Fatalf("second reserved terminal run=%+v", second)
+	}
+}
+
 func independentUtilityWorld() actionrelations.World {
 	return actionrelations.World{
 		State: actionrelations.State{Cells: []actionrelations.Cell{{Name: "x", Value: 0}, {Name: "y", Value: 0}, {Name: "z", Value: 0}}},

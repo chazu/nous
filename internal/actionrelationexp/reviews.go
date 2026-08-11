@@ -76,12 +76,24 @@ func VerifyReviewManifest(value ReviewManifest, verdicts map[string][]byte) erro
 	scopes := []string{"architecture", "action-semantics", "experimental-validity"}
 	for index, review := range value.Rows {
 		path := fmt.Sprintf("docs/actionrelations-reviews/%s/round-%d/%s.txt", value.Kind, value.Round, scopes[index])
-		if review.Scope != scopes[index] || review.ReviewerTask == "" || !isASCII(review.ReviewerTask) || review.VerdictPath != path || !digestText(review.VerdictDigest) || !digestText(review.AttestationDigest) || !bytes.Equal(verdicts[path], []byte("ACCEPTED")) || review.VerdictDigest != shaHex(verdicts[path]) {
-			return fmt.Errorf("invalid review row %d", index)
+		if review.Scope != scopes[index] {
+			return fmt.Errorf("invalid review row %d scope", index)
+		}
+		if review.ReviewerTask == "" || !isASCII(review.ReviewerTask) {
+			return fmt.Errorf("invalid review row %d task", index)
+		}
+		if review.VerdictPath != path {
+			return fmt.Errorf("invalid review row %d path", index)
+		}
+		if !digestText(review.VerdictDigest) || !digestText(review.AttestationDigest) {
+			return fmt.Errorf("invalid review row %d digest", index)
+		}
+		if !bytes.Equal(verdicts[path], []byte("ACCEPTED")) || review.VerdictDigest != shaHex(verdicts[path]) {
+			return fmt.Errorf("invalid review row %d verdict", index)
 		}
 		attestation, _ := json.Marshal([]any{"actionrelation-review-attestation/v1", value.Kind, value.Round, value.ReviewedCommit, value.ArchiveDigest, review.Scope, review.ReviewerTask, review.VerdictPath, review.VerdictDigest, "accepted"})
 		if review.AttestationDigest != shaHex(attestation) {
-			return fmt.Errorf("review row %d attestation mismatch", index)
+			return fmt.Errorf("review row %d attestation mismatch: have %s want %s", index, review.AttestationDigest, shaHex(attestation))
 		}
 		wires[index] = []any{review.Scope, review.ReviewerTask, review.VerdictPath, review.VerdictDigest, "accepted", review.AttestationDigest}
 	}

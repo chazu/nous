@@ -138,6 +138,25 @@ func verifyCertificateAuthority(run SearchRun) error {
 		}
 		objects[digest] = verifiedObject{unit: u, canonical: canonical, row: row}
 	}
+	semanticObjects := make(map[string][]byte, len(objects))
+	for digest, object := range objects {
+		semanticObjects[digest] = object.canonical
+	}
+	for _, object := range run.StructuralObjects {
+		semanticObjects[digestBytesText(object.Bytes)] = object.Bytes
+	}
+	for _, record := range run.Records {
+		for _, values := range [][][]byte{record.Inputs, record.Outputs} {
+			for _, value := range values {
+				semanticObjects[digestBytesText(value)] = value
+			}
+		}
+	}
+	if run.Terminal == "completed" {
+		if err := actionrelationsearch.VerifyResultSemantics(run.Search, semanticObjects); err != nil {
+			return fmt.Errorf("utility search semantics: %w", err)
+		}
+	}
 	roots := map[string]actionrelationexp.OperationRoot{}
 	for _, root := range run.ProofRoots {
 		if roots[root.Digest].Digest != "" || actionrelationexp.VerifyOperationRange(root, run.Transcript) != nil {
@@ -227,6 +246,13 @@ func verifyCertificateAuthority(run SearchRun) error {
 		var attemptRows []string
 		if json.Unmarshal(attempt.row[5], &attemptRows) != nil || misses != 1 || !slices.Equal(operationRows, attemptRows) {
 			return fmt.Errorf("certificate attempt operation rows do not reconstruct: range=%v attempt=%v misses=%d", operationRows, attemptRows, misses)
+		}
+		certificateCanonical := []byte(nil)
+		if certificateDigest != utilityZeroDigest {
+			certificateCanonical = semanticObjects[certificateDigest]
+		}
+		if err := actionrelationsearch.VerifyCertificateDecisionSemantics(semanticObjects[state], semanticObjects[aDigest], semanticObjects[bDigest], attemptRows, result, certificateDigest, certificateCanonical); err != nil {
+			return fmt.Errorf("certificate decision semantics: %w", err)
 		}
 		if result == "certified" {
 			certificate := certificates[certificateDigest]

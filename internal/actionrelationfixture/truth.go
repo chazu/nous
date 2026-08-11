@@ -46,10 +46,20 @@ type CurriculumTruth struct {
 }
 
 func SealCurriculumTruth(curriculum Curriculum) (CurriculumTruth, error) {
-	return SealCurriculumTruthMeasured(curriculum, nil)
+	if curriculum.Draws.Context.Panel != "development" {
+		return CurriculumTruth{}, fmt.Errorf("protected truth sealing requires guarded capability")
+	}
+	return sealCurriculumTruthMeasured(curriculum, nil)
 }
 
 func SealCurriculumTruthMeasured(curriculum Curriculum, reserve actionrelationfixturecore.WorkReservation) (CurriculumTruth, error) {
+	if curriculum.Draws.Context.Panel != "development" {
+		return CurriculumTruth{}, fmt.Errorf("protected measured truth requires guarded capability")
+	}
+	return sealCurriculumTruthMeasured(curriculum, reserve)
+}
+
+func sealCurriculumTruthMeasured(curriculum Curriculum, reserve actionrelationfixturecore.WorkReservation) (CurriculumTruth, error) {
 	if len(curriculum.Worlds) != 6 {
 		return CurriculumTruth{}, fmt.Errorf("curriculum truth requires six worlds")
 	}
@@ -154,12 +164,16 @@ func VerifyWorldTruth(truth WorldTruth) error {
 }
 
 type truthNode struct {
-	state     actionrelations.State
+	stateJSON []byte
 	remaining []actionrelations.Occurrence
 }
 
 func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelationfixturecore.WorkReservation) ([]string, []PairLabelRow, error) {
-	queue := []truthNode{{state: world.State, remaining: world.Occurrences}}
+	initialState, err := world.State.CanonicalJSON()
+	if err != nil {
+		return nil, nil, err
+	}
+	queue := []truthNode{{stateJSON: initialState, remaining: world.Occurrences}}
 	seenNodes := map[string]bool{}
 	rows := map[string]PairLabelRow{}
 	terminals := map[string]bool{}
@@ -174,8 +188,7 @@ func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelatio
 			continue
 		}
 		seenNodes[identity] = true
-		stateJSON, _ := node.state.CanonicalJSON()
-		stateDigest, _ := node.state.Digest()
+		stateDigest := shaHex(node.stateJSON)
 		for leftIndex := 0; leftIndex < len(node.remaining); leftIndex++ {
 			for rightIndex := leftIndex + 1; rightIndex < len(node.remaining); rightIndex++ {
 				left, right, err := actionrelations.CanonicalPair(node.remaining[leftIndex], node.remaining[rightIndex])
@@ -197,7 +210,7 @@ func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelatio
 				}
 				leftJSON, _ := left.Action.CanonicalJSON()
 				rightJSON, _ := right.Action.CanonicalJSON()
-				observation, err := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
+				observation, err := actionrelationoracle.Observe(node.stateJSON, leftJSON, rightJSON)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -215,19 +228,23 @@ func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelatio
 		}
 		applied := 0
 		for _, occurrence := range node.remaining {
-			next, outcome, err := actionrelations.Apply(node.state, occurrence.Action)
+			actionJSON, err := occurrence.Action.CanonicalJSON()
 			if err != nil {
 				return nil, nil, err
 			}
-			if outcome != "applied" {
+			transition, err := actionrelationoracle.Apply(node.stateJSON, actionJSON)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !transition.Applicable {
 				continue
 			}
 			applied++
 			digest, _ := occurrence.Digest()
-			queue = append(queue, truthNode{state: next, remaining: removeTruthOccurrence(node.remaining, digest)})
+			queue = append(queue, truthNode{stateJSON: transition.State, remaining: removeTruthOccurrence(node.remaining, digest)})
 		}
 		if applied == 0 {
-			terminalDigest, err := fixtureTerminalDigest(node.state, node.remaining)
+			terminalDigest, err := fixtureTerminalDigest(node.stateJSON, node.remaining)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -255,11 +272,8 @@ func enumerateTruth(world actionrelations.NormalizedWorld, reserve actionrelatio
 	return terminalRows, result, nil
 }
 
-func fixtureTerminalDigest(state actionrelations.State, remaining []actionrelations.Occurrence) (string, error) {
-	stateJSON, err := state.CanonicalJSON()
-	if err != nil {
-		return "", err
-	}
+func fixtureTerminalDigest(stateJSON []byte, remaining []actionrelations.Occurrence) (string, error) {
+	var err error
 	digests := make([]string, len(remaining))
 	for index, occurrence := range remaining {
 		digests[index], err = occurrence.Digest()
@@ -353,13 +367,12 @@ func validPairLabel(row PairLabelRow) bool {
 }
 
 func truthNodeIdentity(node truthNode) string {
-	stateJSON, _ := node.state.CanonicalJSON()
 	digests := make([]string, len(node.remaining))
 	for index, occurrence := range node.remaining {
 		digests[index], _ = occurrence.Digest()
 	}
 	slices.Sort(digests)
-	wire, _ := json.Marshal([]any{json.RawMessage(stateJSON), digests})
+	wire, _ := json.Marshal([]any{json.RawMessage(node.stateJSON), digests})
 	return string(wire)
 }
 

@@ -115,7 +115,7 @@ func sealPanelFixture(panel, authority string, attempts []GeneratedAttempt) (Pan
 		if validateDrawContext(attempt.Context) != nil || attempt.Context.Panel != panel || attempt.Context.Authority != authority || attempt.Context.Curriculum != curriculum || attempt.Ledger.Terminal != "accepted" || VerifyCurriculumFixture(attempt.Fixture) != nil || attempt.Fixture.Panel != panel || attempt.Fixture.Curriculum != curriculum || len(attempt.Truth.Worlds) != 6 {
 			return PanelFixture{}, fmt.Errorf("invalid panel curriculum %d", curriculum)
 		}
-		wantTruth, err := SealCurriculumTruth(attempt.Curriculum)
+		wantTruth, err := sealCurriculumTruthMeasured(attempt.Curriculum, nil)
 		if err != nil || wantTruth.Root != attempt.Truth.Root {
 			return PanelFixture{}, fmt.Errorf("panel curriculum %d changed scorer truth", curriculum)
 		}
@@ -178,6 +178,26 @@ func VerifyPanelFixture(fixture PanelFixture) error {
 	want, _ := json.Marshal([]any{"actionrelation-fixture-root/v2", fixture.Panel, fixture.Authority, fixture.CurriculumRoots, fixture.ScorerRoot})
 	if !bytes.Equal(want, fixture.Canonical) || fixture.Digest != digestBytes(fixture.Canonical) || len(fixture.Canonical) > 4096 {
 		return fmt.Errorf("invalid panel fixture wire")
+	}
+	return nil
+}
+
+// VerifyGeneratedPanel proves that every sealed attempt closes the supplied
+// panel root. It intentionally returns no reconstructed fixture, so it cannot
+// be used to mint protected panel authority.
+func VerifyGeneratedPanel(attempts []GeneratedAttempt, fixture PanelFixture) error {
+	wantCount, err := validatePanelFixtureAuthority(fixture.Panel, fixture.Authority)
+	if err != nil || len(attempts) != wantCount || VerifyPanelFixture(fixture) != nil {
+		return fmt.Errorf("invalid generated panel authority")
+	}
+	for curriculum, attempt := range attempts {
+		if attempt.Context.Panel != fixture.Panel || attempt.Context.Authority != fixture.Authority || attempt.Context.Curriculum != curriculum || VerifyGeneratedAttempt(attempt) != nil {
+			return fmt.Errorf("invalid generated panel curriculum %d", curriculum)
+		}
+	}
+	want, err := sealPanelFixture(fixture.Panel, fixture.Authority, attempts)
+	if err != nil || want.Digest != fixture.Digest || !bytes.Equal(want.Canonical, fixture.Canonical) {
+		return fmt.Errorf("generated panel fixture changed")
 	}
 	return nil
 }

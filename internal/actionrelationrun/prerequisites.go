@@ -155,7 +155,7 @@ func persistCompetenceEvidence(root string, evidence actionrelationcompetence.Ev
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Mkdir(directory, 0o755); err != nil {
+	if err := ensureDirectoryNoFollow(directory, 0o755); err != nil {
 		return err
 	}
 	files := make([]actionrelationcompetence.EvidenceFile, 0, len(evidence.CaseFiles)+len(evidence.ResultFiles)+2)
@@ -183,7 +183,7 @@ func persistCompetenceEvidence(root string, evidence actionrelationcompetence.Ev
 		return err
 	}
 	for _, file := range files {
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file.Path)))
+		data, err := readRegularNoFollow(filepath.Join(root, filepath.FromSlash(file.Path)), 0o644)
 		if err != nil || !bytes.Equal(data, file.Data) {
 			return fmt.Errorf("competence evidence readback mismatch: %s", file.Path)
 		}
@@ -193,6 +193,9 @@ func persistCompetenceEvidence(root string, evidence actionrelationcompetence.Ev
 
 func LoadCompetenceRoot(repoRoot string, data []byte, build actionrelationexp.BuildAuthority) (actionrelationcompetence.Root, error) {
 	directory := filepath.Join(repoRoot, ".nous", "actionrelations-v1-competence-evidence")
+	if err := checkDirectoryNoFollow(directory); err != nil {
+		return actionrelationcompetence.Root{}, err
+	}
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return actionrelationcompetence.Root{}, err
@@ -205,7 +208,7 @@ func LoadCompetenceRoot(repoRoot string, data []byte, build actionrelationexp.Bu
 		if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
 			return actionrelationcompetence.Root{}, fmt.Errorf("invalid retained competence path: %s", entry.Name())
 		}
-		encoded, readErr := os.ReadFile(path)
+		encoded, readErr := readRegularNoFollow(path, 0o644)
 		if readErr != nil {
 			return actionrelationcompetence.Root{}, readErr
 		}
@@ -235,57 +238,16 @@ func LoadCompetenceRoot(repoRoot string, data []byte, build actionrelationexp.Bu
 }
 
 func writeExclusiveAuthority(path string, data []byte) error {
-	if info, err := os.Lstat(path); err == nil {
-		existing, readErr := os.ReadFile(path)
-		if readErr == nil && info.Mode().IsRegular() && info.Mode().Perm() == 0o644 && bytes.Equal(existing, data) {
-			return nil
-		}
-		return fmt.Errorf("authority path already exists with different bytes: %s", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	if err := writeExclusiveSynced(path, data); err != nil {
-		return err
-	}
-	return syncDirectory(filepath.Dir(path))
+	_, err := installAtomicNoFollow(path, data, 0o644, 0o755)
+	return err
 }
 
 func writeExclusiveSynced(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	ok := false
-	defer func() {
-		_ = file.Close()
-		if !ok {
-			// Preserve a partial exclusive authority file as evidence of failure.
-			_ = file.Sync()
-		}
-	}()
-	if _, err := file.Write(data); err != nil {
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	ok = true
-	return nil
+	return writeExclusiveNoFollow(path, data, 0o644, 0o755)
 }
 
 func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return syncDirectoryNoFollow(path)
 }
 
 func exactProcessEnvironment(rows []actionrelationexp.EnvironmentRow) bool {

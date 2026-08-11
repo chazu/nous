@@ -323,7 +323,7 @@ func ExecuteFamilyScope(domainsDir, token string, family int, scope string) (Run
 const zeroDigest = "0000000000000000000000000000000000000000000000000000000000000000"
 
 const (
-	acceptedPlanCommit      = "a3e18b10a01cf83315bff398586e91cd33544861"
+	acceptedPlanCommit      = "15808faae785fe22b025b6de3a6751ed6d365c00"
 	acquisitionLifecycleCap = 2_000_000
 )
 

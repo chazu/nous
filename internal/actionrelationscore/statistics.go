@@ -63,6 +63,7 @@ type pairedCurriculum struct {
 	family     int
 	nous       CurriculumPolicyRow
 	dynamic    CurriculumPolicyRow
+	eligible   bool
 	mechanical bool
 }
 
@@ -77,6 +78,10 @@ func Infer(panel, authority string, worldRows []WorldPolicyRow, rows []Curriculu
 	}
 	result.Power = Fraction{0, 1}
 	if panel == "development" {
+		if slices.ContainsFunc(pairs, func(pair pairedCurriculum) bool { return !pair.eligible }) {
+			result.Power = Fraction{0, PowerOuterReplicates}
+			return result, nil
+		}
 		power, successes, err := estimatePower(authority, pairs, PowerOuterReplicates, PowerInnerReplicates)
 		if err != nil {
 			return Inference{}, err
@@ -123,10 +128,8 @@ func pairedRows(panel string, worldRows []WorldPolicyRow, rows []CurriculumPolic
 			return nil, fmt.Errorf("curriculum %d lacks a policy", curriculum)
 		}
 		nous, dynamic := policies[actionrelationsearch.NousSleep], policies[actionrelationsearch.DynamicSleep]
-		if nous.AggregateTerminal != "completed" || dynamic.AggregateTerminal != "completed" || !nous.BehaviorEqual || !dynamic.BehaviorEqual || dynamic.SearchTotal <= 0 {
-			return nil, fmt.Errorf("curriculum %d primary policies did not mechanically complete", curriculum)
-		}
-		pairs[curriculum] = pairedCurriculum{curriculum: curriculum, family: curriculum % 8, nous: nous, dynamic: dynamic, mechanical: mechanical[curriculum]}
+		eligible := nous.AggregateTerminal == "completed" && dynamic.AggregateTerminal == "completed" && nous.BehaviorEqual && dynamic.BehaviorEqual && dynamic.SearchTotal > 0
+		pairs[curriculum] = pairedCurriculum{curriculum: curriculum, family: curriculum % 8, nous: nous, dynamic: dynamic, eligible: eligible, mechanical: mechanical[curriculum]}
 	}
 	return pairs, nil
 }
@@ -138,24 +141,39 @@ func inferPairs(panel, authority string, pairs []pairedCurriculum, replicates, l
 	result := Inference{AmortizationRows: make([]AmortizationRow, len(pairs))}
 	nousSearch, dynamicSearch, nousLifecycle, dynamicLifecycle, savings := 0, 0, 0, 0, 0
 	byFamily := make([][]pairedCurriculum, 8)
+	allEligible := true
 	for index, pair := range pairs {
 		if pair.family < 0 || pair.family > 7 {
 			return Inference{}, fmt.Errorf("invalid pair family")
 		}
+		allEligible = allEligible && pair.eligible
 		byFamily[pair.family] = append(byFamily[pair.family], pair)
 		nousSearch += pair.nous.SearchTotal
 		dynamicSearch += pair.dynamic.SearchTotal
 		nousLifecycle += pair.nous.LifecycleTotal
 		dynamicLifecycle += pair.dynamic.LifecycleTotal
 		difference := pair.dynamic.SearchTotal - pair.nous.SearchTotal
-		row := AmortizationRow{Panel: panel, Curriculum: pair.curriculum, Family: pair.family, Acquisition: sum(pair.nous.AcquisitionWorkVector), DynamicSearch: pair.dynamic.SearchTotal, NousSearch: pair.nous.SearchTotal, Status: "complete"}
-		if difference <= 0 {
+		status := "complete"
+		if pair.nous.AggregateTerminal != "completed" || pair.dynamic.AggregateTerminal != "completed" {
+			status = "incomplete"
+		}
+		row := AmortizationRow{Panel: panel, Curriculum: pair.curriculum, Family: pair.family, Acquisition: sum(pair.nous.AcquisitionWorkVector), DynamicSearch: pair.dynamic.SearchTotal, NousSearch: pair.nous.SearchTotal, Status: status}
+		if status == "incomplete" || difference <= 0 {
 			row.Infinite = true
 		} else {
 			row.Batches = (row.Acquisition + difference - 1) / difference
 			savings++
 		}
 		result.AmortizationRows[index] = row
+	}
+	if !allEligible {
+		result.PrimarySearchRatio = Fraction{0, 1}
+		result.LifecycleRatio = Fraction{0, 1}
+		result.ConfidenceInterval = [2]Fraction{{0, 1}, {0, 1}}
+		result.RandomizationExtreme = replicates
+		result.RandomizationP = Fraction{replicates + 1, replicates + 1}
+		result.SavingCoverage = Fraction{0, len(pairs)}
+		return result, nil
 	}
 	if dynamicSearch <= 0 || dynamicLifecycle <= 0 {
 		return Inference{}, fmt.Errorf("zero inference denominator")

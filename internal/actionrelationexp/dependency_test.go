@@ -67,8 +67,11 @@ func TestProtectedConstructorSurfaceHasOneGuardedProductionPath(t *testing.T) {
 	}
 	wants := []occurrence{
 		{needle: "actionrelationcap.Authorize(", path: "../actionrelationrun/protected.go", count: 1},
-		{needle: "actionrelationfixture.GenerateProtectedPanel(", path: "../actionrelationscore/panel.go", count: 1},
+		{needle: "actionrelationscore.PrepareProtectedPanel(", path: "../actionrelationrun/protected.go", count: 1},
+		{needle: "actionrelationfixture.GenerateProtectedPanel(", path: "../actionrelationscore/sealed.go", count: 1},
 		{needle: "token.BeginConstruction()", path: "../actionrelationfixture/panel_authority.go", count: 1},
+		{needle: "actionrelationscore.ExecuteSealedPanel(", path: "../actionrelationrun/isolated.go", count: 1},
+		{needle: "actionrelationrun.ExecuteIsolatedPolicyWorker(", path: "../../cmd/nous/main.go", count: 1},
 	}
 	productionRoots := []string{"../actionrelationcap", "../actionrelationfixture", "../actionrelationrun", "../actionrelationscore", "../../cmd/nous"}
 	for _, want := range wants {
@@ -100,6 +103,30 @@ func TestProtectedConstructorSurfaceHasOneGuardedProductionPath(t *testing.T) {
 			t.Fatalf("protected surface %q count=%d want=%d", want.needle, found, want.count)
 		}
 	}
+	for _, forbidden := range []string{
+		"func BeginAttemptMeter(",
+		"func SealAttemptLedger(",
+		"func BuildCurriculumFromCatalogs(",
+	} {
+		for _, root := range productionRoots {
+			err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+					return err
+				}
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return readErr
+				}
+				if strings.Contains(string(data), forbidden) {
+					t.Fatalf("protected construction backdoor %q remains in %s", forbidden, path)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 func TestActionRelationProductionSourcesContainNoPanelAnswers(t *testing.T) {
@@ -122,6 +149,22 @@ func TestActionRelationProductionSourcesContainNoPanelAnswers(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestScorerTruthReachabilityUsesOnlyIndependentOracleTransitions(t *testing.T) {
+	data, err := os.ReadFile("../actionrelationfixture/truth.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "actionrelationoracle.Apply(") || !strings.Contains(text, "actionrelationoracle.Observe(") {
+		t.Fatal("scorer truth does not use the independent oracle for transitions and labels")
+	}
+	for _, forbidden := range []string{"actionrelations.Apply(", "actionrelations.Applicable(", "actionrelations.ExecuteHistory(", "actionrelations.ParseState("} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("scorer truth reaches production semantics through %q", forbidden)
 		}
 	}
 }

@@ -16,9 +16,9 @@ func TestExactFamilyBootstrapRandomizationAndPowerSchedule(t *testing.T) {
 	pairs := make([]pairedCurriculum, 16)
 	for curriculum := range pairs {
 		pairs[curriculum] = pairedCurriculum{
-			curriculum: curriculum, family: curriculum % 8, mechanical: true,
-			nous:    CurriculumPolicyRow{SearchTotal: 80, LifecycleTotal: 90, AcquisitionWorkVector: [12]int{10}},
-			dynamic: CurriculumPolicyRow{SearchTotal: 100, LifecycleTotal: 100},
+			curriculum: curriculum, family: curriculum % 8, eligible: true, mechanical: true,
+			nous:    CurriculumPolicyRow{AggregateTerminal: "completed", SearchTotal: 80, LifecycleTotal: 90, AcquisitionWorkVector: [12]int{10}},
+			dynamic: CurriculumPolicyRow{AggregateTerminal: "completed", SearchTotal: 100, LifecycleTotal: 100},
 		}
 	}
 	inference, err := inferPairs("development", "development-public-v1", pairs, 100, 1, 98, "bootstrap-family-row", "randomization-swap", nil)
@@ -39,6 +39,31 @@ func TestExactFamilyBootstrapRandomizationAndPowerSchedule(t *testing.T) {
 	}
 	if power != (Fraction{5, 5}) || successes != 5 {
 		t.Fatalf("power = %+v successes=%d", power, successes)
+	}
+}
+
+func TestIncompletePrimaryPairProducesExactNullSentinelAndAmortizationRow(t *testing.T) {
+	pairs := make([]pairedCurriculum, 16)
+	for curriculum := range pairs {
+		pairs[curriculum] = pairedCurriculum{
+			curriculum: curriculum, family: curriculum % 8, eligible: true, mechanical: true,
+			nous:    CurriculumPolicyRow{AggregateTerminal: "completed", SearchTotal: 80, AcquisitionWorkVector: [12]int{10}},
+			dynamic: CurriculumPolicyRow{AggregateTerminal: "completed", SearchTotal: 100},
+		}
+	}
+	pairs[3].eligible = false
+	pairs[3].nous.AggregateTerminal = "budget-exhausted"
+	pairs[3].nous.SearchTotal = 37
+	inference, err := inferPairs("development", "development-public-v1", pairs, 100, 1, 98, "bootstrap-family-row", "randomization-swap", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inference.PrimarySearchRatio != (Fraction{0, 1}) || inference.LifecycleRatio != (Fraction{0, 1}) || inference.RandomizationP != (Fraction{101, 101}) || inference.SavingCoverage != (Fraction{0, 16}) {
+		t.Fatalf("incomplete inference did not use null sentinel: %+v", inference)
+	}
+	row := inference.AmortizationRows[3]
+	if row.Status != "incomplete" || !row.Infinite || row.NousSearch != 37 || row.DynamicSearch != 100 || row.Acquisition != 10 {
+		t.Fatalf("incomplete amortization did not retain partial operands: %+v", row)
 	}
 }
 

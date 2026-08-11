@@ -7,7 +7,7 @@ import (
 
 func TestAttemptMeterReservesEventsBeforeItsNamedPredicate(t *testing.T) {
 	context := DrawContext{Panel: "development", Authority: "development-public-v1", Curriculum: 0, CurriculumSeed: 851001, Attempt: 0}
-	meter, err := BeginAttemptMeter(context)
+	meter, err := beginAttemptMeter(context)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestAttemptMeterReservesEventsBeforeItsNamedPredicate(t *testing.T) {
 
 func TestAttemptMeterStopsOnRejectedPredicateAndSealsLedger(t *testing.T) {
 	context := DrawContext{Panel: "validation", Authority: "validation-public-v1", Curriculum: 0, CurriculumSeed: 852001, Attempt: 0}
-	meter, err := BeginAttemptMeter(context)
+	meter, err := beginAttemptMeter(context)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestAttemptMeterStopsOnRejectedPredicateAndSealsLedger(t *testing.T) {
 
 func TestAttemptMeterRejectsBeforeCrossingPhysicalCap(t *testing.T) {
 	context := DrawContext{Panel: "development", Authority: "development-public-v1", Curriculum: 0, CurriculumSeed: 851001, Attempt: 1}
-	meter, err := BeginAttemptMeter(context)
+	meter, err := beginAttemptMeter(context)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	PlanArchiveDigest  = "b0f41759d9335c74f200f3d288820f690ad5592f0b5878ea3b2971bccf0691ca"
+	PlanArchiveDigest  = "b0b5f893d9a79d4a7deec1c0f020e940be8b0be6bb41bbb05035d39e7c4418d8"
 	BuildAuthorityPath = "docs/actionrelations-build-authority.json"
 	PanelBinaryPath    = ".nous/bin/actionrelation-nous-v1"
 )
@@ -273,6 +273,18 @@ func lowerHex(value string) bool {
 
 func boundedASCII(value string, maximum int) bool {
 	return value != "" && len(value) <= maximum && isASCII(value)
+}
+
+func boundedPrintableASCII(value string, maximum int) bool {
+	if len(value) < 1 || len(value) > maximum {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if character < 0x20 || character > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func safeToken(value string) bool {

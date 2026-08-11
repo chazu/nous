@@ -68,3 +68,23 @@ func TestReportRejectsUnsafeRefsAndProtectedZeroRunningReceipt(t *testing.T) {
 		t.Fatalf("locked boundary classification=%q err=%v", classification, err)
 	}
 }
+
+func TestLockedIncompleteInferenceIsValidNullRatherThanInvalid(t *testing.T) {
+	inference := Inference{
+		PrimarySearchRatio: Fraction{0, 1}, LifecycleRatio: Fraction{0, 1}, ConfidenceInterval: [2]Fraction{{0, 1}, {0, 1}},
+		RandomizationP: Fraction{10001, 10001}, RandomizationExtreme: 10000, SavingCoverage: Fraction{0, 32}, Power: Fraction{0, 1},
+	}
+	for curriculum := 0; curriculum < 32; curriculum++ {
+		status := "complete"
+		if curriculum == 4 {
+			status = "incomplete"
+		}
+		inference.AmortizationRows = append(inference.AmortizationRows, AmortizationRow{Panel: "locked", Curriculum: curriculum, Family: curriculum % 8, Acquisition: 20, DynamicSearch: 100, NousSearch: 85, Batches: 2, Status: status})
+	}
+	inference.AmortizationRows[4].Batches = 0
+	inference.AmortizationRows[4].Infinite = true
+	classification, err := reportClassification("locked", MechanicalGates{true, true, true, true, true, true, true, true}, inference)
+	if err != nil || classification != "valid-null" {
+		t.Fatalf("incomplete locked classification=%q err=%v", classification, err)
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/chazu/nous/internal/actionrelationcap"
 	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationfixture"
 )
@@ -37,43 +36,21 @@ type PanelSummary struct {
 	CurriculumRowsRoot  string
 }
 
-// ExecuteDevelopmentPanel runs the exact public 16-curriculum panel. Evidence
-// is delivered one curriculum at a time so callers can retain it without ever
-// holding the multi-gigabyte panel in memory.
-func ExecuteDevelopmentPanel(domainsDir string, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error) (PanelSummary, error) {
+// ExecuteSealedPanel consumes a verified supervisor fixture and has no access
+// to the seed authority that constructed it.
+func ExecuteSealedPanel(domainsDir string, sealed SealedPanel, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error) (PanelSummary, error) {
 	if prepare == nil || consume == nil {
-		return PanelSummary{}, fmt.Errorf("development panel requires preparation and evidence consumers")
+		return PanelSummary{}, fmt.Errorf("sealed panel requires preparation and evidence consumers")
 	}
-	attempts, fixture, err := actionrelationfixture.GenerateDevelopmentPanel()
-	if err != nil {
-		return PanelSummary{}, err
+	if sealed.panel == "" || sealed.authority == "" || actionrelationfixture.VerifyGeneratedPanel(sealed.attempts, sealed.fixture) != nil {
+		return PanelSummary{}, fmt.Errorf("invalid sealed panel")
 	}
-	return executeGeneratedPanel(domainsDir, "development", "development-public-v1", attempts, fixture, prepare, consume)
+	return executeGeneratedPanel(sealed.panel, sealed.authority, sealed.attempts, sealed.fixture, prepare, consume, func(generated actionrelationfixture.GeneratedAttempt) (CurriculumResult, error) {
+		return executeCurriculum(domainsDir, generated)
+	})
 }
 
-// ExecuteProtectedPanel is the sole direct caller of protected fixture
-// construction. It does not accept panel names, seeds, or authorities apart
-// from the opaque capability consumed by the fixture package.
-func ExecuteProtectedPanel(domainsDir string, token actionrelationcap.Token, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error) (PanelSummary, error) {
-	if prepare == nil || consume == nil {
-		return PanelSummary{}, fmt.Errorf("protected panel requires preparation and evidence consumers")
-	}
-	panel, ok := token.Panel()
-	if !ok {
-		return PanelSummary{}, fmt.Errorf("protected panel requires authorization")
-	}
-	authority, ok := token.Authority()
-	if !ok {
-		return PanelSummary{}, fmt.Errorf("protected panel lacks attempt authority")
-	}
-	attempts, fixture, err := actionrelationfixture.GenerateProtectedPanel(token)
-	if err != nil {
-		return PanelSummary{}, err
-	}
-	return executeGeneratedPanel(domainsDir, panel, authority, attempts, fixture, prepare, consume)
-}
-
-func executeGeneratedPanel(domainsDir, panel, authority string, attempts []actionrelationfixture.GeneratedAttempt, fixture actionrelationfixture.PanelFixture, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error) (PanelSummary, error) {
+func executeGeneratedPanel(panel, authority string, attempts []actionrelationfixture.GeneratedAttempt, fixture actionrelationfixture.PanelFixture, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error, score func(actionrelationfixture.GeneratedAttempt) (CurriculumResult, error)) (PanelSummary, error) {
 	if err := prepare(fixture); err != nil {
 		return PanelSummary{}, err
 	}
@@ -81,7 +58,7 @@ func executeGeneratedPanel(domainsDir, panel, authority string, attempts []actio
 	var err error
 	var records []actionrelationexp.RunEvidenceRecord
 	for curriculum, generated := range attempts {
-		scored, err := ExecuteCurriculum(domainsDir, generated)
+		scored, err := score(generated)
 		if err != nil {
 			return PanelSummary{}, fmt.Errorf("%s curriculum %d: %w", panel, curriculum, err)
 		}

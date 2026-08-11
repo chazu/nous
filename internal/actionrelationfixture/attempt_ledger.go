@@ -46,7 +46,7 @@ var generatorPhaseVocabulary = []struct {
 	{"evidence-preflight", "complete-evidence-preflight"},
 }
 
-func SealAttemptLedger(context DrawContext, draws DrawBlock, phases []GeneratorPhase, terminal string) (AttemptLedger, error) {
+func sealAttemptLedger(context DrawContext, draws DrawBlock, phases []GeneratorPhase, terminal string) (AttemptLedger, error) {
 	ledger := AttemptLedger{Context: context, Draws: draws, Phases: slices.Clone(phases), Terminal: terminal}
 	if len(phases) > 0 {
 		ledger.TotalWork = phases[len(phases)-1].EndWork

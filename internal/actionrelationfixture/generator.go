@@ -1,7 +1,9 @@
 package actionrelationfixture
 
 import (
+	"bytes"
 	"fmt"
+	"slices"
 
 	"github.com/chazu/nous/internal/actionrelationfixturecore"
 )
@@ -42,7 +44,7 @@ func generateAttempt(context DrawContext, prior []AttemptLedger) (GeneratedAttem
 	if priorWork+66 > GeneratorCurriculumCap {
 		return result, fmt.Errorf("curriculum generator work cap exhausted before draw precommit")
 	}
-	meter, err := BeginAttemptMeter(context)
+	meter, err := beginAttemptMeter(context)
 	if err != nil {
 		return result, err
 	}
@@ -97,14 +99,14 @@ func generateAttempt(context DrawContext, prior []AttemptLedger) (GeneratedAttem
 	}
 
 	if err := meter.RunPhase(func(reserve func() error) (bool, error) {
-		result.Curriculum, err = BuildCurriculumFromCatalogs(context, meter.Draws(), result.Catalogs, reserve)
+		result.Curriculum, err = buildCurriculumFromCatalogs(context, meter.Draws(), result.Catalogs, reserve)
 		return err == nil && len(result.Curriculum.Worlds) == 6, err
 	}); err != nil {
 		return finishFailure(err)
 	}
 
 	if err := meter.RunPhase(func(reserve func() error) (bool, error) {
-		result.Truth, err = SealCurriculumTruthMeasured(result.Curriculum, reserve)
+		result.Truth, err = sealCurriculumTruthMeasured(result.Curriculum, reserve)
 		return err == nil && len(result.Truth.Worlds) == 6 && result.Truth.Root != "", err
 	}); err != nil {
 		return finishFailure(err)
@@ -165,6 +167,44 @@ func preflightGeneratedAttempt(result GeneratedAttempt, reserve actionrelationfi
 				return fmt.Errorf("truth shard failed evidence preflight")
 			}
 		}
+	}
+	return nil
+}
+
+// VerifyGeneratedAttempt reconstructs a sealed attempt without exposing any
+// constructor. It is used when a policy worker reopens a supervisor-produced
+// read-only fixture bundle after all seed authority has been destroyed.
+func VerifyGeneratedAttempt(result GeneratedAttempt) error {
+	if err := validateDrawContext(result.Context); err != nil || result.Ledger.Terminal != "accepted" || len(result.AttemptLedgers) != result.Context.Attempt+1 {
+		return fmt.Errorf("invalid generated attempt authority")
+	}
+	if !equalDrawContexts(result.Curriculum.Draws.Context, result.Context) || result.Curriculum.Family != result.Context.Curriculum%8 || result.Curriculum.WithinFamilyOrdinal != result.Context.Curriculum/8 || len(result.Curriculum.Worlds) != 6 {
+		return fmt.Errorf("invalid generated curriculum")
+	}
+	if len(result.Training) != actionrelationfixturecore.TrainingCount {
+		return fmt.Errorf("invalid generated training cardinality")
+	}
+	wantTraining, err := SealTrainingAuthorityFromCases(result.Training, nil)
+	if err != nil || !slices.Equal(wantTraining.CoreDigests, result.TrainingAuthority.CoreDigests) || !slices.Equal(wantTraining.ViewEvidenceDigests, result.TrainingAuthority.ViewEvidenceDigests) {
+		return fmt.Errorf("generated training authority changed")
+	}
+	for attempt, ledger := range result.AttemptLedgers {
+		wantContext := result.Context
+		wantContext.Attempt = attempt
+		if !equalDrawContexts(ledger.Context, wantContext) || VerifyAttemptLedger(ledger) != nil || attempt < result.Context.Attempt && ledger.Terminal != "rejected" || attempt == result.Context.Attempt && ledger.Terminal != "accepted" {
+			return fmt.Errorf("invalid generated attempt ledger %d", attempt)
+		}
+	}
+	if result.Ledger.Digest != result.AttemptLedgers[len(result.AttemptLedgers)-1].Digest {
+		return fmt.Errorf("generated terminal ledger changed")
+	}
+	wantTruth, err := sealCurriculumTruthMeasured(result.Curriculum, nil)
+	if err != nil || wantTruth.Root != result.Truth.Root {
+		return fmt.Errorf("generated scorer truth changed")
+	}
+	wantFixture, err := assembleCurriculumFixture(result.Context, result.Curriculum, result.Truth, result.AttemptLedgers, result.TrainingAuthority)
+	if err != nil || wantFixture.Digest != result.Fixture.Digest || !bytes.Equal(wantFixture.Canonical, result.Fixture.Canonical) {
+		return fmt.Errorf("generated curriculum fixture changed")
 	}
 	return nil
 }

@@ -1,7 +1,6 @@
 // Package actionrelationcap mints the unforgeable, one-attempt capability used
 // by protected action-relation panels. A zero Token is inert; the only minting
-// path verifies committed repository authority and writes the local start
-// marker before returning.
+// path verifies committed repository authority without mutating attempt state.
 package actionrelationcap
 
 import (
@@ -11,7 +10,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,11 +24,13 @@ import (
 const validationAuthority = "validation-public-v1"
 
 type grant struct {
-	panel     string
-	authority string
-	secret    []byte
-	mu        sync.Mutex
-	uses      int
+	panel      string
+	authority  string
+	secret     []byte
+	secretPath string
+	mu         sync.Mutex
+	uses       int
+	destroyed  bool
 }
 
 // Token is deliberately opaque. Its zero value and copied values whose grant
@@ -40,31 +40,45 @@ type Token struct {
 }
 
 func (t Token) Panel() (string, bool) {
-	if t.grant == nil || t.grant.panel != "validation" && t.grant.panel != "locked" {
+	if t.grant == nil {
+		return "", false
+	}
+	t.grant.mu.Lock()
+	defer t.grant.mu.Unlock()
+	if t.grant.destroyed || t.grant.panel != "validation" && t.grant.panel != "locked" {
 		return "", false
 	}
 	return t.grant.panel, true
 }
 
 func (t Token) Authority() (string, bool) {
-	if _, ok := t.Panel(); !ok || !digestOrValidation(t.grant.authority) {
+	if t.grant == nil {
+		return "", false
+	}
+	t.grant.mu.Lock()
+	defer t.grant.mu.Unlock()
+	if t.grant.destroyed || t.grant.panel != "validation" && t.grant.panel != "locked" || !digestOrValidation(t.grant.authority) {
 		return "", false
 	}
 	return t.grant.authority, true
 }
 
 func (t Token) CurriculumSeed(curriculum int) (any, bool) {
-	panel, ok := t.Panel()
-	if !ok || curriculum < 0 {
+	if t.grant == nil {
 		return nil, false
 	}
-	if panel == "validation" {
+	t.grant.mu.Lock()
+	defer t.grant.mu.Unlock()
+	if t.grant.destroyed || curriculum < 0 {
+		return nil, false
+	}
+	if t.grant.panel == "validation" {
 		if curriculum >= 24 || t.grant.authority != validationAuthority || len(t.grant.secret) != 0 {
 			return nil, false
 		}
 		return 852001 + curriculum, true
 	}
-	if curriculum >= 32 || len(t.grant.secret) != 32 || digestBytes(t.grant.secret) != t.grant.authority {
+	if t.grant.panel != "locked" || curriculum >= 32 || len(t.grant.secret) != 32 || digestBytes(t.grant.secret) != t.grant.authority {
 		return nil, false
 	}
 	preimage, _ := json.Marshal([]any{"actionrelation-locked-curriculum/v1", curriculum})
@@ -73,28 +87,82 @@ func (t Token) CurriculumSeed(curriculum int) (any, bool) {
 	return hex.EncodeToString(mac.Sum(nil)), true
 }
 
-// BeginConstruction consumes one of the exactly two constructions authorized
-// for the retained primary execution and isolated audit replay.
-func (t Token) BeginConstruction() (string, string, bool) {
-	panel, ok := t.Panel()
+func (t Token) VerifyCurriculumSeed(curriculum int, seed any) bool {
+	want, ok := t.CurriculumSeed(curriculum)
 	if !ok {
-		return "", "", false
+		return false
 	}
-	authority, ok := t.Authority()
-	if !ok {
+	switch value := want.(type) {
+	case int:
+		got, valid := seed.(int)
+		return valid && got == value
+	case string:
+		got, valid := seed.(string)
+		return valid && hmac.Equal([]byte(got), []byte(value))
+	default:
+		return false
+	}
+}
+
+// BeginConstruction consumes the sole protected construction authorized before
+// the resulting sealed fixture is replayed by isolated policy workers.
+func (t Token) BeginConstruction() (string, string, bool) {
+	if t.grant == nil {
 		return "", "", false
 	}
 	t.grant.mu.Lock()
 	defer t.grant.mu.Unlock()
-	if t.grant.uses >= 2 {
+	if t.grant.destroyed || t.grant.panel != "validation" && t.grant.panel != "locked" || !digestOrValidation(t.grant.authority) || t.grant.uses >= 1 {
 		return "", "", false
 	}
 	t.grant.uses++
-	return panel, authority, true
+	return t.grant.panel, t.grant.authority, true
 }
 
-// Authorize independently reopens committed protected authority and consumes
-// the local one-shot marker before any seed is exposed to fixture construction.
+// Destroy erases the in-memory seed authority and, for locked panels, the
+// mode-0600 Git-common preimage before any policy worker may start.
+func (t Token) Destroy() error {
+	if t.grant == nil {
+		return nil
+	}
+	t.grant.mu.Lock()
+	defer t.grant.mu.Unlock()
+	if t.grant.destroyed {
+		return nil
+	}
+	for index := range t.grant.secret {
+		t.grant.secret[index] = 0
+	}
+	t.grant.secret = nil
+	if t.grant.secretPath != "" {
+		if err := eraseSecretFile(t.grant.secretPath); err != nil {
+			return err
+		}
+		t.grant.secretPath = ""
+	}
+	t.grant.destroyed = true
+	return nil
+}
+
+// ReleaseForRetry erases only the in-memory copy of a capability when the
+// durable start transition was not reached. A locked preimage remains at its
+// committed location so a later fresh authorization can retry.
+func (t Token) ReleaseForRetry() {
+	if t.grant == nil {
+		return
+	}
+	t.grant.mu.Lock()
+	defer t.grant.mu.Unlock()
+	for index := range t.grant.secret {
+		t.grant.secret[index] = 0
+	}
+	t.grant.secret = nil
+	t.grant.secretPath = ""
+	t.grant.destroyed = true
+}
+
+// Authorize independently reopens committed protected authority and returns a
+// capability without consuming the run package's durable start transition.
 func Authorize(ctx context.Context, repoRoot, panel string) (Token, actionrelationexp.Claim, actionrelationexp.Running, error) {
 	if panel != "validation" && panel != "locked" {
 		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, fmt.Errorf("invalid protected panel")
@@ -191,16 +259,12 @@ func Authorize(ctx context.Context, repoRoot, panel string) (Token, actionrelati
 		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, fmt.Errorf("running receipt was not committed after claim")
 	}
 	for _, kind := range []string{"terminal-receipt", "report"} {
-		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(actionrelationexp.ExpectedAuthorityPath(panel, kind)))); err == nil {
-			return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, fmt.Errorf("protected terminal output already exists")
-		} else if !errors.Is(err, os.ErrNotExist) {
+		if err := requireAbsentNoFollow(filepath.Join(root, filepath.FromSlash(actionrelationexp.ExpectedAuthorityPath(panel, kind)))); err != nil {
 			return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, err
 		}
 	}
 	evidenceRoot, _ := actionrelationexp.EvidenceRoot(panel)
-	if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(evidenceRoot))); err == nil {
-		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, fmt.Errorf("protected evidence namespace already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := requireAbsentNoFollow(filepath.Join(root, filepath.FromSlash(evidenceRoot))); err != nil {
 		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, err
 	}
 	commonBytes, err := git("rev-parse", "--git-common-dir")
@@ -215,7 +279,12 @@ func Authorize(ctx context.Context, repoRoot, panel string) (Token, actionrelati
 	if err != nil {
 		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, err
 	}
+	commonDir, err = filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, err
+	}
 	var secret []byte
+	var secretPath string
 	authority := validationAuthority
 	if panel == "validation" {
 		if running.SecretLocationDigest != nil || running.AttemptCommitment != ValidationAttemptCommitment() {
@@ -226,27 +295,14 @@ func Authorize(ctx context.Context, repoRoot, panel string) (Token, actionrelati
 		if running.SecretLocationDigest == nil || *running.SecretLocationDigest != digestBytes([]byte(location)) {
 			return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, fmt.Errorf("locked secret location commitment changed")
 		}
-		secretPath := filepath.Join(commonDir, filepath.FromSlash(location))
-		info, statErr := os.Lstat(secretPath)
-		secret, err = os.ReadFile(secretPath)
-		if statErr != nil || err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || len(secret) != 32 || digestBytes(secret) != running.AttemptCommitment {
+		secretPath = filepath.Join(commonDir, filepath.FromSlash(location))
+		secret, err = readSecretNoFollow(secretPath)
+		if err != nil || len(secret) != 32 || digestBytes(secret) != running.AttemptCommitment {
 			return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, fmt.Errorf("locked secret preimage does not match running authority")
 		}
 		authority = running.AttemptCommitment
 	}
-	markerDir := filepath.Join(commonDir, "nous-actionrelations-v1", "starts")
-	if err := os.MkdirAll(markerDir, 0o700); err != nil {
-		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, err
-	}
-	markerPath := filepath.Join(markerDir, panel+"-"+running.Digest+".start")
-	marker, _ := json.Marshal([]any{"actionrelation-start-marker/v1", panel, head, running.Digest})
-	if err := writeExclusiveSynced(markerPath, marker, 0o600); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, fmt.Errorf("protected attempt already started")
-		}
-		return Token{}, actionrelationexp.Claim{}, actionrelationexp.Running{}, err
-	}
-	return Token{grant: &grant{panel: panel, authority: authority, secret: bytes.Clone(secret)}}, claim, running, nil
+	return Token{grant: &grant{panel: panel, authority: authority, secret: bytes.Clone(secret), secretPath: secretPath}}, claim, running, nil
 }
 
 func ValidationAttemptCommitment() string {
@@ -281,36 +337,11 @@ func readCommittedWorking(root string, git func(...string) ([]byte, error), comm
 		return nil, fmt.Errorf("read committed protected authority %s: %w", path, err)
 	}
 	physical := filepath.Join(root, filepath.FromSlash(path))
-	info, statErr := os.Lstat(physical)
-	working, readErr := os.ReadFile(physical)
-	if statErr != nil || readErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 || !bytes.Equal(committed, working) {
+	working, readErr := readRegularNoFollow(physical, 0o644, int64(len(committed)))
+	if readErr != nil || !bytes.Equal(committed, working) {
 		return nil, fmt.Errorf("protected authority differs from committed regular file: %s", path)
 	}
 	return working, nil
-}
-
-func writeExclusiveSynced(path string, data []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }
 
 func digestBytes(data []byte) string {

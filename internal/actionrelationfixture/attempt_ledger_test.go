@@ -14,7 +14,7 @@ func TestAttemptLedgerRecomputesDrawsAndClosesPhaseAuthority(t *testing.T) {
 		phases = append(phases, GeneratorPhase{Name: vocabulary.name, StartWork: work, EndWork: work + 1, Predicate: vocabulary.predicate, Status: "passed"})
 		work++
 	}
-	ledger, err := SealAttemptLedger(context, draws, phases, "accepted")
+	ledger, err := sealAttemptLedger(context, draws, phases, "accepted")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestAttemptLedgerStopsAtFirstFailedPredicate(t *testing.T) {
 		{Name: "draw-precommit", StartWork: 0, EndWork: 66, Predicate: "exact-66-draws", Status: "passed"},
 		{Name: "family-universe", StartWork: 66, EndWork: 125, Predicate: "complete-family-universe", Status: "failed"},
 	}
-	ledger, err := SealAttemptLedger(context, draws, phases, "rejected")
+	ledger, err := sealAttemptLedger(context, draws, phases, "rejected")
 	if err != nil {
 		t.Fatal(err)
 	}

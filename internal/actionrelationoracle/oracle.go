@@ -42,6 +42,16 @@ type Observation struct {
 	BA    []byte
 }
 
+func ValidateState(data []byte) error {
+	_, err := parseState(data)
+	return err
+}
+
+func ValidateAction(data []byte) error {
+	_, err := parseAction(data)
+	return err
+}
+
 func Apply(stateJSON, actionJSON []byte) (Transition, error) {
 	s, err := parseState(stateJSON)
 	if err != nil {
