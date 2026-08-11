@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	PlanArchiveDigest  = "b0b5f893d9a79d4a7deec1c0f020e940be8b0be6bb41bbb05035d39e7c4418d8"
+	PlanArchiveDigest  = "d5eb606f4e57d8614ab2617b00ee792c68367df1d677e0998a5a83191033777f"
 	BuildAuthorityPath = "docs/actionrelations-build-authority.json"
 	PanelBinaryPath    = ".nous/bin/actionrelation-nous-v1"
 )

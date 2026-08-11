@@ -2,9 +2,25 @@ package actionrelationexp
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestBuildPlanAuthorityMatchesCommittedReview(t *testing.T) {
+	canonical, err := os.ReadFile("../../docs/actionrelations-plan-reviews.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ParseReviewManifest(canonical, map[string][]byte{
+		"docs/actionrelations-reviews/plan/round-15/architecture.txt":          []byte("ACCEPTED"),
+		"docs/actionrelations-reviews/plan/round-15/action-semantics.txt":      []byte("ACCEPTED"),
+		"docs/actionrelations-reviews/plan/round-15/experimental-validity.txt": []byte("ACCEPTED"),
+	})
+	if err != nil || manifest.ReviewedCommit != PlanCommit || manifest.ArchiveDigest != PlanArchiveDigest {
+		t.Fatalf("build plan authority differs from committed review: %v", err)
+	}
+}
 
 func TestBuildAuthorityClosesSourceToolAndNonInputRows(t *testing.T) {
 	row := SourceRow{Path: "cmd/nous/main.go", GitMode: "100644", GitBlobOID: strings.Repeat("a", 40), ByteLength: 12, Digest: shaHex([]byte("source")), Role: "compiler-input"}

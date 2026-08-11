@@ -6,9 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/chazu/nous/internal/actionrelationledger"
+	"github.com/chazu/nous/internal/actionrelationwire"
+	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
 type retainedObjectValue struct {
@@ -17,22 +21,75 @@ type retainedObjectValue struct {
 	classes   map[string]bool
 }
 
+type retainedPhysicalObject struct {
+	curriculum int
+	class      string
+	digest     string
+	kind       uint16
+	bytes      int
+}
+
 type retainedRunAuthority struct {
-	curriculum    int
-	operationRoot string
-	phase         uint8
-	workTerminal  string
-	work          [12]int
-	initialWork   [12]int
-	terminal      string
-	world         string
-	policy        string
-	terminalSet   string
-	historyCount  int
+	curriculum       int
+	operationRoot    string
+	phase            uint8
+	workTerminal     string
+	work             [12]int
+	initialWork      [12]int
+	terminal         string
+	world            string
+	policy           string
+	terminalSet      string
+	historyCount     int
+	matches          [8]int
+	certificates     [4]int
+	sleepCount       int
+	truthPairs       map[string]string
+	truthTerminals   []string
+	trainingMatches  [5]int
+	worldOrdinal     int
+	acquisitionTotal int
+	remaining        int
+	artifact         string
 }
 
 type retainedCurriculumAuthority struct {
-	runs map[string]retainedRunAuthority
+	runs            map[string]retainedRunAuthority
+	fixture         decodedFixture
+	fixtureDigest   string
+	truthReferences []retainedTruthReference
+}
+
+type retainedTruthReference struct {
+	world   string
+	ordinal int
+	digest  string
+}
+
+type retainedPanelFixture struct {
+	Panel           string
+	Authority       string
+	CurriculumRoots []string
+	ScorerRoot      string
+}
+
+func parseRetainedPanelFixture(data []byte) (retainedPanelFixture, error) {
+	var row []json.RawMessage
+	var tag string
+	value := retainedPanelFixture{}
+	if len(data) < 1 || len(data) > 4096 || json.Unmarshal(data, &row) != nil || len(row) != 5 ||
+		json.Unmarshal(row[0], &tag) != nil || tag != "actionrelation-fixture-root/v2" ||
+		json.Unmarshal(row[1], &value.Panel) != nil || json.Unmarshal(row[2], &value.Authority) != nil ||
+		json.Unmarshal(row[3], &value.CurriculumRoots) != nil || json.Unmarshal(row[4], &value.ScorerRoot) != nil ||
+		!validPanelAuthority(value.Panel, value.Authority) || len(value.CurriculumRoots) != panelRunCounts[value.Panel]/44 ||
+		!uniqueDigestList(value.CurriculumRoots) || !digestText(value.ScorerRoot) {
+		return retainedPanelFixture{}, fmt.Errorf("invalid retained panel fixture")
+	}
+	want, _ := json.Marshal([]any{"actionrelation-fixture-root/v2", value.Panel, value.Authority, value.CurriculumRoots, value.ScorerRoot})
+	if !bytes.Equal(want, data) {
+		return retainedPanelFixture{}, fmt.Errorf("noncanonical retained panel fixture")
+	}
+	return value, nil
 }
 
 // RetainedPackRefs is the complete physical-pack authority reachable from a
@@ -40,6 +97,7 @@ type retainedCurriculumAuthority struct {
 type RetainedPackRefs struct {
 	Panel           string
 	Authority       string
+	Fixture         AuthorityRef
 	RunEvidence     AuthorityRef
 	ObjectRoots     []ObjectManifestRef
 	IndexRoots      []ObjectManifestRef
@@ -54,10 +112,12 @@ type RetainedPackRefs struct {
 // VerifyRetainedPacks reopens every manifest, follows every physical shard,
 // validates its complete binary representation, and closes the per-run roots
 // back to the run-evidence pack. The returned paths are the exact reachable
-// manifest and pack set (the fixture root is intentionally outside this DAG).
+// manifest and pack set, including the fixture root that commits every
+// curriculum fixture and scorer-truth shard.
 func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, error)) ([]string, error) {
 	curricula := panelRunCounts[value.Panel] / 44
 	if !validPanelAuthority(value.Panel, value.Authority) || curricula == 0 || read == nil || value.RunEvidence.Verify() != nil ||
+		value.Fixture.Verify() != nil || value.Fixture.Path != ExpectedAuthorityPath(value.Panel, "fixture-root") ||
 		len(value.ObjectRoots) != curricula*4 || len(value.IndexRoots) != curricula*4 ||
 		len(value.JournalRoots) != curricula*44 || len(value.InputRoots) != curricula*44 || len(value.DetailRoots) != curricula*44 ||
 		len(value.Tables) != curricula*14 || len(value.StructuralMaps) != curricula || len(value.StoreBoundaries) != curricula*2 {
@@ -67,8 +127,11 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	retainedLeaves := map[string]bool{}
 	retainedTableLeaves := map[string][]retainedTableLeaf{}
 	retainedObjects := map[string]retainedObjectValue{}
+	var physicalObjects []retainedPhysicalObject
 	retainedByCurriculum := make([]map[string]retainedObjectValue, curricula)
 	curriculumAuthorities := make([]retainedCurriculumAuthority, curricula)
+	trainingCores := make([]map[string]map[string]bool, curricula)
+	viewEvidence := make([]map[string]map[string]bool, curricula)
 	readPath := func(path, digest string) ([]byte, error) {
 		if !safeEvidencePath(path) || !digestText(digest) || reachable[path] {
 			return nil, fmt.Errorf("duplicate or invalid retained path %q", path)
@@ -87,6 +150,14 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		}
 		return EvidenceFile{Path: path, Mode: "100644", Data: data}, nil
 	}
+	fixtureBytes, err := readPath(value.Fixture.Path, value.Fixture.Digest)
+	if err != nil {
+		return nil, err
+	}
+	panelFixture, err := parseRetainedPanelFixture(fixtureBytes)
+	if err != nil || panelFixture.Panel != value.Panel || panelFixture.Authority != value.Authority || len(panelFixture.CurriculumRoots) != curricula {
+		return nil, fmt.Errorf("retained panel fixture does not reconstruct")
+	}
 
 	type scopeKey struct {
 		curriculum int
@@ -99,6 +170,7 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	indexShards := make([]int, curricula)
 	largeCounts := make([][4]int, curricula)
 	mediumCounts := make([]int, curricula)
+	curriculumManifestBytes := make([]int, curricula)
 	for _, ref := range value.IndexRoots {
 		key := scopeKey{ref.Scope.Curriculum, ref.Scope.Class}
 		if ref.Scope.validate() != nil || indexes[key].Path != "" {
@@ -134,6 +206,10 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		}
 		objectCounts[key.curriculum] += objectRoot.TotalRecords
 		indexShards[key.curriculum] += len(indexRoot.Shards)
+		curriculumManifestBytes[key.curriculum] += len(objectBytes) + len(indexBytes)
+		if len(objectBytes) > 4_096 || len(indexBytes) > 16_384 {
+			return nil, fmt.Errorf("curriculum object/index root manifest exceeds frozen cap")
+		}
 		if objectCounts[key.curriculum] > MaximumCurriculumObjects || indexShards[key.curriculum] > MaximumCurriculumIndexes {
 			return nil, fmt.Errorf("curriculum object/index capacity exceeded")
 		}
@@ -174,6 +250,10 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				row := file.Data[offset:][:ObjectIndexRowBytes]
 				digest := hex.EncodeToString(row[:32])
 				kind := binary.BigEndian.Uint16(row[44:46])
+				if !retainedKindAllowedInScope(key.class, kind) {
+					return nil, fmt.Errorf("retained kind %d is not allowed in scope %s", kind, key.class)
+				}
+				physicalObjects = append(physicalObjects, retainedPhysicalObject{curriculum: key.curriculum, class: key.class, digest: digest, kind: kind, bytes: len(objectPayloads[digest])})
 				switch kind {
 				case 10, 28:
 					largeCounts[key.curriculum][0]++
@@ -264,12 +344,14 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	chargedRoots := map[string]string{}
 	transcriptCalls := map[string][]retainedCall{}
 	transcriptBundles := map[string]TranscriptBundle{}
+	transcriptManifestBytes := map[string]int{}
+	transcriptClassBytes := map[string][3]int{}
 	for runID, refs := range transcripts {
 		if refs.journal.Path == "" || refs.input.Path == "" || refs.detail.Path == "" {
 			return nil, fmt.Errorf("incomplete retained transcript %s", runID)
 		}
 		bundle := TranscriptBundle{RunID: runID}
-		for _, item := range []struct {
+		for classIndex, item := range []struct {
 			ref   TranscriptManifestRef
 			class string
 			root  *TranscriptRoot
@@ -280,9 +362,10 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				return nil, err
 			}
 			root, err := ParseTranscriptRoot(manifest)
-			if err != nil || root.Class != item.class || root.RunID != runID {
+			if err != nil || root.Class != item.class || root.RunID != runID || len(manifest) > 4_096 {
 				return nil, fmt.Errorf("retained transcript root does not reconstruct: %s", item.ref.Path)
 			}
+			transcriptManifestBytes[runID] += len(manifest)
 			*item.root = root
 			for _, shard := range root.Shards {
 				file, err := readFile(shard.Path, shard.ByteLength, shard.PackDigest)
@@ -290,6 +373,9 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 					return nil, err
 				}
 				*item.files = append(*item.files, file)
+				classBytes := transcriptClassBytes[runID]
+				classBytes[classIndex] += len(file.Data)
+				transcriptClassBytes[runID] = classBytes
 			}
 		}
 		calls, err := decodeRetainedCalls(bundle)
@@ -320,9 +406,10 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 			return nil, err
 		}
 		manifest, err := ParseTableManifest(manifestBytes)
-		if err != nil || manifest.Curriculum != ref.Curriculum || manifest.Scope != ref.Scope || manifest.Kind != ref.Kind {
+		if err != nil || manifest.Curriculum != ref.Curriculum || manifest.Scope != ref.Scope || manifest.Kind != ref.Kind || len(manifestBytes) > 4_096 {
 			return nil, fmt.Errorf("retained table manifest does not reconstruct: %s", ref.Path)
 		}
+		curriculumManifestBytes[ref.Curriculum] += len(manifestBytes)
 		bundle := TableBundle{Manifest: manifest}
 		for _, shard := range manifest.Shards {
 			file, err := readFile(shard.RelativePath, shard.ByteLength, shard.PackDigest)
@@ -333,11 +420,35 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 			for ordinal := shard.FirstOrdinal; ordinal <= shard.LastOrdinal; ordinal++ {
 				local := int(ordinal - shard.FirstOrdinal)
 				start := len(TableHeader) + local*manifest.RecordSize
-				leaf := TableLeafDigest(manifest.Kind, ordinal, file.Data[start:start+manifest.RecordSize])
+				record := bytes.Clone(file.Data[start : start+manifest.RecordSize])
+				leaf := TableLeafDigest(manifest.Kind, ordinal, record)
 				leafDigest := hex.EncodeToString(leaf[:])
 				bundle.LeafDigests = append(bundle.LeafDigests, leafDigest)
 				retainedLeaves[leafDigest] = true
-				retainedTableLeaves[leafDigest] = append(retainedTableLeaves[leafDigest], retainedTableLeaf{kind: manifest.Kind, curriculum: manifest.Curriculum, scope: manifest.Scope, manifest: ref.Digest, ordinal: ordinal, record: bytes.Clone(file.Data[start : start+manifest.RecordSize])})
+				retainedTableLeaves[leafDigest] = append(retainedTableLeaves[leafDigest], retainedTableLeaf{kind: manifest.Kind, curriculum: manifest.Curriculum, scope: manifest.Scope, manifest: ref.Digest, ordinal: ordinal, record: record})
+				if manifest.Kind == 105 {
+					canonical, canonicalErr := observationCanonical(record)
+					if canonicalErr != nil {
+						return nil, canonicalErr
+					}
+					if trainingCores[manifest.Curriculum] == nil {
+						trainingCores[manifest.Curriculum] = map[string]map[string]bool{}
+					}
+					if trainingCores[manifest.Curriculum][manifest.Scope] == nil {
+						trainingCores[manifest.Curriculum][manifest.Scope] = map[string]bool{}
+					}
+					trainingCores[manifest.Curriculum][manifest.Scope][shaHex(canonical)] = true
+				}
+				if manifest.Kind == 106 {
+					wire, _ := json.Marshal([]any{"action-view-evidence/v1", digestAt(record, 32), digestAt(record, 0), digestAt(record, 96)})
+					if viewEvidence[manifest.Curriculum] == nil {
+						viewEvidence[manifest.Curriculum] = map[string]map[string]bool{}
+					}
+					if viewEvidence[manifest.Curriculum][manifest.Scope] == nil {
+						viewEvidence[manifest.Curriculum][manifest.Scope] = map[string]bool{}
+					}
+					viewEvidence[manifest.Curriculum][manifest.Scope][shaHex(wire)] = true
+				}
 			}
 		}
 		if err := VerifyTableBundle(bundle); err != nil {
@@ -345,6 +456,43 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		}
 		tableKey := fmt.Sprintf("%d:%s", ref.Curriculum, ref.Scope)
 		tableDigests[tableKey] = append(tableDigests[tableKey], ref.Digest)
+	}
+	var scorerReferences []retainedTruthReference
+	for curriculum := range curriculumAuthorities {
+		fixture := curriculumAuthorities[curriculum].fixture
+		if curriculumAuthorities[curriculum].fixtureDigest != panelFixture.CurriculumRoots[curriculum] {
+			return nil, fmt.Errorf("curriculum fixture %d differs from panel fixture root", curriculum)
+		}
+		for _, scope := range []string{"nous", "no-guard"} {
+			for _, digest := range fixture.Training {
+				if !trainingCores[curriculum][scope][digest] {
+					return nil, fmt.Errorf("curriculum fixture %d/%s training core does not resolve", curriculum, scope)
+				}
+			}
+			for _, digest := range fixture.Views {
+				if !viewEvidence[curriculum][scope][digest] {
+					return nil, fmt.Errorf("curriculum fixture %d/%s presentation view does not resolve", curriculum, scope)
+				}
+			}
+		}
+		scorerReferences = append(scorerReferences, curriculumAuthorities[curriculum].truthReferences...)
+	}
+	slices.SortFunc(scorerReferences, func(a, b retainedTruthReference) int {
+		if a.world != b.world {
+			return compareString(a.world, b.world)
+		}
+		if a.ordinal != b.ordinal {
+			return a.ordinal - b.ordinal
+		}
+		return compareString(a.digest, b.digest)
+	})
+	scorerRows := make([]any, len(scorerReferences))
+	for index, reference := range scorerReferences {
+		scorerRows[index] = []any{reference.world, reference.ordinal, reference.digest}
+	}
+	scorerRoot, err := actionrelationwire.RootDigest("scorer-shards", scorerRows)
+	if err != nil || scorerRoot != panelFixture.ScorerRoot {
+		return nil, fmt.Errorf("retained scorer truth differs from panel fixture root")
 	}
 	for index, boundary := range value.StoreBoundaries {
 		wantCurriculum, wantScope := index/2, "nous"
@@ -354,7 +502,7 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		key := scopeKey{curriculum: boundary.Curriculum, class: "acquisition-" + boundary.Scope + "-preboundary"}
 		indexAuthority, ok := indexAuthorities[key]
 		object, objectOK := retainedObjects[boundary.BoundaryDigest]
-		if boundary.Curriculum != wantCurriculum || boundary.Scope != wantScope || !ok || boundary.PreboundaryIndexRoot != indexAuthority.digest || !objectOK || object.kind != 35 {
+		if boundary.Curriculum != wantCurriculum || boundary.Scope != wantScope || !ok || boundary.PreboundaryIndexRoot != indexAuthority.digest || !objectOK || object.kind != 35 || len(object.classes) != 1 || !object.classes["authority"] {
 			return nil, fmt.Errorf("store boundary authority mismatch: %d/%s", boundary.Curriculum, boundary.Scope)
 		}
 		var row []json.RawMessage
@@ -373,6 +521,10 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		if err != nil {
 			return nil, err
 		}
+		if len(manifest) > 8_192 {
+			return nil, fmt.Errorf("retained structural map manifest exceeds frozen cap")
+		}
+		curriculumManifestBytes[curriculum] += len(manifest)
 		root, packPath, packLength, packDigest, err := ParseStructuralOutputMap(value.Panel, manifest)
 		if err != nil || root.Curriculum != curriculum {
 			return nil, fmt.Errorf("retained structural map does not reconstruct: %s", ref.Path)
@@ -440,6 +592,16 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 			expectedRuns[runID] = authority
 		}
 	}
+	curriculumCalls := make([]int, curricula)
+	curriculumTranscriptBytes := make([][3]int, curricula)
+	chargedOutputs := make([]map[string]bool, curricula)
+	usedUtility := make([]map[string]bool, curricula)
+	usedAcquisition := make([]map[string]map[string]bool, curricula)
+	for curriculum := range curricula {
+		chargedOutputs[curriculum] = map[string]bool{}
+		usedUtility[curriculum] = map[string]bool{}
+		usedAcquisition[curriculum] = map[string]map[string]bool{"nous": {}, "no-guard": {}}
+	}
 	for _, record := range runPack.Records {
 		if journalDigests[record.RunID] != record.JournalRoot || inputDigests[record.RunID] != record.InputRoot || detailDigests[record.RunID] != record.DetailRoot || chargedRoots[record.RunID] != record.ChargedRoot || structuralRoots[record.RunID] != record.StructuralRoot {
 			return nil, fmt.Errorf("run-evidence row does not close retained run %s", record.RunID)
@@ -451,6 +613,34 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		operationObject, operationOK := retainedObjects[authority.operationRoot]
 		if !ok || !operationOK || operationObject.kind != 46 || record.OperationRoot != authority.operationRoot {
 			return nil, fmt.Errorf("run-evidence identity or operation root is not expected: %s", record.RunID)
+		}
+		curriculumCalls[authority.curriculum] += len(transcriptCalls[record.RunID])
+		curriculumManifestBytes[authority.curriculum] += transcriptManifestBytes[record.RunID]
+		classBytes := transcriptClassBytes[record.RunID]
+		for index := range classBytes {
+			curriculumTranscriptBytes[authority.curriculum][index] += classBytes[index]
+		}
+		markUsed := usedUtility[authority.curriculum]
+		objectClass := "utility"
+		if authority.phase == 1 {
+			markUsed = usedAcquisition[authority.curriculum][authority.policy]
+			objectClass = "acquisition-" + authority.policy + "-preboundary"
+		}
+		for _, call := range transcriptCalls[record.RunID] {
+			markUsed[call.source] = true
+			for _, output := range call.outputs {
+				if object, exists := retainedObjects[output]; exists {
+					markUsed[output] = true
+					chargedOutputs[authority.curriculum][objectClass+":"+output] = true
+					_ = object
+				}
+			}
+			markRetainedPayloadDigests(call.payload, markUsed)
+		}
+		for key := range structuralObjects[record.RunID] {
+			if len(key) > 6 {
+				markUsed[key[strings.IndexByte(key, ':')+1:]] = true
+			}
 		}
 		operation := OperationRoot{Canonical: operationObject.canonical, Digest: authority.operationRoot}
 		decoded, decodeErr := decodeOperationRoot(mustObjectRow(operationObject.canonical))
@@ -482,6 +672,66 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	if len(expectedRuns) != 0 || len(runPack.Records) != len(transcripts) || len(runPack.Records) != len(structuralRoots) {
 		return nil, fmt.Errorf("retained run-evidence coverage mismatch")
 	}
+	for curriculum := range curricula {
+		if curriculumCalls[curriculum] > 61_056 || curriculumTranscriptBytes[curriculum][0] > 7_815_438 || curriculumTranscriptBytes[curriculum][1] > 63_357_710 || curriculumTranscriptBytes[curriculum][2] > 11_723_022 || curriculumManifestBytes[curriculum] > 1_048_576 {
+			return nil, fmt.Errorf("curriculum %d exceeds frozen transcript or manifest capacity", curriculum)
+		}
+	}
+	chargedCount, supportingSmallCount, supportingMediumCount, largeCount := make([]int, curricula), make([]int, curricula), make([]int, curricula), make([]int, curricula)
+	chargedBytes, supportingSmallBytes, supportingMediumBytes, largeBytes := make([]int, curricula), make([]int, curricula), make([]int, curricula), make([]int, curricula)
+	supportingKinds := make([]map[uint16]int, curricula)
+	for curriculum := range curricula {
+		supportingKinds[curriculum] = map[uint16]int{}
+	}
+	for _, object := range physicalObjects {
+		if object.class == "utility" && !usedUtility[object.curriculum][object.digest] {
+			return nil, fmt.Errorf("utility object is neither charged nor structurally attributed: %d/%s", object.curriculum, object.digest)
+		}
+		if strings.HasPrefix(object.class, "acquisition-") {
+			scope := strings.TrimSuffix(strings.TrimPrefix(object.class, "acquisition-"), "-preboundary")
+			if !usedAcquisition[object.curriculum][scope][object.digest] {
+				return nil, fmt.Errorf("preboundary object is unreachable from its acquisition: %d/%s/%s", object.curriculum, scope, object.digest)
+			}
+		}
+		switch {
+		case object.class != "authority" && chargedOutputs[object.curriculum][object.class+":"+object.digest]:
+			chargedCount[object.curriculum]++
+			chargedBytes[object.curriculum] += object.bytes
+			if object.bytes > 1_024 {
+				return nil, fmt.Errorf("charged result exceeds small-object cap")
+			}
+		case slices.Contains([]uint16{10, 28, 29, 36}, object.kind):
+			largeCount[object.curriculum]++
+			largeBytes[object.curriculum] += object.bytes
+			if object.bytes > 65_536 {
+				return nil, fmt.Errorf("large supporting object exceeds cap")
+			}
+		case slices.Contains([]uint16{9, 35, 47}, object.kind):
+			supportingMediumCount[object.curriculum]++
+			supportingMediumBytes[object.curriculum] += object.bytes
+			supportingKinds[object.curriculum][object.kind]++
+			if object.bytes > 4_096 {
+				return nil, fmt.Errorf("medium supporting object exceeds cap")
+			}
+		default:
+			supportingSmallCount[object.curriculum]++
+			supportingSmallBytes[object.curriculum] += object.bytes
+			supportingKinds[object.curriculum][object.kind]++
+			if object.bytes > 1_024 {
+				return nil, fmt.Errorf("small supporting object exceeds cap")
+			}
+		}
+	}
+	for curriculum := range curricula {
+		if chargedCount[curriculum] > 61_056 || chargedBytes[curriculum] > 61_056*1_024 || supportingSmallCount[curriculum] > 3_584 || supportingSmallBytes[curriculum] > 3_584*1_024 || supportingMediumCount[curriculum] > 512 || supportingMediumBytes[curriculum] > 512*4_096 || largeCount[curriculum] > 96 || largeBytes[curriculum] > 96*65_536 {
+			return nil, fmt.Errorf("curriculum %d exceeds frozen object-class capacity", curriculum)
+		}
+		for kind, count := range supportingKinds[curriculum] {
+			if count > 4_096 {
+				return nil, fmt.Errorf("curriculum %d supporting kind %d exceeds cap", curriculum, kind)
+			}
+		}
+	}
 	paths := make([]string, 0, len(reachable))
 	for path := range reachable {
 		paths = append(paths, path)
@@ -506,6 +756,13 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 	workTerminals := map[string]decodedWorkTerminal{}
 	reservations := map[string]struct{}{}
 	worldObjects := map[string]bool{}
+	usedAuthority := map[string]bool{}
+	boundaryCount := 0
+	type retainedWorldTruth struct {
+		terminals []string
+		pairs     map[string]string
+	}
+	truthWorlds := map[string]retainedWorldTruth{}
 	for digest, object := range objects {
 		var row []json.RawMessage
 		if json.Unmarshal(object.canonical, &row) != nil {
@@ -513,7 +770,9 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 		}
 		switch object.kind {
 		case 4:
-			worldObjects[digest] = true
+			if object.classes["authority"] {
+				worldObjects[digest] = true
+			}
 		case 27:
 			if _, err := decodeReservation(object.canonical); err != nil {
 				return err
@@ -528,24 +787,35 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				digest string
 				value  decodedTruthShard
 			}{digest, value})
+			result.truthReferences = append(result.truthReferences, retainedTruthReference{world: value.World, ordinal: value.Ordinal, digest: digest})
+			usedAuthority[digest] = true
 		case 32:
 			value, err := decodeWorldPolicyRow(row)
 			if err != nil || !object.classes["authority"] || value.Panel != panel || value.Curriculum != curriculum {
 				return fmt.Errorf("world-policy row outside curriculum authority")
 			}
 			worldRows[digest] = value
+			usedAuthority[digest] = true
 		case 33:
 			value, err := decodeCurriculumPolicyRow(row)
 			if err != nil || !object.classes["authority"] || value.Panel != panel || value.Curriculum != curriculum {
 				return fmt.Errorf("curriculum-policy row outside curriculum authority")
 			}
 			curriculumRows[digest] = value
+			usedAuthority[digest] = true
+		case 35:
+			if !object.classes["authority"] {
+				return fmt.Errorf("store boundary outside authority scope")
+			}
+			boundaryCount++
+			usedAuthority[digest] = true
 		case 36:
 			value, err := decodeAttemptLedger(row)
 			if err != nil || !object.classes["authority"] || value.Panel != panel || value.Curriculum != curriculum {
 				return fmt.Errorf("attempt ledger outside curriculum authority")
 			}
 			ledgers[digest] = value
+			usedAuthority[digest] = true
 		case 46:
 			value, err := decodeOperationRoot(row)
 			if err != nil {
@@ -558,6 +828,7 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				return fmt.Errorf("fixture outside curriculum authority")
 			}
 			fixtures[digest] = value
+			usedAuthority[digest] = true
 		case 49:
 			value, err := decodeWorkTerminal(row)
 			if err != nil {
@@ -566,13 +837,15 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 			workTerminals[digest] = value
 		}
 	}
-	if len(fixtures) != 1 || len(worldRows) != 42 || len(curriculumRows) != 7 {
-		return fmt.Errorf("authority cardinality fixtures=%d worlds=%d curricula=%d", len(fixtures), len(worldRows), len(curriculumRows))
+	if len(fixtures) != 1 || len(worldRows) != 42 || len(curriculumRows) != 7 || len(worldObjects) != 6 || boundaryCount != 2 {
+		return fmt.Errorf("authority cardinality fixtures=%d worlds=%d curricula=%d world-cores=%d boundaries=%d", len(fixtures), len(worldRows), len(curriculumRows), len(worldObjects), boundaryCount)
 	}
 	var fixture decodedFixture
-	for _, value := range fixtures {
+	for digest, value := range fixtures {
 		fixture = value
+		result.fixtureDigest = digest
 	}
+	result.fixture = fixture
 	if fixture.Family != curriculum%8 {
 		return fmt.Errorf("fixture family changed")
 	}
@@ -607,6 +880,58 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				return fmt.Errorf("truth rows for world %d overlap", ordinal)
 			}
 		}
+		worldTruth := retainedWorldTruth{terminals: slices.Clone(shards[0].value.Terminals), pairs: map[string]string{}}
+		for _, shard := range shards {
+			for _, pair := range shard.value.Pairs {
+				key := pair.State + pair.A + pair.B
+				if _, duplicate := worldTruth.pairs[key]; duplicate {
+					return fmt.Errorf("truth rows for world %d duplicate a pair", ordinal)
+				}
+				worldTruth.pairs[key] = pair.Label
+			}
+		}
+		truthWorlds[digest] = worldTruth
+		usedAuthority[digest] = true
+		var worldRow []json.RawMessage
+		if json.Unmarshal(objects[digest].canonical, &worldRow) != nil || len(worldRow) != 3 {
+			return fmt.Errorf("fixture world %d does not decode", ordinal)
+		}
+		stateCanonical, _ := json.Marshal(worldRow[1])
+		stateDigest := shaHex(stateCanonical)
+		if objects[stateDigest].kind != 1 || !objects[stateDigest].classes["authority"] || !bytes.Equal(objects[stateDigest].canonical, stateCanonical) {
+			return fmt.Errorf("fixture world %d state preimage is absent", ordinal)
+		}
+		usedAuthority[stateDigest] = true
+		var actionRows []json.RawMessage
+		if json.Unmarshal(worldRow[2], &actionRows) != nil {
+			return fmt.Errorf("fixture world %d actions do not decode", ordinal)
+		}
+		actions := make([]actionrelations.SemanticAction, len(actionRows))
+		for index, raw := range actionRows {
+			actionCanonical, _ := json.Marshal(raw)
+			actionDigest := shaHex(actionCanonical)
+			if objects[actionDigest].kind != 2 || !objects[actionDigest].classes["authority"] || !bytes.Equal(objects[actionDigest].canonical, actionCanonical) {
+				return fmt.Errorf("fixture world %d action %d preimage is absent", ordinal, index)
+			}
+			usedAuthority[actionDigest] = true
+			var parseErr error
+			actions[index], parseErr = actionrelations.ParseSemanticAction(actionCanonical)
+			if parseErr != nil {
+				return parseErr
+			}
+		}
+		occurrences, occurrenceErr := actionrelations.AssignOccurrences(actions)
+		if occurrenceErr != nil {
+			return occurrenceErr
+		}
+		for index, occurrence := range occurrences {
+			canonical, _ := occurrence.CanonicalJSON()
+			occurrenceDigest := shaHex(canonical)
+			if objects[occurrenceDigest].kind != 3 || !objects[occurrenceDigest].classes["authority"] || !bytes.Equal(objects[occurrenceDigest].canonical, canonical) {
+				return fmt.Errorf("fixture world %d occurrence %d preimage is absent", ordinal, index)
+			}
+			usedAuthority[occurrenceDigest] = true
+		}
 		delete(truth, digest)
 	}
 	if len(truth) != 0 {
@@ -617,6 +942,8 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 		ordinal int
 	}
 	worldGrid := map[worldKey]string{}
+	trainingByScope := map[string][5]int{}
+	trainingSeen := map[string]bool{}
 	for digest, row := range worldRows {
 		if row.Family != fixture.Family || row.World != fixture.Worlds[row.WorldOrdinal] {
 			return fmt.Errorf("world-policy row changed fixture identity")
@@ -630,6 +957,7 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 		if !ok || root.Variant != "range" || root.Phase != 2 {
 			return fmt.Errorf("world-policy operation root does not resolve")
 		}
+		usedAuthority[row.OperationRoot] = true
 		if row.Terminal == "budget-exhausted" {
 			terminal, ok := workTerminals[row.WorkTerminal]
 			if !ok || terminal.RunID != root.RunID {
@@ -638,6 +966,35 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 			if _, ok := reservations[terminal.Rejected]; !ok {
 				return fmt.Errorf("work terminal rejected reservation is absent")
 			}
+		}
+		worldTruth, truthOK := truthWorlds[row.World]
+		behaviorEqual := false
+		if row.Terminal == "completed" && truthOK {
+			terminalWire, _ := json.Marshal([]any{"sleep-terminal-set/v1", worldTruth.terminals})
+			terminalObject := objects[row.TerminalSet]
+			behaviorEqual = terminalObject.kind == 24 && bytes.Equal(terminalObject.canonical, terminalWire) && shaHex(terminalWire) == row.TerminalSet
+		} else if row.TerminalSet != zeroObjectDigest {
+			return fmt.Errorf("budget-exhausted world carries a terminal set")
+		}
+		if row.BehaviorEqual != behaviorEqual {
+			return fmt.Errorf("world-policy behavior equality differs from sealed truth")
+		}
+		scope := ""
+		if row.Policy == "nous-guarded-sleep" || row.Policy == "learned-no-use" {
+			scope = "nous"
+		} else if row.Policy == "no-guard-sleep" {
+			scope = "no-guard"
+		}
+		var training [5]int
+		copy(training[:], row.Matches[:5])
+		if scope == "" {
+			if training != [5]int{} {
+				return fmt.Errorf("baseline world-policy row carries acquisition match counts")
+			}
+		} else if trainingSeen[scope] && trainingByScope[scope] != training {
+			return fmt.Errorf("shared acquisition match counts differ across world rows")
+		} else {
+			trainingSeen[scope], trainingByScope[scope] = true, training
 		}
 	}
 	for _, policy := range []string{"complete", "lexical-order", "static-rw-sleep", "dynamic-diamond-sleep", "nous-guarded-sleep", "no-guard-sleep", "learned-no-use"} {
@@ -651,7 +1008,7 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 	expectedRuns := map[string]retainedRunAuthority{}
 	acquisitionRoots := map[string]string{}
 	addExpected := func(runID string, value retainedRunAuthority) error {
-		if prior, ok := expectedRuns[runID]; ok && prior != value {
+		if prior, ok := expectedRuns[runID]; ok && !reflect.DeepEqual(prior, value) {
 			return fmt.Errorf("run authority changed across policy rows")
 		}
 		expectedRuns[runID] = value
@@ -671,8 +1028,12 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 		if !ok || root.Variant != "concat" {
 			return fmt.Errorf("curriculum operation concat does not resolve")
 		}
+		usedAuthority[row.OperationRoot] = true
 		worldChildren := make([]string, 6)
 		initialWork := row.AcquisitionWork
+		searchWork := [12]int{}
+		behaviorEqual := true
+		aggregateTerminal := "completed"
 		for ordinal := 0; ordinal < 6; ordinal++ {
 			worldRow := worldRows[worldGrid[worldKey{row.Policy, ordinal}]]
 			worldChildren[ordinal] = worldRow.OperationRoot
@@ -686,9 +1047,19 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				workTerminal: worldRow.WorkTerminal, work: worldRow.Work, initialWork: initialWork,
 				terminal: worldRow.Terminal, world: worldRow.World, policy: worldRow.Policy,
 				terminalSet: worldRow.TerminalSet, historyCount: worldRow.HistoryCount,
+				matches: worldRow.Matches, certificates: worldRow.Certificates, sleepCount: worldRow.SleepCount,
+				truthPairs: truthWorlds[worldRow.World].pairs, truthTerminals: slices.Clone(truthWorlds[worldRow.World].terminals),
+				worldOrdinal: ordinal, acquisitionTotal: sumInts(row.AcquisitionWork[:]), remaining: worldRow.Remaining, artifact: row.Artifact,
 			}
 			if err := addExpected(runID, authority); err != nil {
 				return fmt.Errorf("utility run authority %s/%d: %w", row.Policy, ordinal, err)
+			}
+			for index := range searchWork {
+				searchWork[index] += worldRow.Work[index]
+			}
+			behaviorEqual = behaviorEqual && worldRow.BehaviorEqual
+			if worldRow.Terminal == "budget-exhausted" {
+				aggregateTerminal = "budget-exhausted"
 			}
 			for index := range initialWork {
 				initialWork[index] += worldRow.Work[index]
@@ -716,7 +1087,7 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 			if err := addExpected(runID, retainedRunAuthority{
 				curriculum: curriculum, operationRoot: acquisitionRoot, phase: 1,
 				workTerminal: row.AcquisitionTerminal, work: row.AcquisitionWork,
-				terminal: row.Acquisition, policy: acquisitionScope,
+				terminal: row.Acquisition, policy: acquisitionScope, trainingMatches: trainingByScope[acquisitionScope], artifact: row.Artifact,
 			}); err != nil {
 				return fmt.Errorf("acquisition run authority %s: %w", acquisitionScope, err)
 			}
@@ -732,9 +1103,25 @@ func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, o
 				return fmt.Errorf("curriculum operation child is absent")
 			}
 		}
+		lifecycleWork := row.AcquisitionWork
+		for index := range lifecycleWork {
+			lifecycleWork[index] += searchWork[index]
+		}
+		remaining := 2_000_000 - sumInts(lifecycleWork[:])
+		if aggregateTerminal == "budget-exhausted" {
+			remaining = 0
+		}
+		if searchWork != row.SearchWork || lifecycleWork != row.LifecycleWork || row.SearchTotal != sumInts(searchWork[:]) || row.LifecycleTotal != sumInts(lifecycleWork[:]) || row.BehaviorEqual != behaviorEqual || row.Terminal != aggregateTerminal || row.Remaining != remaining {
+			return fmt.Errorf("curriculum-policy aggregates differ from exact world rows")
+		}
 	}
 	if len(expectedRuns) != 44 || len(acquisitionRoots) != 2 {
 		return fmt.Errorf("expected run authority count=%d acquisitions=%d", len(expectedRuns), len(acquisitionRoots))
+	}
+	for digest, object := range objects {
+		if object.classes["authority"] && !usedAuthority[digest] {
+			return fmt.Errorf("unreachable object in curriculum authority scope: kind %d", object.kind)
+		}
 	}
 	result.runs = expectedRuns
 	return nil
@@ -744,6 +1131,45 @@ func mustObjectRow(data []byte) []json.RawMessage {
 	var row []json.RawMessage
 	_ = json.Unmarshal(data, &row)
 	return row
+}
+
+func retainedKindAllowedInScope(class string, kind uint16) bool {
+	switch class {
+	case "authority":
+		return slices.Contains([]uint16{1, 2, 3, 4, 29, 32, 33, 35, 36, 46, 47}, kind)
+	case "utility":
+		return !slices.Contains([]uint16{29, 32, 33, 35, 36, 47}, kind)
+	case "acquisition-nous-preboundary", "acquisition-no-guard-preboundary":
+		return !slices.Contains([]uint16{18, 19, 20, 21, 22, 23, 24, 25, 26, 29, 32, 33, 35, 36, 43, 44, 47, 48, 49}, kind)
+	default:
+		return false
+	}
+}
+
+func markRetainedPayloadDigests(payload []json.RawMessage, used map[string]bool) {
+	var walk func(any)
+	walk = func(value any) {
+		switch current := value.(type) {
+		case string:
+			if digestText(current) {
+				used[current] = true
+			}
+		case []any:
+			for _, item := range current {
+				walk(item)
+			}
+		case map[string]any:
+			for _, item := range current {
+				walk(item)
+			}
+		}
+	}
+	for _, raw := range payload {
+		var value any
+		if json.Unmarshal(raw, &value) == nil {
+			walk(value)
+		}
+	}
 }
 
 func ParseObjectPackRoot(data []byte) (ObjectPackRoot, error) {

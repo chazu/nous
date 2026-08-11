@@ -227,6 +227,17 @@ func publishPanel(prerequisites panelPrerequisites, writer *panelWriter, summary
 	if err := actionrelationexp.VerifyPublicationTerminal(publication, receipt); err != nil {
 		return actionrelationscore.Report{}, err
 	}
+	preexistingBytes, err := retainedLifecycleBytes(prerequisites.Root, lifecycle)
+	if err != nil {
+		return actionrelationscore.Report{}, err
+	}
+	if len(report.Canonical) > 14*1024*1024 || len(primary.Canonical) > 32_768 || len(audit.Canonical) > 32_768 || len(attestation.Canonical) > 8_192 || len(core.Canonical) > 8_192 || len(payload.Canonical) > 2_097_152 || len(receipt.Canonical) > 8_192 || len(publication.Canonical) > 8_192 {
+		return actionrelationscore.Report{}, fmt.Errorf("panel authority file exceeds its frozen byte cap")
+	}
+	newAuthorityBytes := int64(len(primary.Canonical) + len(audit.Canonical) + len(attestation.Canonical) + len(core.Canonical) + len(payload.Canonical) + len(report.Canonical) + len(receipt.Canonical) + len(publication.Canonical))
+	if writer.total+preexistingBytes+newAuthorityBytes > writer.cap {
+		return actionrelationscore.Report{}, fmt.Errorf("complete published panel exceeds capacity")
+	}
 	for _, file := range []actionrelationexp.EvidenceFile{
 		{Path: primaryPath, Mode: "100644", Data: primary.Canonical},
 		{Path: auditPath, Mode: "100644", Data: audit.Canonical},
@@ -242,9 +253,6 @@ func publishPanel(prerequisites panelPrerequisites, writer *panelWriter, summary
 		return actionrelationscore.Report{}, err
 	}
 	publicationPath := authorityRoot + "/publication.json"
-	if writer.total+int64(len(publication.Canonical)) > writer.cap {
-		return actionrelationscore.Report{}, fmt.Errorf("panel evidence exceeds capacity")
-	}
 	start, err := panelStartAuthority(prerequisites, summary.Panel, lifecycle)
 	if err != nil {
 		return actionrelationscore.Report{}, err
@@ -271,9 +279,24 @@ func publishPanel(prerequisites panelPrerequisites, writer *panelWriter, summary
 	if joined := errors.Join(receiptErr, publicationErr); joined != nil {
 		return actionrelationscore.Report{}, publishedCommitError{err: joined}
 	}
-	writer.total += int64(len(publication.Canonical))
+	writer.total += preexistingBytes + int64(len(report.Canonical)+len(receipt.Canonical)+len(publication.Canonical))
 	writer.files[publicationPath] = retainedFile{Path: publicationPhysical, Bytes: int64(len(publication.Canonical)), Digest: digest(publication.Canonical)}
 	return report, nil
+}
+
+func retainedLifecycleBytes(root string, lifecycle panelLifecycleAuthority) (int64, error) {
+	var total int64
+	for _, ref := range []*actionrelationexp.AuthorityRef{lifecycle.ClaimRef, lifecycle.RunningRef} {
+		if ref == nil {
+			continue
+		}
+		data, err := readRegularNoFollow(filepath.Join(root, filepath.FromSlash(ref.Path)), 0o644)
+		if err != nil || ref.Verify() != nil || digest(data) != ref.Digest || len(data) > 4_096 {
+			return 0, fmt.Errorf("panel lifecycle authority differs from frozen cap")
+		}
+		total += int64(len(data))
+	}
+	return total, nil
 }
 
 func loadPanelPrerequisites(ctx context.Context, repoRoot string) (panelPrerequisites, error) {
@@ -406,6 +429,18 @@ func (w *panelWriter) writeAll(files []actionrelationexp.EvidenceFile) error {
 		}
 	}
 	return nil
+}
+
+func (w *panelWriter) read(path string) ([]byte, error) {
+	retained, ok := w.files[path]
+	if !ok {
+		return nil, fmt.Errorf("panel evidence path is absent: %s", path)
+	}
+	data, err := readRegularNoFollow(retained.Path, 0o644)
+	if err != nil || int64(len(data)) != retained.Bytes || digest(data) != retained.Digest {
+		return nil, fmt.Errorf("panel evidence path changed: %s", path)
+	}
+	return data, nil
 }
 
 func (w *panelWriter) write(file actionrelationexp.EvidenceFile) error {

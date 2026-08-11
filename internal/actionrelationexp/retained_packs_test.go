@@ -3,9 +3,13 @@ package actionrelationexp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/chazu/nous/internal/actionrelationledger"
+	"github.com/chazu/nous/internal/actionrelationsearch"
+	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
 func TestRetainedManifestParsersRoundTripCanonicalRoots(t *testing.T) {
@@ -85,7 +89,7 @@ func TestRetainedRunReplayClosesReservationsTypesAndWork(t *testing.T) {
 		equalityDigest:     {kind: 40, canonical: equality},
 		reservation.Digest: {kind: 27, canonical: reservation.Canonical},
 	}
-	authority := retainedRunAuthority{curriculum: 0, phase: 2, workTerminal: zeroObjectDigest, work: [12]int{9: 1}, initialWork: [12]int{0: 2}, terminal: "completed"}
+	authority := retainedRunAuthority{curriculum: 0, phase: 2, workTerminal: zeroObjectDigest, work: [12]int{9: 1}, initialWork: [12]int{0: 2}, terminal: "completed", policy: "complete", worldOrdinal: 5, remaining: 1_999_997}
 	record := RunEvidenceRecord{RunID: runID}
 	if err := verifyRetainedRunReplay(record, authority, calls, objects, nil, nil); err != nil {
 		t.Fatal(err)
@@ -131,6 +135,260 @@ func TestCertificateAttemptFinalizationMatchesDigestSortedPair(t *testing.T) {
 	if certificateAttemptMatchesFinalization(attempt, payload, root) {
 		t.Fatal("accepted different certificate attempt pair")
 	}
+}
+
+func TestRetainedPartialSearchGraphRequiresExactSemanticPrefix(t *testing.T) {
+	authority, calls, objects, structural := retainedPartialSearchFixture(t, 0)
+	if err := verifyRetainedPartialSearchGraph(authority, calls, objects, structural, nil); err != nil {
+		t.Fatalf("valid partial DFS prefix: %v", err)
+	}
+	if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, structural); err != nil {
+		t.Fatalf("valid partial structural set: %v", err)
+	}
+
+	_, nonPrefixCalls, nonPrefixObjects, nonPrefixStructural := retainedPartialSearchFixture(t, 1)
+	if err := verifyRetainedPartialSearchGraph(authority, nonPrefixCalls, nonPrefixObjects, nonPrefixStructural, nil); err == nil {
+		t.Fatal("accepted a completed later sibling without the semantic first sibling")
+	}
+
+	if err := verifyRetainedPartialSearchGraph(authority, calls[:len(calls)-1], objects, structural, nil); err == nil {
+		t.Fatal("accepted a retained terminal without its charged construction call")
+	}
+	extraObjects := cloneRetainedObjects(objects)
+	extraStructural := mapsCloneBool(structural)
+	extraState, _ := (actionrelations.State{Cells: []actionrelations.Cell{{Name: "extra", Value: 0}}}).CanonicalJSON()
+	extraDigest := shaHex(extraState)
+	extraObjects[extraDigest] = retainedObjectValue{kind: 1, canonical: extraState}
+	extraStructural[fmt.Sprintf("1:%s", extraDigest)] = true
+	if err := verifyRetainedStructuralCompleteness(authority, calls, extraObjects, nil, extraStructural); err == nil {
+		t.Fatal("accepted an attributed but unproduced utility object")
+	}
+}
+
+func TestRetainedBudgetReplayUsesExactFrozenCrossing(t *testing.T) {
+	runID := testDigest("retained-budget-crossing")[:32]
+	cap := 4_096
+	before := cap - 2
+	rejected, err := actionrelationledger.BuildReservation(runID, testAuthorityDigest("rejected-task"), []uint8{11, 11}, before, cap)
+	if err != nil || rejected.Status != "rejected-cap" {
+		t.Fatalf("rejected reservation: %v", err)
+	}
+	terminalReservation, err := actionrelationledger.BuildTerminalReservation(runID, testAuthorityDigest("terminal-task"), before, cap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := [12]int{}
+	work[0], work[11] = before, 1
+	terminalWire, _ := json.Marshal([]any{"action-work-terminal/v1", runID, 2, rejected.Digest, "budget-exhausted", work, before + 1, 0})
+	terminalDigest := shaHex(terminalWire)
+	payloadWire, _ := json.Marshal([]any{"budget-terminal", rejected.Digest})
+	var payload []json.RawMessage
+	_ = json.Unmarshal(payloadWire, &payload)
+	calls := []retainedCall{{sequence: 0, phase: 2, operation: 19, counter: 12, status: 1, source: terminalReservation.Digest, payload: payload, outputs: []string{terminalDigest}}}
+	objects := map[string]retainedObjectValue{
+		rejected.Digest:            {kind: 27, canonical: rejected.Canonical},
+		terminalReservation.Digest: {kind: 27, canonical: terminalReservation.Canonical},
+		terminalDigest:             {kind: 49, canonical: terminalWire},
+	}
+	authority := retainedRunAuthority{
+		phase: 2, terminal: "budget-exhausted", policy: "complete", worldOrdinal: 5,
+		workTerminal: terminalDigest, work: [12]int{11: 1}, initialWork: [12]int{0: before},
+		terminalSet: zeroObjectDigest, remaining: 0,
+	}
+	record := RunEvidenceRecord{RunID: runID, WorkTerminal: terminalDigest}
+	if err := verifyRetainedRunReplay(record, authority, calls, objects, nil, nil); err != nil {
+		t.Fatalf("exact cap crossing: %v", err)
+	}
+
+	earlyWire, _ := json.Marshal([]any{"compound-work-reservation/v1", runID, testAuthorityDigest("early-task"), []uint8{11}, before, before, "rejected-cap"})
+	earlyDigest := shaHex(earlyWire)
+	earlyTerminalWire, _ := json.Marshal([]any{"action-work-terminal/v1", runID, 2, earlyDigest, "budget-exhausted", work, before + 1, 0})
+	earlyTerminalDigest := shaHex(earlyTerminalWire)
+	earlyPayloadWire, _ := json.Marshal([]any{"budget-terminal", earlyDigest})
+	_ = json.Unmarshal(earlyPayloadWire, &calls[0].payload)
+	calls[0].outputs = []string{earlyTerminalDigest}
+	earlyObjects := cloneRetainedObjects(objects)
+	earlyObjects[earlyDigest] = retainedObjectValue{kind: 27, canonical: earlyWire}
+	earlyObjects[earlyTerminalDigest] = retainedObjectValue{kind: 49, canonical: earlyTerminalWire}
+	authority.workTerminal = earlyTerminalDigest
+	record.WorkTerminal = earlyTerminalDigest
+	if err := verifyRetainedRunReplay(record, authority, calls, earlyObjects, nil, nil); err == nil {
+		t.Fatal("accepted a rejected-cap terminal before the frozen crossing")
+	}
+}
+
+func retainedPartialSearchFixture(t *testing.T, selected int) (retainedRunAuthority, []retainedCall, map[string]retainedObjectValue, map[string]bool) {
+	t.Helper()
+	state := actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: 0}, {Name: "c1", Value: 0}}}
+	occurrences, err := actionrelations.AssignOccurrences([]actionrelations.SemanticAction{
+		{Kind: "add", XRole: "c0", N: 1},
+		{Kind: "add", XRole: "c1", N: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(occurrences, func(a, b actionrelations.Occurrence) int {
+		aBytes, _ := a.CanonicalJSON()
+		bBytes, _ := b.CanonicalJSON()
+		return bytes.Compare(aBytes, bBytes)
+	})
+	if selected < 0 || selected >= len(occurrences) {
+		t.Fatal("invalid selected occurrence")
+	}
+	taken, other := occurrences[selected], occurrences[1-selected]
+	takenDigest, _ := taken.Digest()
+	otherDigest, _ := other.Digest()
+
+	emptyProof, _ := actionrelationsearch.BuildProofMap(nil)
+	rootRemaining, err := actionrelationsearch.BuildRemaining(occurrences)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootNode, err := actionrelationsearch.BuildSearchNode(state, rootRemaining, emptyProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childState, outcome, err := actionrelations.Apply(state, taken.Action)
+	if err != nil || outcome != "applied" {
+		t.Fatalf("root transition: %s %v", outcome, err)
+	}
+	childRemaining, err := actionrelationsearch.BuildRemaining([]actionrelations.Occurrence{other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childNode, err := actionrelationsearch.BuildSearchNode(childState, childRemaining, emptyProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalState, outcome, err := actionrelations.Apply(childState, other.Action)
+	if err != nil || outcome != "applied" {
+		t.Fatalf("child transition: %s %v", outcome, err)
+	}
+	emptyRemaining, err := actionrelationsearch.BuildRemaining(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalNode, err := actionrelationsearch.BuildSearchNode(terminalState, emptyRemaining, emptyProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := actionrelationsearch.BuildTerminalBehavior(terminalState, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalSet, err := actionrelationsearch.BuildTerminalSet([]string{terminal.Digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalSubtree, err := actionrelationsearch.BuildSubtreeRoot(terminalNode.Digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childEdge, err := actionrelationsearch.BuildSearchEdge(childNode.Digest, otherDigest, nil, terminalNode.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childCompletion, err := actionrelationsearch.BuildCompletedSubtree(childNode.Digest, otherDigest, childEdge, terminalSubtree, terminalSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childSubtree, err := actionrelationsearch.BuildSubtreeRoot(childNode.Digest, []string{childCompletion.Digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootEdge, err := actionrelationsearch.BuildSearchEdge(rootNode.Digest, takenDigest, nil, childNode.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCompletion, err := actionrelationsearch.BuildCompletedSubtree(rootNode.Digest, takenDigest, rootEdge, childSubtree, terminalSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	objects := map[string]retainedObjectValue{}
+	structural := map[string]bool{}
+	addBytes := func(kind uint16, canonical []byte) string {
+		digest := shaHex(canonical)
+		objects[digest] = retainedObjectValue{kind: kind, canonical: canonical}
+		structural[fmt.Sprintf("%d:%s", kind, digest)] = true
+		return digest
+	}
+	addEvidence := func(kind uint16, value actionrelationsearch.EvidenceObject) {
+		addBytes(kind, value.Canonical)
+	}
+	for _, value := range []actionrelations.State{state, childState, terminalState} {
+		canonical, _ := value.CanonicalJSON()
+		addBytes(1, canonical)
+	}
+	for _, value := range occurrences {
+		canonical, _ := value.CanonicalJSON()
+		addBytes(3, canonical)
+	}
+	for _, value := range []actionrelationsearch.EvidenceObject{rootRemaining, childRemaining, emptyRemaining} {
+		addEvidence(5, value)
+	}
+	addEvidence(19, emptyProof)
+	for _, value := range []actionrelationsearch.EvidenceObject{rootNode, childNode, terminalNode} {
+		addEvidence(20, value)
+	}
+	for _, value := range []actionrelationsearch.EvidenceObject{rootEdge, childEdge} {
+		addEvidence(21, value)
+	}
+	for _, value := range []actionrelationsearch.EvidenceObject{rootCompletion, childCompletion} {
+		addEvidence(22, value)
+	}
+	addEvidence(23, terminal)
+	addEvidence(24, terminalSet)
+	for _, value := range []actionrelationsearch.EvidenceObject{childSubtree, terminalSubtree} {
+		addEvidence(25, value)
+	}
+	for digest, object := range objects {
+		if slices.Contains([]uint16{1, 3, 20, 23}, object.kind) {
+			delete(structural, fmt.Sprintf("%d:%s", object.kind, digest))
+		}
+	}
+
+	stateDigest, _ := state.Digest()
+	childStateDigest, _ := childState.Digest()
+	semanticDigests := make([]string, len(occurrences))
+	for index, occurrence := range occurrences {
+		semanticDigests[index], _ = occurrence.Digest()
+	}
+	payload := func(values ...any) []json.RawMessage {
+		wire, _ := json.Marshal(values)
+		var result []json.RawMessage
+		_ = json.Unmarshal(wire, &result)
+		return result
+	}
+	calls := []retainedCall{
+		{sequence: 0, operation: 16, outputs: []string{rootNode.Digest}},
+		{sequence: 1, operation: 23, payload: payload("search-applicable", testAuthorityDigest("world"), "complete", rootNode.Digest, stateDigest, semanticDigests[0])},
+		{sequence: 2, operation: 23, payload: payload("search-applicable", testAuthorityDigest("world"), "complete", rootNode.Digest, stateDigest, semanticDigests[1])},
+		{sequence: 3, operation: 16, outputs: []string{childNode.Digest}},
+		{sequence: 4, operation: 23, payload: payload("search-applicable", testAuthorityDigest("world"), "complete", childNode.Digest, childStateDigest, otherDigest)},
+		{sequence: 5, operation: 16, outputs: []string{terminalNode.Digest}},
+		{sequence: 6, operation: 19, payload: payload("terminal-construct"), outputs: []string{terminal.Digest}},
+	}
+	callIDs := make([]string, len(calls))
+	for index := range calls {
+		calls[index].callID = testAuthorityDigest(fmt.Sprintf("partial-call-%d-%d", selected, index))
+		callIDs[index] = calls[index].callID
+	}
+	runRoot, err := BuildOperationRange(testDigest(fmt.Sprintf("partial-run-%d", selected))[:32], 2, 0, callIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addBytes(46, runRoot.Canonical)
+	authority := retainedRunAuthority{terminal: "budget-exhausted", terminalSet: zeroObjectDigest, policy: "complete", world: testAuthorityDigest("world"), operationRoot: runRoot.Digest}
+	return authority, calls, objects, structural
+}
+
+func mapsCloneBool(values map[string]bool) map[string]bool {
+	result := make(map[string]bool, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }
 
 func slicesCloneCalls(values []retainedCall) []retainedCall {

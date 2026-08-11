@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/chazu/nous/internal/actionrelationledger"
 	"github.com/chazu/nous/internal/actionrelationoracle"
@@ -286,6 +288,29 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 	if work != authority.work {
 		return fmt.Errorf("charged work vector does not match score row")
 	}
+	if authority.phase == 2 {
+		certificates, err := retainedCertificateCounts(calls, objects)
+		if err != nil || certificates != authority.certificates {
+			return fmt.Errorf("certificate counts differ from retained cache evidence")
+		}
+		sleepCount := 0
+		for key := range structural {
+			if strings.HasPrefix(key, "18:") {
+				sleepCount++
+			}
+		}
+		if sleepCount != authority.sleepCount {
+			return fmt.Errorf("sleep count differs from retained propagation evidence")
+		}
+		utilityMatches, err := retainedUtilityMatchCounts(calls, objects, authority.truthPairs)
+		if err != nil || !slices.Equal(authority.matches[5:], utilityMatches[:]) {
+			return fmt.Errorf("utility match counts differ from retained typed calls and sealed truth")
+		}
+	}
+	effectiveCap := retainedRunEffectiveCap(authority)
+	if effectiveCap < 1 || sumInts(authority.initialWork[:]) >= effectiveCap {
+		return fmt.Errorf("run begins outside its frozen effective cap")
+	}
 
 	total := sumInts(authority.initialWork[:])
 	seen := map[string]bool{}
@@ -296,7 +321,8 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 			return fmt.Errorf("call %d lacks unique retained reservation", cursor)
 		}
 		reservation, err := decodeReservation(object.canonical)
-		if err != nil || reservation.Digest != first.source || reservation.RunID != record.RunID || reservation.Status != "reserved" || reservation.TotalBefore != total {
+		usesReservedTerminal := authority.phase == 2 && authority.terminal == "budget-exhausted" && cursor == len(calls)-1 && first.operation == 19 && payloadTag(first.payload) == "budget-terminal" && slices.Equal(reservation.OperationCodes, []uint8{19})
+		if err != nil || reservation.Digest != first.source || reservation.RunID != record.RunID || reservation.Status != "reserved" || reservation.TotalBefore != total || !usesReservedTerminal && reservation.TotalAfter >= effectiveCap || usesReservedTerminal && reservation.TotalAfter > effectiveCap {
 			return fmt.Errorf("call %d has invalid reservation authority", cursor)
 		}
 		if authority.phase == 1 {
@@ -320,16 +346,29 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 	if total != sumInts(authority.initialWork[:])+len(calls) {
 		return fmt.Errorf("reservation totals do not conserve charged work")
 	}
+	if authority.phase == 2 && (authority.terminal == "completed" && (total > effectiveCap || authority.remaining != 2_000_000-total) || authority.terminal == "budget-exhausted" && authority.remaining != 0) {
+		return fmt.Errorf("run terminal differs from frozen cap and lifecycle remainder")
+	}
 	if authority.phase == 1 {
 		if err := verifyRetainedAcquisitionClosure(record.RunID, authority, calls, objects, tables); err != nil {
 			return err
 		}
 	}
-	if authority.phase == 2 && authority.terminal == "completed" && structural != nil {
-		if err := verifyRetainedCacheRanges(record.RunID, calls, objects); err != nil {
+	if authority.phase == 2 && structural != nil {
+		decisions, err := verifyRetainedCacheRanges(record.RunID, authority, calls, objects)
+		if err != nil {
 			return err
 		}
-		if err := verifyRetainedSearchGraph(authority, calls, objects, structural); err != nil {
+		if authority.terminal == "completed" {
+			if err := verifyRetainedSearchGraph(authority, calls, objects, structural, decisions); err != nil {
+				return err
+			}
+		} else if err := verifyRetainedPartialSearchGraph(authority, calls, objects, structural, decisions); err != nil {
+			return err
+		}
+	}
+	if structural != nil {
+		if err := verifyRetainedStructuralCompleteness(authority, calls, objects, tables, structural); err != nil {
 			return err
 		}
 	}
@@ -361,16 +400,419 @@ func verifyRetainedRunReplay(record RunEvidenceRecord, authority retainedRunAuth
 	}
 	rejected, err := decodeReservation(rejectedObject.canonical)
 	terminalReservation, terminalErr := decodeReservation(objects[last.source].canonical)
-	if err != nil || terminalErr != nil || rejected.Status != "rejected-cap" || rejected.RunID != record.RunID || rejected.TotalBefore != terminalReservation.TotalBefore || rejected.TotalAfter != rejected.TotalBefore || !slices.Equal(terminalReservation.OperationCodes, []uint8{19}) || terminalReservation.TotalAfter != rejected.TotalBefore+1 || rejected.TotalBefore+len(rejected.OperationCodes) < terminalReservation.TotalAfter {
+	if err != nil || terminalErr != nil || rejected.Status != "rejected-cap" || rejected.RunID != record.RunID || rejected.TotalBefore != terminalReservation.TotalBefore || rejected.TotalAfter != rejected.TotalBefore || !slices.Equal(terminalReservation.OperationCodes, []uint8{19}) || terminalReservation.TotalAfter != rejected.TotalBefore+1 || terminalReservation.TotalAfter > effectiveCap || rejected.TotalBefore+len(rejected.OperationCodes) < effectiveCap {
 		return fmt.Errorf("budget terminal reservations do not reconstruct")
 	}
 	return nil
 }
 
-func verifyRetainedCacheRanges(runID string, calls []retainedCall, objects map[string]retainedObjectValue) error {
+func retainedRunEffectiveCap(authority retainedRunAuthority) int {
+	if authority.phase == 1 {
+		if authority.policy == "nous" {
+			return 24_000
+		}
+		if authority.policy == "no-guard" {
+			return 192
+		}
+		return 0
+	}
+	physical := 4_096
+	if authority.policy == "dynamic-diamond-sleep" || authority.policy == "nous-guarded-sleep" {
+		physical = 8_192
+	}
+	reserved := 5 - authority.worldOrdinal
+	cap := authority.acquisitionTotal + physical - reserved
+	if lifecycle := 2_000_000 - reserved; lifecycle < cap {
+		cap = lifecycle
+	}
+	return cap
+}
+
+func verifyRetainedStructuralCompleteness(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, tables map[string][]retainedTableLeaf, structural map[string]bool) error {
+	actual := map[string]bool{}
+	byKind := map[uint16][]string{}
+	for digest, object := range objects {
+		key := fmt.Sprintf("%d:%s", object.kind, digest)
+		if structural[key] {
+			actual[key] = true
+			byKind[object.kind] = append(byKind[object.kind], digest)
+		}
+	}
+	if len(actual) != len(structural) {
+		return fmt.Errorf("structural attribution names an absent typed object")
+	}
+	expected := map[string]bool{}
+	add := func(kind uint16, digest string) error {
+		object, ok := objects[digest]
+		key := fmt.Sprintf("%d:%s", kind, digest)
+		if !ok || object.kind != kind || !actual[key] {
+			return fmt.Errorf("required structural object kind %d is absent", kind)
+		}
+		expected[key] = true
+		return nil
+	}
+	if authority.phase == 1 {
+		allowed := map[uint16]bool{9: true, 11: true, 12: true, 13: true, 28: true, 46: true}
+		for kind := range byKind {
+			if !allowed[kind] {
+				return fmt.Errorf("acquisition structural attribution has impossible kind %d", kind)
+			}
+		}
+		if err := add(46, authority.operationRoot); err != nil {
+			return err
+		}
+		semanticRoot, viewRoot := "", ""
+		for _, call := range calls {
+			switch call.operation {
+			case 8:
+				if err := add(28, rawText(call.payload[1])); err != nil {
+					return err
+				}
+				semanticRoot = rawText(call.payload[3])
+			case 20:
+				if viewRoot == "" {
+					viewRoot = rawText(call.payload[3])
+				}
+			}
+		}
+		if semanticRoot == "" || viewRoot == "" {
+			return fmt.Errorf("acquisition structural roots are absent")
+		}
+		trainingWire, _ := json.Marshal([]any{"action-training-evidence/v1", semanticRoot, viewRoot})
+		if err := add(11, shaHex(trainingWire)); err != nil {
+			return err
+		}
+		for _, candidates := range tables {
+			for _, candidate := range candidates {
+				if candidate.curriculum != authority.curriculum || candidate.scope != authority.policy {
+					continue
+				}
+				switch candidate.kind {
+				case 105:
+					if err := add(46, digestAt(candidate.record, 292)); err != nil {
+						return err
+					}
+				case 106:
+					if err := add(12, digestAt(candidate.record, 0)); err != nil {
+						return err
+					}
+					if err := add(13, digestAt(candidate.record, 96)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		artifact := objects[authority.artifact]
+		var artifactRow []json.RawMessage
+		var relations []string
+		if artifact.kind != 10 || json.Unmarshal(artifact.canonical, &artifactRow) != nil || len(artifactRow) != 3 || json.Unmarshal(artifactRow[1], &relations) != nil {
+			return fmt.Errorf("acquisition artifact does not expose its structural relations")
+		}
+		for _, relation := range relations {
+			if err := add(9, relation); err != nil {
+				return err
+			}
+		}
+	} else {
+		allowed := map[uint16]bool{5: true, 8: true, 14: true, 15: true, 16: true, 17: true, 18: true, 19: true, 21: true, 22: true, 24: true, 25: true, 43: true, 44: true, 46: true}
+		for kind := range byKind {
+			if !allowed[kind] {
+				return fmt.Errorf("utility structural attribution has impossible kind %d", kind)
+			}
+		}
+		for _, kind := range []uint16{5, 18, 19, 21, 22, 24, 25} {
+			for _, digest := range byKind[kind] {
+				expected[fmt.Sprintf("%d:%s", kind, digest)] = true
+			}
+		}
+		if err := add(46, authority.operationRoot); err != nil {
+			return err
+		}
+		payloadDigests := map[string]bool{}
+		outputDigests := map[string]bool{}
+		for _, call := range calls {
+			for _, output := range call.outputs {
+				outputDigests[output] = true
+			}
+			markRetainedPayloadDigests(call.payload, payloadDigests)
+			if call.operation == 25 {
+				attemptDigest, operationRoot := rawText(call.payload[7]), rawText(call.payload[8])
+				if err := add(44, attemptDigest); err != nil {
+					return err
+				}
+				if err := add(46, operationRoot); err != nil {
+					return err
+				}
+				attempt, err := decodeCertificateAttempt(mustObjectRow(objects[attemptDigest].canonical))
+				if err != nil {
+					return err
+				}
+				witnessKind := uint16(14)
+				if authority.policy == "static-rw-sleep" {
+					witnessKind = 15
+				} else if authority.policy == "dynamic-diamond-sleep" {
+					witnessKind = 16
+				}
+				if err := add(witnessKind, attempt.Witness); err != nil {
+					return err
+				}
+				if attempt.Certificate != zeroObjectDigest {
+					if err := add(17, attempt.Certificate); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		for _, digest := range byKind[8] {
+			if !payloadDigests[digest] {
+				return fmt.Errorf("utility local-facts object is absent from exact charged payloads")
+			}
+			expected[fmt.Sprintf("8:%s", digest)] = true
+		}
+		barriers, err := retainedUnanimousBarrierDigests(authority, calls, objects)
+		if err != nil {
+			return err
+		}
+		for digest := range barriers {
+			if err := add(43, digest); err != nil {
+				return err
+			}
+		}
+		unreferencedWitnesses := 0
+		for _, kind := range []uint16{14, 15, 16} {
+			for _, digest := range byKind[kind] {
+				key := fmt.Sprintf("%d:%s", kind, digest)
+				if expected[key] {
+					continue
+				}
+				var row []json.RawMessage
+				if json.Unmarshal(objects[digest].canonical, &row) != nil || !retainedTailWitnessMatches(kind, row, outputDigests, barriers, objects) {
+					return fmt.Errorf("unbound utility witness kind %d", kind)
+				}
+				unreferencedWitnesses++
+				expected[key] = true
+			}
+		}
+		if unreferencedWitnesses > 1 || unreferencedWitnesses == 1 && authority.terminal != "budget-exhausted" {
+			return fmt.Errorf("utility carries witness outside an exact completed attempt")
+		}
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		return fmt.Errorf("structural attribution set differs from exact produced objects")
+	}
+	return nil
+}
+
+func retainedTailWitnessMatches(kind uint16, row []json.RawMessage, outputs, barriers map[string]bool, objects map[string]retainedObjectValue) bool {
+	switch kind {
+	case 14:
+		return len(row) == 2 && rawText(row[0]) == "learned-witness/v1" && barriers[rawText(row[1])]
+	case 15:
+		footprint := objects[rawText(row[1])]
+		var footprintRow []json.RawMessage
+		var result bool
+		return len(row) == 2 && rawText(row[0]) == "static-witness/v1" && outputs[rawText(row[1])] && footprint.kind == 48 && json.Unmarshal(footprint.canonical, &footprintRow) == nil && len(footprintRow) == 10 && json.Unmarshal(footprintRow[8], &result) == nil && result
+	case 16:
+		return len(row) == 3 && rawText(row[0]) == "dynamic-witness/v1" && rawText(row[1]) == "all-pairs" && outputs[rawText(row[2])] && objects[rawText(row[2])].kind == 38
+	default:
+		return false
+	}
+}
+
+func retainedUnanimousBarrierDigests(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue) (map[string]bool, error) {
+	result := map[string]bool{}
+	if authority.policy != "nous-guarded-sleep" && authority.policy != "no-guard-sleep" {
+		return result, nil
+	}
+	type trace struct {
+		state, a, b string
+		matches     []string
+		all         bool
+	}
+	current := trace{all: true}
+	finish := func() error {
+		if current.state == "" {
+			return nil
+		}
+		if current.a == "" || current.b == "" || len(current.matches) == 0 {
+			return fmt.Errorf("learned structural barrier has incomplete charged trace")
+		}
+		root, err := actionrelationwire.RootDigest("unanimous-relation-matches", current.matches)
+		if err != nil {
+			return err
+		}
+		wire, _ := json.Marshal([]any{"action-unanimous-use/v1", authority.artifact, current.state, current.a, current.b, root, current.all, "valid"})
+		result[shaHex(wire)] = true
+		current = trace{all: true}
+		return nil
+	}
+	for _, call := range calls {
+		if call.operation == 21 {
+			if current.b != "" {
+				if err := finish(); err != nil {
+					return nil, err
+				}
+			}
+			if len(call.outputs) != 1 {
+				return nil, fmt.Errorf("learned applicability lacks structural trace row")
+			}
+			var row []json.RawMessage
+			if json.Unmarshal(objects[call.outputs[0]].canonical, &row) != nil || len(row) != 5 {
+				return nil, fmt.Errorf("learned applicability structural trace does not decode")
+			}
+			if current.state == "" {
+				current.state, current.a = rawText(row[1]), rawText(row[2])
+			} else if current.state != rawText(row[1]) {
+				return nil, fmt.Errorf("learned structural trace changes state")
+			} else {
+				current.b = rawText(row[2])
+			}
+		}
+		if call.operation == 9 {
+			if current.b == "" || len(call.outputs) != 1 {
+				return nil, fmt.Errorf("relation match is outside a learned structural trace")
+			}
+			var row []json.RawMessage
+			var matched bool
+			if json.Unmarshal(objects[call.outputs[0]].canonical, &row) != nil || len(row) != 12 || rawText(row[2]) != current.state || json.Unmarshal(row[10], &matched) != nil {
+				return nil, fmt.Errorf("relation match differs from learned structural trace")
+			}
+			aFacts, aErr := actionrelations.ParseLocalFacts(objects[rawText(row[3])].canonical)
+			bFacts, bErr := actionrelations.ParseLocalFacts(objects[rawText(row[4])].canonical)
+			if aErr != nil || bErr != nil || aFacts.StateDigest != current.state || bFacts.StateDigest != current.state || aFacts.OccurrenceDigest != current.a || bFacts.OccurrenceDigest != current.b {
+				return nil, fmt.Errorf("relation match facts differ from learned structural trace")
+			}
+			current.matches = append(current.matches, call.outputs[0])
+			current.all = current.all && matched
+		}
+	}
+	if err := finish(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func retainedCertificateCounts(calls []retainedCall, objects map[string]retainedObjectValue) ([4]int, error) {
+	var result [4]int
+	for _, call := range calls {
+		if call.operation == 18 && call.status == 1 {
+			result[0]++
+		}
+		if (call.operation != 25 && !(call.operation == 18 && call.status == 3)) || len(call.outputs) != 1 {
+			continue
+		}
+		object := objects[call.outputs[0]]
+		var row []json.RawMessage
+		if object.kind != 26 || json.Unmarshal(object.canonical, &row) != nil || len(row) != 12 {
+			return [4]int{}, fmt.Errorf("certificate count output is not a cache row")
+		}
+		if call.operation == 25 && rawText(row[9]) == "certified" {
+			result[1]++
+		} else if call.operation == 18 && rawText(row[9]) == "certified" {
+			result[2]++
+		} else if call.operation == 18 && rawText(row[9]) == "not-certified" {
+			result[3]++
+		} else if call.operation == 25 && rawText(row[9]) != "not-certified" {
+			return [4]int{}, fmt.Errorf("cache row has unknown certificate result")
+		}
+	}
+	return result, nil
+}
+
+func retainedUtilityMatchCounts(calls []retainedCall, objects map[string]retainedObjectValue, truth map[string]string) ([3]int, error) {
+	type pairTrace struct {
+		state       string
+		occurrences []string
+		results     []bool
+	}
+	var traces []pairTrace
+	var current *pairTrace
+	finish := func() error {
+		if current == nil {
+			return nil
+		}
+		if current.state == "" || len(current.occurrences) != 2 {
+			return fmt.Errorf("incomplete retained learned-pair trace")
+		}
+		traces = append(traces, *current)
+		current = nil
+		return nil
+	}
+	for _, call := range calls {
+		if call.operation == 21 {
+			if current != nil && len(current.occurrences) == 2 {
+				if err := finish(); err != nil {
+					return [3]int{}, err
+				}
+			}
+			if current == nil {
+				current = &pairTrace{}
+			}
+			if len(call.outputs) != 1 {
+				return [3]int{}, fmt.Errorf("learned applicability lacks retained row")
+			}
+			rowObject := objects[call.outputs[0]]
+			var row []json.RawMessage
+			var applicable bool
+			if rowObject.kind != 38 || json.Unmarshal(rowObject.canonical, &row) != nil || len(row) != 5 || json.Unmarshal(row[3], &applicable) != nil || !applicable {
+				return [3]int{}, fmt.Errorf("learned applicability is not valid true")
+			}
+			if current.state != "" && current.state != rawText(row[1]) {
+				return [3]int{}, fmt.Errorf("learned pair changes state")
+			}
+			current.state = rawText(row[1])
+			current.occurrences = append(current.occurrences, rawText(row[2]))
+		}
+		if call.operation == 9 {
+			if current == nil || len(call.outputs) != 1 {
+				return [3]int{}, fmt.Errorf("relation match lacks retained pair")
+			}
+			object := objects[call.outputs[0]]
+			var row []json.RawMessage
+			var matched bool
+			if object.kind != 42 || json.Unmarshal(object.canonical, &row) != nil || len(row) != 12 || json.Unmarshal(row[10], &matched) != nil {
+				return [3]int{}, fmt.Errorf("relation match result does not decode")
+			}
+			current.results = append(current.results, matched)
+		}
+	}
+	if err := finish(); err != nil {
+		return [3]int{}, err
+	}
+	var result [3]int
+	for _, trace := range traces {
+		result[0]++
+		matched := len(trace.results) > 0
+		for _, value := range trace.results {
+			matched = matched && value
+		}
+		if !matched {
+			continue
+		}
+		result[1]++
+		pair := sortedPair(trace.occurrences[0], trace.occurrences[1])
+		label, ok := truth[trace.state+pair[0]+pair[1]]
+		if !ok {
+			return [3]int{}, fmt.Errorf("matched pair is absent from sealed truth")
+		}
+		if label != "commutes" {
+			result[2]++
+		}
+	}
+	return result, nil
+}
+
+type retainedCertificateDecision struct {
+	world, policy, state, minimum, maximum string
+	witness, certificate, cache            string
+	finalization                           int
+}
+
+func verifyRetainedCacheRanges(runID string, authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue) (map[string]retainedCertificateDecision, error) {
 	callByID := map[string]retainedCall{}
 	finalized := map[string]string{}
 	misses := map[string]bool{}
+	decisions := map[string]retainedCertificateDecision{}
 	keyFor := func(payload []json.RawMessage) string {
 		return rawText(payload[1]) + rawText(payload[2]) + rawText(payload[3]) + rawText(payload[4]) + rawText(payload[5])
 	}
@@ -379,14 +821,14 @@ func verifyRetainedCacheRanges(runID string, calls []retainedCall, objects map[s
 		if call.operation == 18 && call.status == 1 {
 			key := keyFor(call.payload)
 			if misses[call.callID] || finalized[key] != "" {
-				return fmt.Errorf("duplicate cache miss or miss after finalization")
+				return nil, fmt.Errorf("duplicate cache miss or miss after finalization")
 			}
 			misses[call.callID] = true
 		}
 		if call.operation == 18 && call.status == 3 {
 			key := keyFor(call.payload)
 			if finalized[key] == "" || !slices.Equal(call.outputs, []string{finalized[key]}) {
-				return fmt.Errorf("cache hit precedes or differs from finalization")
+				return nil, fmt.Errorf("cache hit precedes or differs from finalization")
 			}
 		}
 		if call.operation != 25 {
@@ -397,15 +839,21 @@ func verifyRetainedCacheRanges(runID string, calls []retainedCall, objects map[s
 		missID, attemptDigest, rootDigest := rawText(p[6]), rawText(p[7]), rawText(p[8])
 		miss, ok := callByID[missID]
 		if !ok || !misses[missID] || miss.operation != 18 || miss.status != 1 || len(miss.outputs) != 0 || keyFor(miss.payload) != key || finalized[key] != "" {
-			return fmt.Errorf("cache finalization lacks its unique prior miss")
+			return nil, fmt.Errorf("cache finalization lacks its unique prior miss")
 		}
 		rootObject, rootOK := objects[rootDigest]
 		if !rootOK || rootObject.kind != 46 {
-			return fmt.Errorf("certificate range root does not resolve")
+			return nil, fmt.Errorf("certificate range root does not resolve")
 		}
 		root, err := decodeOperationRoot(mustObjectRow(rootObject.canonical))
-		if err != nil || root.Variant != "range" || root.RunID != runID || root.Phase != 2 || root.Count < 1 || int(root.Start)+root.Count != call.sequence || int(root.Start) > miss.sequence || miss.sequence >= call.sequence {
-			return fmt.Errorf("certificate operation range has wrong bounds")
+		firstOperation := uint8(21)
+		if authority.policy == "static-rw-sleep" {
+			firstOperation = 24
+		} else if authority.policy == "dynamic-diamond-sleep" {
+			firstOperation = 18
+		}
+		if err != nil || root.Variant != "range" || root.RunID != runID || root.Phase != 2 || root.Count < 1 || int(root.Start)+root.Count != call.sequence || int(root.Start) > miss.sequence || miss.sequence >= call.sequence || calls[root.Start].operation != firstOperation {
+			return nil, fmt.Errorf("certificate operation range has wrong bounds or eligibility start")
 		}
 		callIDs := make([]string, root.Count)
 		operationRows := []string{}
@@ -416,55 +864,69 @@ func verifyRetainedCacheRanges(runID string, calls []retainedCall, objects map[s
 			if item.operation == 18 {
 				missCount++
 				if item.callID != missID || item.status != 1 || len(item.outputs) != 0 {
-					return fmt.Errorf("certificate range contains wrong cache miss")
+					return nil, fmt.Errorf("certificate range contains wrong cache miss")
 				}
 			}
 			if item.operation == 25 {
-				return fmt.Errorf("certificate range includes finalization")
+				return nil, fmt.Errorf("certificate range includes finalization")
 			}
 			if item.operation == 12 || item.operation == 13 || item.operation == 14 {
 				if len(item.outputs) == 0 {
-					return fmt.Errorf("certificate proof operation lacks row")
+					return nil, fmt.Errorf("certificate proof operation lacks row")
 				}
 				operationRows = append(operationRows, item.outputs[0])
 			}
 		}
 		wantRoot, err := BuildOperationRange(runID, 2, root.Start, callIDs)
 		if err != nil || wantRoot.Digest != rootDigest || missCount != 1 {
-			return fmt.Errorf("certificate operation root does not reconstruct")
+			return nil, fmt.Errorf("certificate operation root does not reconstruct")
 		}
 		attemptObject, attemptOK := objects[attemptDigest]
 		if !attemptOK || attemptObject.kind != 44 {
-			return fmt.Errorf("certificate attempt does not resolve")
+			return nil, fmt.Errorf("certificate attempt does not resolve")
 		}
 		attempt, err := decodeCertificateAttempt(mustObjectRow(attemptObject.canonical))
 		if err != nil || !certificateAttemptMatchesFinalization(attempt, p, rootDigest) {
-			return fmt.Errorf("certificate attempt differs from finalization")
+			return nil, fmt.Errorf("certificate attempt differs from finalization")
+		}
+		witnessObject, witnessOK := objects[attempt.Witness]
+		wantWitnessKind := uint16(14)
+		if authority.policy == "static-rw-sleep" {
+			wantWitnessKind = 15
+		} else if authority.policy == "dynamic-diamond-sleep" {
+			wantWitnessKind = 16
+		}
+		if !witnessOK || witnessObject.kind != wantWitnessKind || !certificateWitnessMatchesRange(authority, attempt, calls[root.Start:call.sequence], witnessObject.canonical, objects) {
+			return nil, fmt.Errorf("certificate attempt lacks its exact policy witness")
 		}
 		stateObject, stateOK := objects[attempt.State]
 		aObject, aOK := objects[attempt.A]
 		bObject, bOK := objects[attempt.B]
 		if !stateOK || stateObject.kind != 1 || !aOK || aObject.kind != 3 || !bOK || bObject.kind != 3 {
-			return fmt.Errorf("certificate semantic preimages do not resolve")
+			return nil, fmt.Errorf("certificate semantic preimages do not resolve")
 		}
 		var certificate []byte
 		if attempt.Certificate != zeroObjectDigest {
 			certificateObject, ok := objects[attempt.Certificate]
 			if !ok || certificateObject.kind != 17 {
-				return fmt.Errorf("certified attempt lacks certificate preimage")
+				return nil, fmt.Errorf("certified attempt lacks certificate preimage")
 			}
 			certificate = certificateObject.canonical
 		}
 		if err := VerifyCertificateDecisionSemantics(stateObject.canonical, aObject.canonical, bObject.canonical, operationRows, attempt.Result, attempt.Certificate, certificate); err != nil {
-			return fmt.Errorf("certificate decision: %w", err)
+			return nil, fmt.Errorf("certificate decision: %w", err)
+		}
+		if rawText(p[1]) != authority.world || rawText(p[2]) != authority.policy {
+			return nil, fmt.Errorf("certificate cache finalization changed world or policy")
 		}
 		finalized[key] = call.outputs[0]
+		decisions[key] = retainedCertificateDecision{world: rawText(p[1]), policy: rawText(p[2]), state: rawText(p[3]), minimum: rawText(p[4]), maximum: rawText(p[5]), witness: attempt.Witness, certificate: attempt.Certificate, cache: call.outputs[0], finalization: call.sequence}
 		delete(misses, missID)
 	}
 	if len(misses) != 0 {
-		return fmt.Errorf("completed run retains unfinalized cache miss")
+		return nil, fmt.Errorf("run retains unfinalized cache miss")
 	}
-	return nil
+	return decisions, nil
 }
 
 func certificateAttemptMatchesFinalization(attempt decodedCertificateAttempt, payload []json.RawMessage, rootDigest string) bool {
@@ -473,6 +935,60 @@ func certificateAttemptMatchesFinalization(attempt decodedCertificateAttempt, pa
 	}
 	pair := []string{attempt.A, attempt.B}
 	return attempt.State == rawText(payload[3]) && attempt.Operation == rootDigest && slices.Min(pair) == rawText(payload[4]) && slices.Max(pair) == rawText(payload[5])
+}
+
+func certificateWitnessMatchesRange(authority retainedRunAuthority, attempt decodedCertificateAttempt, calls []retainedCall, witness []byte, objects map[string]retainedObjectValue) bool {
+	var row []json.RawMessage
+	if json.Unmarshal(witness, &row) != nil || len(calls) == 0 {
+		return false
+	}
+	switch authority.policy {
+	case "dynamic-diamond-sleep":
+		if len(row) != 3 || rawText(row[0]) != "dynamic-witness/v1" || rawText(row[1]) != "all-pairs" {
+			return false
+		}
+		app := objects[rawText(row[2])]
+		var appRow []json.RawMessage
+		var applicable bool
+		return app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && rawText(appRow[1]) == attempt.State && (rawText(appRow[2]) == attempt.A || rawText(appRow[2]) == attempt.B) && json.Unmarshal(appRow[3], &applicable) == nil && applicable && rawText(appRow[4]) == "valid"
+	case "static-rw-sleep":
+		if len(row) != 2 || rawText(row[0]) != "static-witness/v1" || len(calls[0].outputs) != 1 || rawText(row[1]) != calls[0].outputs[0] || calls[0].operation != 24 {
+			return false
+		}
+		p := calls[0].payload
+		return len(p) == 8 && rawText(p[1]) == authority.world && rawText(p[3]) == attempt.State && sameDigestPair(rawText(p[4]), rawText(p[5]), attempt.A, attempt.B)
+	case "nous-guarded-sleep", "no-guard-sleep":
+		if len(row) != 2 || rawText(row[0]) != "learned-witness/v1" {
+			return false
+		}
+		barrier := objects[rawText(row[1])]
+		var barrierRow []json.RawMessage
+		var result bool
+		if barrier.kind != 43 || json.Unmarshal(barrier.canonical, &barrierRow) != nil || len(barrierRow) != 8 || rawText(barrierRow[2]) != attempt.State || !sameDigestPair(rawText(barrierRow[3]), rawText(barrierRow[4]), attempt.A, attempt.B) || json.Unmarshal(barrierRow[6], &result) != nil || !result || rawText(barrierRow[7]) != "valid" {
+			return false
+		}
+		var matches []string
+		for _, call := range calls {
+			if call.operation == 9 && len(call.outputs) == 1 {
+				matches = append(matches, call.outputs[0])
+			}
+		}
+		root, err := actionrelationwire.RootDigest("unanimous-relation-matches", matches)
+		return err == nil && rawText(barrierRow[5]) == root
+	default:
+		return false
+	}
+}
+
+func sortedPair(a, b string) []string {
+	if a > b {
+		a, b = b, a
+	}
+	return []string{a, b}
+}
+
+func sameDigestPair(a, b, c, d string) bool {
+	return slices.Equal(sortedPair(a, b), sortedPair(c, d))
 }
 
 func verifyRetainedCallSemantics(authority retainedRunAuthority, call retainedCall, objects map[string]retainedObjectValue, tables map[string][]retainedTableLeaf, semanticTables retainedSemanticTableIndex) error {
@@ -943,7 +1459,7 @@ func verifyRetainedAcquisitionCall(scope string, curriculum int, call retainedCa
 	return nil
 }
 
-func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool) error {
+func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool, decisions map[string]retainedCertificateDecision) error {
 	toEvidence := func(digest string, kind uint16) (actionrelationsearch.EvidenceObject, error) {
 		object, ok := objects[digest]
 		if !ok || object.kind != kind {
@@ -1027,10 +1543,16 @@ func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedC
 
 	type nodeValue struct{ state, remaining, proof string }
 	nodes := map[string]nodeValue{}
+	nodeSequences := map[string][]int{}
 	for _, object := range collections[20] {
 		var row []json.RawMessage
 		_ = json.Unmarshal(object.Canonical, &row)
 		nodes[object.Digest] = nodeValue{rawText(row[1]), rawText(row[2]), rawText(row[3])}
+	}
+	for _, call := range calls {
+		if call.operation == 16 && len(call.outputs) == 1 {
+			nodeSequences[call.outputs[0]] = append(nodeSequences[call.outputs[0]], call.sequence)
+		}
 	}
 	remaining := map[string][]string{}
 	for _, object := range collections[5] {
@@ -1113,6 +1635,464 @@ func verifyRetainedSearchGraph(authority retainedRunAuthority, calls []retainedC
 	}
 	if len(applicability) != 0 {
 		return fmt.Errorf("unbound search applicability calls")
+	}
+	completionEdge := map[string]string{}
+	for _, object := range collections[22] {
+		var row []json.RawMessage
+		if json.Unmarshal(object.Canonical, &row) != nil || len(row) != 7 {
+			return fmt.Errorf("completed subtree does not decode for semantic order")
+		}
+		completionEdge[object.Digest] = rawText(row[3])
+	}
+	subtreeByNode := map[string][]string{}
+	for _, object := range collections[25] {
+		var row []json.RawMessage
+		var completions []string
+		if json.Unmarshal(object.Canonical, &row) != nil || len(row) != 3 || json.Unmarshal(row[2], &completions) != nil || subtreeByNode[rawText(row[1])] != nil {
+			return fmt.Errorf("subtree root does not decode uniquely for semantic order")
+		}
+		subtreeByNode[rawText(row[1])] = completions
+	}
+	for nodeDigest, node := range nodes {
+		occurrenceDigests := slices.Clone(remaining[node.remaining])
+		slices.SortFunc(occurrenceDigests, func(a, b string) int {
+			return bytes.Compare(objects[a].canonical, objects[b].canonical)
+		})
+		var wantTaken []string
+		for _, occurrenceDigest := range occurrenceDigests {
+			occurrence := objects[occurrenceDigest]
+			action, actionErr := occurrenceAction(occurrence.canonical)
+			transition, transitionErr := actionrelationoracle.Apply(objects[node.state].canonical, action)
+			if actionErr != nil || transitionErr != nil {
+				return fmt.Errorf("semantic occurrence order does not resolve")
+			}
+			if transition.Applicable && !proofs[node.proof][occurrenceDigest] {
+				wantTaken = append(wantTaken, occurrenceDigest)
+			}
+		}
+		completions, ok := subtreeByNode[nodeDigest]
+		if !ok {
+			return fmt.Errorf("completed search node lacks subtree root")
+		}
+		gotTaken := make([]string, len(completions))
+		for index, completion := range completions {
+			gotTaken[index] = edges[completionEdge[completion]].taken
+		}
+		if !slices.Equal(gotTaken, wantTaken) {
+			return fmt.Errorf("search children differ from semantic occurrence loop order")
+		}
+	}
+	for _, object := range collections[18] {
+		var row []json.RawMessage
+		if json.Unmarshal(object.Canonical, &row) != nil || len(row) != 9 {
+			return fmt.Errorf("retained propagation does not decode")
+		}
+		parent, taken, sleeper, certificate := rawText(row[1]), rawText(row[2]), rawText(row[3]), rawText(row[6])
+		state := nodes[parent].state
+		keyParts := sortedPair(taken, sleeper)
+		key := authority.world + authority.policy + state + keyParts[0] + keyParts[1]
+		decision, ok := decisions[key]
+		child := edgeChildForPropagation(object.Digest, collections[21])
+		lookupAfterFinalization := slices.ContainsFunc(nodeSequences[child], func(sequence int) bool { return sequence > decision.finalization })
+		if !ok || decision.certificate != certificate || !lookupAfterFinalization || !propagationWitnessMatches(authority, decision, taken, sleeper, objects) {
+			return fmt.Errorf("sleep propagation lacks its exact finalized certificate decision")
+		}
+	}
+	return nil
+}
+
+func edgeChildForPropagation(propagation string, edges []actionrelationsearch.EvidenceObject) string {
+	for _, edge := range edges {
+		var row []json.RawMessage
+		var propagations []string
+		if json.Unmarshal(edge.Canonical, &row) == nil && len(row) == 5 && json.Unmarshal(row[3], &propagations) == nil && slices.Contains(propagations, propagation) {
+			return rawText(row[4])
+		}
+	}
+	return ""
+}
+
+func propagationWitnessMatches(authority retainedRunAuthority, decision retainedCertificateDecision, taken, sleeper string, objects map[string]retainedObjectValue) bool {
+	witness := objects[decision.witness]
+	var row []json.RawMessage
+	if json.Unmarshal(witness.canonical, &row) != nil {
+		return false
+	}
+	switch authority.policy {
+	case "dynamic-diamond-sleep":
+		if len(row) != 3 {
+			return false
+		}
+		app := objects[rawText(row[2])]
+		var appRow []json.RawMessage
+		return app.kind == 38 && json.Unmarshal(app.canonical, &appRow) == nil && len(appRow) == 5 && rawText(appRow[2]) == sleeper
+	case "static-rw-sleep":
+		if len(row) != 2 {
+			return false
+		}
+		footprint := objects[rawText(row[1])]
+		var footprintRow []json.RawMessage
+		return footprint.kind == 48 && json.Unmarshal(footprint.canonical, &footprintRow) == nil && len(footprintRow) == 10 && rawText(footprintRow[4]) == taken && rawText(footprintRow[5]) == sleeper
+	case "nous-guarded-sleep", "no-guard-sleep":
+		if len(row) != 2 {
+			return false
+		}
+		barrier := objects[rawText(row[1])]
+		var barrierRow []json.RawMessage
+		return barrier.kind == 43 && json.Unmarshal(barrier.canonical, &barrierRow) == nil && len(barrierRow) == 8 && sameDigestPair(rawText(barrierRow[3]), rawText(barrierRow[4]), taken, sleeper)
+	default:
+		return false
+	}
+}
+
+// Budget exhaustion may leave an open DFS spine, but every retained closed
+// edge, cache decision, and propagation must still be a typed semantic prefix.
+func verifyRetainedPartialSearchGraph(authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool, decisions map[string]retainedCertificateDecision) error {
+	if authority.historyCount != 0 || authority.terminalSet != zeroObjectDigest {
+		return fmt.Errorf("budget-exhausted search carries a completed result summary")
+	}
+	type nodeValue struct{ state, remaining, proof string }
+	type edgeValue struct {
+		parent, taken, child string
+		propagations         []string
+	}
+	type completionValue struct{ parent, taken, edge, subtree, terminalSet string }
+	nodes := map[string]nodeValue{}
+	remaining := map[string][]string{}
+	proofs := map[string]map[string]string{}
+	proofEntries := map[string][][]string{}
+	edges := map[string]edgeValue{}
+	completions := map[string]completionValue{}
+	subtrees := map[string][]string{}
+	terminalSets := map[string][]string{}
+	terminals := map[string]string{}
+	propagations := map[string][]json.RawMessage{}
+	seenNodes := map[string]bool{}
+	nodeSequences := map[string][]int{}
+	seenTerminals := map[string]bool{}
+	applicabilityByNode := map[string][]string{}
+	for _, call := range calls {
+		if call.operation == 16 && len(call.outputs) == 1 {
+			seenNodes[call.outputs[0]] = true
+			nodeSequences[call.outputs[0]] = append(nodeSequences[call.outputs[0]], call.sequence)
+		}
+		if call.operation == 19 && payloadTag(call.payload) == "terminal-construct" && len(call.outputs) == 1 {
+			seenTerminals[call.outputs[0]] = true
+		}
+		if call.operation == 23 && len(call.payload) == 6 {
+			applicabilityByNode[rawText(call.payload[3])] = append(applicabilityByNode[rawText(call.payload[3])], rawText(call.payload[5]))
+		}
+	}
+	for digest, object := range objects {
+		chargedSearchObject := object.kind == 20 && seenNodes[digest] || object.kind == 23 && seenTerminals[digest]
+		if !structural[fmt.Sprintf("%d:%s", object.kind, digest)] && !chargedSearchObject {
+			continue
+		}
+		var row []json.RawMessage
+		if json.Unmarshal(object.canonical, &row) != nil {
+			return fmt.Errorf("partial search structural object does not decode")
+		}
+		switch object.kind {
+		case 5:
+			var values []string
+			if len(row) != 2 || json.Unmarshal(row[1], &values) != nil {
+				return fmt.Errorf("partial remaining set does not decode")
+			}
+			remaining[digest] = values
+		case 18:
+			if len(row) != 9 {
+				return fmt.Errorf("partial propagation does not decode")
+			}
+			propagations[digest] = row
+		case 19:
+			var entries [][]string
+			if len(row) != 2 || json.Unmarshal(row[1], &entries) != nil {
+				return fmt.Errorf("partial proof map does not decode")
+			}
+			proofs[digest] = map[string]string{}
+			for _, entry := range entries {
+				if len(entry) != 2 || proofs[digest][entry[0]] != "" {
+					return fmt.Errorf("partial proof map is not unique")
+				}
+				proofs[digest][entry[0]] = entry[1]
+			}
+			proofEntries[digest] = entries
+		case 20:
+			if len(row) != 4 {
+				return fmt.Errorf("partial search node does not decode")
+			}
+			nodes[digest] = nodeValue{rawText(row[1]), rawText(row[2]), rawText(row[3])}
+		case 21:
+			var values []string
+			if len(row) != 5 || json.Unmarshal(row[3], &values) != nil {
+				return fmt.Errorf("partial search edge does not decode")
+			}
+			edges[digest] = edgeValue{rawText(row[1]), rawText(row[2]), rawText(row[4]), values}
+		case 22:
+			if len(row) != 7 || rawText(row[6]) != "completed" {
+				return fmt.Errorf("partial completion does not decode")
+			}
+			completions[digest] = completionValue{rawText(row[1]), rawText(row[2]), rawText(row[3]), rawText(row[4]), rawText(row[5])}
+		case 23:
+			var values []string
+			var terminal string
+			if len(row) != 4 || json.Unmarshal(row[2], &values) != nil || json.Unmarshal(row[3], &terminal) != nil || terminal != "complete" && terminal != "deadlock" {
+				return fmt.Errorf("partial terminal does not decode")
+			}
+			stateCanonical, _ := json.Marshal(row[1])
+			remainingCanonical, _ := json.Marshal([]any{"remaining-occurrences/v1", values})
+			key := shaHex(stateCanonical) + shaHex(remainingCanonical)
+			if terminals[key] != "" {
+				return fmt.Errorf("duplicate partial terminal")
+			}
+			terminals[key] = digest
+		case 24:
+			var values []string
+			if len(row) != 2 || json.Unmarshal(row[1], &values) != nil {
+				return fmt.Errorf("partial terminal set does not decode")
+			}
+			terminalSets[digest] = values
+		case 25:
+			var values []string
+			if len(row) != 3 || json.Unmarshal(row[2], &values) != nil {
+				return fmt.Errorf("partial subtree root does not decode uniquely")
+			}
+			subtrees[digest] = values
+		}
+	}
+	for digest, node := range nodes {
+		if !seenNodes[digest] || objects[node.state].kind != 1 || remaining[node.remaining] == nil || proofs[node.proof] == nil {
+			return fmt.Errorf("partial node does not close its charged lookup/state/remaining/proof")
+		}
+	}
+	completionByParentTaken := map[string]string{}
+	setForSubtree := map[string]string{}
+	completionReferenced := map[string]bool{}
+	subtreeForNode := map[string]string{}
+	for digest, completion := range completions {
+		edge := edges[completion.edge]
+		_, subtreeOK := subtrees[completion.subtree]
+		_, terminalSetOK := terminalSets[completion.terminalSet]
+		if edge.parent == "" || edge.parent != completion.parent || edge.taken != completion.taken || edge.child == "" || !subtreeOK || !terminalSetOK || nodes[edge.child].state == "" || completionByParentTaken[completion.parent+completion.taken] != "" {
+			return fmt.Errorf("partial completion %s does not bind one exact edge/subtree/set", digest)
+		}
+		completionByParentTaken[completion.parent+completion.taken] = digest
+		if prior := setForSubtree[completion.subtree]; prior != "" && prior != completion.terminalSet {
+			return fmt.Errorf("partial subtree has conflicting terminal sets")
+		}
+		setForSubtree[completion.subtree] = completion.terminalSet
+	}
+	for subtree, completionDigests := range subtrees {
+		nodeDigest := ""
+		var row []json.RawMessage
+		_ = json.Unmarshal(objects[subtree].canonical, &row)
+		nodeDigest = rawText(row[1])
+		if subtreeForNode[nodeDigest] != "" {
+			return fmt.Errorf("partial search node has multiple subtree roots")
+		}
+		subtreeForNode[nodeDigest] = subtree
+		for _, digest := range completionDigests {
+			completion := completions[digest]
+			if completion.parent != nodeDigest || completionReferenced[digest] {
+				return fmt.Errorf("partial subtree contains wrong or duplicate completion")
+			}
+			completionReferenced[digest] = true
+		}
+	}
+	for digest, edge := range edges {
+		completionDigest := completionByParentTaken[edge.parent+edge.taken]
+		if completionDigest == "" || completions[completionDigest].edge != digest || nodes[edge.parent].state == "" || nodes[edge.child].state == "" {
+			return fmt.Errorf("partial edge lacks exact completion and nodes")
+		}
+		parentRemaining, childRemaining := remaining[nodes[edge.parent].remaining], remaining[nodes[edge.child].remaining]
+		wantChildRemaining := make([]string, 0, len(parentRemaining)-1)
+		removed := false
+		for _, occurrence := range parentRemaining {
+			if occurrence == edge.taken && !removed {
+				removed = true
+				continue
+			}
+			wantChildRemaining = append(wantChildRemaining, occurrence)
+		}
+		if !removed || proofs[nodes[edge.parent].proof][edge.taken] != "" || !slices.Equal(wantChildRemaining, childRemaining) {
+			return fmt.Errorf("partial edge does not remove one exact unslept occurrence")
+		}
+		action, actionErr := occurrenceAction(objects[edge.taken].canonical)
+		transition, transitionErr := actionrelationoracle.Apply(objects[nodes[edge.parent].state].canonical, action)
+		if actionErr != nil || transitionErr != nil || !transition.Applicable || shaHex(transition.State) != nodes[edge.child].state {
+			return fmt.Errorf("partial edge transition does not independently replay")
+		}
+		childProofs := proofs[nodes[edge.child].proof]
+		entries := proofEntries[nodes[edge.child].proof]
+		wantPropagations := make([]string, len(entries))
+		for index, entry := range entries {
+			wantPropagations[index] = entry[1]
+		}
+		if len(childProofs) != len(edge.propagations) || !slices.Equal(wantPropagations, edge.propagations) {
+			return fmt.Errorf("partial edge propagation vector differs from child proof map")
+		}
+		for _, propagation := range edge.propagations {
+			row := propagations[propagation]
+			if row == nil || childProofs[rawText(row[3])] != propagation || rawText(row[1]) != edge.parent || rawText(row[2]) != edge.taken || rawText(row[7]) != nodes[edge.child].state || rawText(row[8]) != nodes[edge.child].remaining {
+				return fmt.Errorf("partial edge propagation does not bind child proof")
+			}
+		}
+	}
+	for digest, row := range propagations {
+		parent, taken, sleeper := rawText(row[1]), rawText(row[2]), rawText(row[3])
+		parentNode := nodes[parent]
+		if parentNode.state == "" {
+			return fmt.Errorf("partial propagation lacks parent node")
+		}
+		pair := sortedPair(taken, sleeper)
+		decision, ok := decisions[authority.world+authority.policy+parentNode.state+pair[0]+pair[1]]
+		child := ""
+		for _, edge := range edges {
+			if slices.Contains(edge.propagations, digest) {
+				if child != "" && child != edge.child {
+					return fmt.Errorf("partial propagation is reused across child edges")
+				}
+				child = edge.child
+			}
+		}
+		lookupAfterFinalization := slices.ContainsFunc(nodeSequences[child], func(sequence int) bool { return sequence > decision.finalization })
+		if !ok || decision.certificate != rawText(row[6]) || child == "" || !lookupAfterFinalization || !propagationWitnessMatches(authority, decision, taken, sleeper, objects) {
+			return fmt.Errorf("partial propagation lacks exact certificate")
+		}
+		if rawText(row[4]) == "prior-sleep" {
+			if proofs[parentNode.proof][sleeper] != rawText(row[5]) {
+				return fmt.Errorf("partial prior-sleep propagation lacks parent proof")
+			}
+		} else if rawText(row[4]) == "earlier-sibling" {
+			if completionByParentTaken[parent+sleeper] != rawText(row[5]) {
+				return fmt.Errorf("partial sibling propagation lacks completed sibling")
+			}
+		} else {
+			return fmt.Errorf("partial propagation has unknown source")
+		}
+		_ = digest
+	}
+	type partialVerifiedSubtree struct {
+		terminals []string
+		histories int
+	}
+	var verifySubtree func(string) (partialVerifiedSubtree, error)
+	verified := map[string]partialVerifiedSubtree{}
+	visiting := map[string]bool{}
+	verifySubtree = func(digest string) (partialVerifiedSubtree, error) {
+		if value, ok := verified[digest]; ok {
+			return value, nil
+		}
+		if visiting[digest] {
+			return partialVerifiedSubtree{}, fmt.Errorf("cyclic partial subtree authority")
+		}
+		visiting[digest] = true
+		defer delete(visiting, digest)
+		var row []json.RawMessage
+		_ = json.Unmarshal(objects[digest].canonical, &row)
+		nodeDigest := rawText(row[1])
+		node := nodes[nodeDigest]
+		if node.state == "" || setForSubtree[digest] == "" {
+			return partialVerifiedSubtree{}, fmt.Errorf("partial closed subtree lacks node or terminal-set authority")
+		}
+		occurrences := slices.Clone(remaining[node.remaining])
+		slices.SortFunc(occurrences, func(a, b string) int { return bytes.Compare(objects[a].canonical, objects[b].canonical) })
+		var wantTaken []string
+		for _, occurrence := range occurrences {
+			action, err := occurrenceAction(objects[occurrence].canonical)
+			transition, transitionErr := actionrelationoracle.Apply(objects[node.state].canonical, action)
+			if err != nil || transitionErr != nil {
+				return partialVerifiedSubtree{}, fmt.Errorf("partial closed subtree occurrence does not replay")
+			}
+			if transition.Applicable && proofs[node.proof][occurrence] == "" {
+				wantTaken = append(wantTaken, occurrence)
+			}
+		}
+		completionDigests := subtrees[digest]
+		gotTaken := make([]string, len(completionDigests))
+		var union []string
+		histories := 0
+		for index, completionDigest := range completionDigests {
+			completion := completions[completionDigest]
+			gotTaken[index] = completion.taken
+			child, err := verifySubtree(completion.subtree)
+			if err != nil {
+				return partialVerifiedSubtree{}, err
+			}
+			union = append(union, child.terminals...)
+			histories += child.histories
+		}
+		if !slices.Equal(gotTaken, wantTaken) {
+			return partialVerifiedSubtree{}, fmt.Errorf("partial closed subtree differs from semantic loop order")
+		}
+		if len(completionDigests) == 0 {
+			if terminal := terminals[node.state+node.remaining]; terminal != "" {
+				union, histories = []string{terminal}, 1
+			} else if len(wantTaken) != 0 {
+				return partialVerifiedSubtree{}, fmt.Errorf("partial leaf omits enabled unslept branches")
+			}
+		}
+		slices.Sort(union)
+		union = slices.Compact(union)
+		if !slices.Equal(union, terminalSets[setForSubtree[digest]]) {
+			return partialVerifiedSubtree{}, fmt.Errorf("partial closed subtree terminal union differs")
+		}
+		value := partialVerifiedSubtree{terminals: union, histories: histories}
+		verified[digest] = value
+		return value, nil
+	}
+	for digest := range subtrees {
+		if _, err := verifySubtree(digest); err != nil {
+			return err
+		}
+	}
+	for digest, terminalSet := range terminalSets {
+		for _, terminal := range terminalSet {
+			if terminalsDigest := objects[terminal]; terminalsDigest.kind != 23 || !seenTerminals[terminal] {
+				return fmt.Errorf("partial terminal set contains uncharged terminal")
+			}
+		}
+		_ = digest
+	}
+	partialApplicabilityNodes := 0
+	for nodeDigest, node := range nodes {
+		semanticOrder := slices.Clone(remaining[node.remaining])
+		slices.SortFunc(semanticOrder, func(a, b string) int { return bytes.Compare(objects[a].canonical, objects[b].canonical) })
+		gotApplicability := applicabilityByNode[nodeDigest]
+		if len(gotApplicability) > len(semanticOrder) || !slices.Equal(gotApplicability, semanticOrder[:len(gotApplicability)]) {
+			return fmt.Errorf("partial node applicability calls differ from semantic prefix")
+		}
+		if len(gotApplicability) != len(semanticOrder) {
+			partialApplicabilityNodes++
+			if subtreeForNode[nodeDigest] != "" || len(gotApplicability) == 0 && len(semanticOrder) == 0 {
+				return fmt.Errorf("partial applicability prefix has closed authority")
+			}
+		}
+		var wantTaken []string
+		for _, occurrence := range semanticOrder {
+			action, err := occurrenceAction(objects[occurrence].canonical)
+			transition, transitionErr := actionrelationoracle.Apply(objects[node.state].canonical, action)
+			if err != nil || transitionErr != nil {
+				return fmt.Errorf("partial node occurrence does not replay")
+			}
+			if transition.Applicable && proofs[node.proof][occurrence] == "" {
+				wantTaken = append(wantTaken, occurrence)
+			}
+		}
+		if subtreeForNode[nodeDigest] == "" {
+			prefixLength := 0
+			for prefixLength < len(wantTaken) && completionByParentTaken[nodeDigest+wantTaken[prefixLength]] != "" {
+				prefixLength++
+			}
+			for _, occurrence := range wantTaken[prefixLength:] {
+				if completionByParentTaken[nodeDigest+occurrence] != "" {
+					return fmt.Errorf("partial completed branches are not a semantic DFS prefix")
+				}
+			}
+		}
+	}
+	if partialApplicabilityNodes > 1 {
+		return fmt.Errorf("multiple partial applicability scans in one DFS prefix")
 	}
 	return nil
 }
@@ -1224,6 +2204,59 @@ func verifyRetainedAcquisitionClosure(runID string, authority retainedRunAuthori
 		if err != nil || wantRoot.Digest != rootDigest {
 			return fmt.Errorf("observation %d operation root does not reconstruct", ordinal)
 		}
+		observationCalls := calls[cursor : cursor+count]
+		if rawText(observationCalls[0].payload[1]) != digestAt(record, 4) || rawText(observationCalls[1].payload[1]) != digestAt(record, 4) || rawText(observationCalls[0].payload[2]) != digestAt(record, 36) || rawText(observationCalls[1].payload[2]) != digestAt(record, 68) {
+			return fmt.Errorf("observation %d identity differs from its exact calls", ordinal)
+		}
+		aInitial, _, err := retainedTrainingCallSemantic(observationCalls[2], authority, tables)
+		if err != nil || aInitial != digestAt(record, 100) {
+			return fmt.Errorf("observation %d a-initial component differs from calls", ordinal)
+		}
+		bInitial, _, err := retainedTrainingCallSemantic(observationCalls[3], authority, tables)
+		if err != nil || bInitial != digestAt(record, 132) {
+			return fmt.Errorf("observation %d b-initial component differs from calls", ordinal)
+		}
+		componentCursor := 4
+		for _, start := range []int{164, 196} {
+			if allZero(record[start : start+32]) {
+				continue
+			}
+			if componentCursor+1 >= len(observationCalls) {
+				return fmt.Errorf("observation %d lacks after-transition calls", ordinal)
+			}
+			applicabilityDigest, _, appErr := retainedTrainingCallSemantic(observationCalls[componentCursor], authority, tables)
+			transitionDigest, _, transitionErr := retainedTrainingCallSemantic(observationCalls[componentCursor+1], authority, tables)
+			if appErr != nil || transitionErr != nil || rawText(observationCalls[componentCursor+1].payload[3]) != applicabilityDigest || transitionDigest != digestAt(record, start) {
+				return fmt.Errorf("observation %d after-transition component differs from calls", ordinal)
+			}
+			componentCursor += 2
+		}
+		stateObject, aObject, bObject := objects[digestAt(record, 4)], objects[digestAt(record, 36)], objects[digestAt(record, 68)]
+		aAction, aActionErr := occurrenceAction(aObject.canonical)
+		bAction, bActionErr := occurrenceAction(bObject.canonical)
+		oracleObservation, oracleErr := actionrelationoracle.Observe(stateObject.canonical, aAction, bAction)
+		labels := []string{"", "commutes", "a-enables-b", "b-enables-a", "a-disables-b", "b-disables-a", "mutual-disables", "inapplicable", "conflicts", "invalid"}
+		if aActionErr != nil || bActionErr != nil || oracleErr != nil || labels[int(record[1])] != oracleObservation.Label {
+			return fmt.Errorf("observation %d label differs from independent oracle", ordinal)
+		}
+		abDigest, baDigest := zeroObjectDigest, zeroObjectDigest
+		if len(oracleObservation.AB) != 0 {
+			abDigest = shaHex(oracleObservation.AB)
+		}
+		if len(oracleObservation.BA) != 0 {
+			baDigest = shaHex(oracleObservation.BA)
+		}
+		if digestAt(record, 228) != abDigest && !(abDigest == zeroObjectDigest && allZero(record[228:260])) || digestAt(record, 260) != baDigest && !(baDigest == zeroObjectDigest && allZero(record[260:292])) {
+			return fmt.Errorf("observation %d result states differ from independent oracle", ordinal)
+		}
+		if componentCursor < len(observationCalls) {
+			equalityDigest, _, equalityErr := retainedTrainingCallSemantic(observationCalls[componentCursor], authority, tables)
+			if equalityErr != nil || componentCursor != len(observationCalls)-1 || rawText(observationCalls[componentCursor].payload[1]) != abDigest || rawText(observationCalls[componentCursor].payload[2]) != baDigest || equalityDigest == "" {
+				return fmt.Errorf("observation %d equality component differs from calls", ordinal)
+			}
+		} else if oracleObservation.Label == "commutes" || oracleObservation.Label == "conflicts" {
+			return fmt.Errorf("observation %d omits required equality call", ordinal)
+		}
 		cursor += count
 	}
 	if cursor != trainingCount || cursor >= len(calls) || calls[cursor].operation != 1 {
@@ -1331,12 +2364,216 @@ func verifyRetainedAcquisitionClosure(runID string, authority retainedRunAuthori
 	if !slices.Equal(winnerDigests, payloadWinners) {
 		return fmt.Errorf("barrier winner vector differs from freeze call")
 	}
-	for _, winner := range winnerDigests {
-		if !slices.ContainsFunc(byKind[108], func(value namedLeaf) bool { return value.digest == winner }) {
-			return fmt.Errorf("barrier winner is not a candidate result")
+	transitionApplied := map[string]bool{}
+	guardResults := map[string]struct {
+		guard, observation string
+		result             bool
+	}{}
+	for _, call := range calls {
+		switch call.operation {
+		case 4:
+			leaf := tables[call.outputs[0]]
+			var record []byte
+			for _, candidate := range leaf {
+				if candidate.curriculum == authority.curriculum && candidate.scope == authority.policy && candidate.kind == 107 {
+					record = candidate.record
+				}
+			}
+			if record == nil {
+				return fmt.Errorf("training transition result does not resolve")
+			}
+			resultState, outcome := zeroObjectDigest, "inapplicable"
+			if record[3] == 1 {
+				resultState, outcome = digestAt(record, 68), "applied"
+			}
+			wire, _ := json.Marshal([]any{"action-transition-row/v1", rawText(call.payload[1]), rawText(call.payload[2]), rawText(call.payload[3]), resultState, outcome})
+			transitionApplied[shaHex(wire)] = outcome == "applied"
+		case 22:
+			var literals []string
+			_ = json.Unmarshal(call.payload[3], &literals)
+			leaf := tables[call.outputs[0]]
+			var record []byte
+			for _, candidate := range leaf {
+				if candidate.curriculum == authority.curriculum && candidate.scope == authority.policy && candidate.kind == 102 {
+					record = candidate.record
+				}
+			}
+			if record == nil {
+				return fmt.Errorf("guard result does not resolve")
+			}
+			wire, _ := json.Marshal([]any{"action-guard-result/v1", rawText(call.payload[1]), rawText(call.payload[2]), literals, record[64] == 1})
+			guardResults[shaHex(wire)] = struct {
+				guard, observation string
+				result             bool
+			}{rawText(call.payload[1]), rawText(call.payload[2]), record[64] == 1}
 		}
 	}
+	type observationScoreContext struct {
+		digest, pattern    string
+		commutes, eligible bool
+	}
+	observations := make([]observationScoreContext, len(byKind[105]))
+	totalPositive := 0
+	for index, observation := range byKind[105] {
+		record := observation.value.record
+		canonical, _ := observationCanonical(record)
+		stateObject, aObject, bObject := objects[digestAt(record, 4)], objects[digestAt(record, 36)], objects[digestAt(record, 68)]
+		state, stateErr := actionrelations.ParseState(stateObject.canonical)
+		aOccurrence, aErr := actionrelations.ParseOccurrence(aObject.canonical)
+		bOccurrence, bErr := actionrelations.ParseOccurrence(bObject.canonical)
+		pattern, patternErr := actionrelations.PatternFor(aOccurrence, bOccurrence)
+		patternDigest, digestErr := pattern.Digest()
+		if stateErr != nil || aErr != nil || bErr != nil || patternErr != nil || digestErr != nil {
+			return fmt.Errorf("candidate scoring observation does not resolve")
+		}
+		commutes := record[1] == 1
+		if commutes {
+			totalPositive++
+		}
+		observations[index] = observationScoreContext{digest: shaHex(canonical), pattern: patternDigest, commutes: commutes, eligible: transitionApplied[digestAt(record, 100)] && transitionApplied[digestAt(record, 132)] && len(state.Events) <= 6}
+	}
+	type candidateScore struct {
+		leaf, guard, pattern                       string
+		positive, negative, falseMatches, literals int
+		eligible                                   bool
+		positives, negatives                       []string
+	}
+	candidateScores := make([]candidateScore, len(byKind[103]))
+	resultCalls := make([]retainedCall, 0, len(byKind[103]))
+	for _, call := range calls {
+		if call.operation == 20 {
+			resultCalls = append(resultCalls, call)
+		}
+	}
+	if len(resultCalls) != len(candidateScores) {
+		return fmt.Errorf("candidate result calls do not cover candidates")
+	}
+	for index, candidate := range byKind[103] {
+		call := resultCalls[index]
+		if candidateObjectDigest(candidate.value.record) != rawText(call.payload[1]) {
+			return fmt.Errorf("candidate result order differs from candidate table")
+		}
+		var resultLeaf retainedTableLeaf
+		for _, leaf := range tables[call.outputs[0]] {
+			if leaf.curriculum == authority.curriculum && leaf.scope == authority.policy && leaf.kind == 108 {
+				resultLeaf = leaf
+			}
+		}
+		var resultDigests []string
+		_ = json.Unmarshal(call.payload[2], &resultDigests)
+		if resultLeaf.record == nil || len(resultDigests) != len(observations) {
+			return fmt.Errorf("candidate result leaf does not resolve")
+		}
+		score := candidateScore{leaf: call.outputs[0], guard: digestAt(candidate.value.record, 0), pattern: digestAt(candidate.value.record, 64), literals: int(candidate.value.record[98])}
+		for observationIndex, resultDigest := range resultDigests {
+			result, ok := guardResults[resultDigest]
+			observation := observations[observationIndex]
+			if !ok || result.guard != score.guard || result.observation != observation.digest {
+				return fmt.Errorf("candidate result vector differs from aligned guard results")
+			}
+			if !observation.commutes {
+				score.negative++
+				score.negatives = append(score.negatives, observation.digest)
+			}
+			if observation.eligible && observation.pattern == score.pattern && result.result {
+				if observation.commutes {
+					score.positive++
+					score.positives = append(score.positives, observation.digest)
+				} else {
+					score.falseMatches++
+				}
+			}
+		}
+		slices.Sort(score.positives)
+		slices.Sort(score.negatives)
+		score.eligible = score.positive > 0 && score.falseMatches == 0
+		record := resultLeaf.record
+		if int(record[64]) != score.positive || int(record[65]) != score.negative || record[66] != 1 || (record[67] == 1) != score.eligible {
+			return fmt.Errorf("candidate result coverage or eligibility does not recompute")
+		}
+		candidateScores[index] = score
+	}
+	maxPositive, minLiterals := -1, 3
+	for _, score := range candidateScores {
+		if score.eligible && (score.positive > maxPositive || score.positive == maxPositive && score.literals < minLiterals) {
+			maxPositive, minLiterals = score.positive, score.literals
+		}
+	}
+	var wantWinners []string
+	var winnerScores []candidateScore
+	for _, score := range candidateScores {
+		if score.eligible && score.positive == maxPositive && score.literals == minLiterals {
+			wantWinners = append(wantWinners, score.leaf)
+			winnerScores = append(winnerScores, score)
+		}
+	}
+	if !slices.Equal(winnerDigests, wantWinners) || len(winnerScores) == 0 {
+		return fmt.Errorf("barrier winners differ from exact tied eligible optimum")
+	}
+	relations := make([]actionrelations.Relation, len(winnerScores))
+	for index, score := range winnerScores {
+		patternObject, guardObject := objects[score.pattern], objects[score.guard]
+		pattern, patternErr := actionrelations.ParsePattern(patternObject.canonical)
+		guard, guardErr := actionrelations.ParseGuard(guardObject.canonical)
+		if patternObject.kind != 6 || guardObject.kind != 7 || patternErr != nil || guardErr != nil {
+			return fmt.Errorf("winning candidate pattern or guard does not resolve")
+		}
+		relation := actionrelations.Relation{Pattern: pattern, Guard: guard, PositiveObservations: score.positives, NegativeObservations: score.negatives}
+		canonical, relationErr := relation.CanonicalJSON()
+		relationDigest := shaHex(canonical)
+		relationObject := objects[relationDigest]
+		if relationErr != nil || relationObject.kind != 9 || !bytes.Equal(relationObject.canonical, canonical) {
+			return fmt.Errorf("winning candidate does not reconstruct retained relation")
+		}
+		relations[index] = relation
+	}
+	artifact, artifactErr := actionrelations.NewArtifact(relations, semanticRoot)
+	artifactCanonical, canonicalErr := artifact.CanonicalJSON()
+	if artifactErr != nil || canonicalErr != nil || authority.terminal != "completed" || len(calls[cursor].outputs) != 1 || calls[cursor].outputs[0] != authority.artifact || calls[cursor].outputs[0] != shaHex(artifactCanonical) || !bytes.Equal(objects[calls[cursor].outputs[0]].canonical, artifactCanonical) {
+		return fmt.Errorf("artifact does not reconstruct from exact winning candidates")
+	}
+	winner := winnerScores[0]
+	training := [5]int{totalPositive, len(observations) - totalPositive, winner.positive, winner.falseMatches, totalPositive - winner.positive}
+	if training != authority.trainingMatches {
+		return fmt.Errorf("training match counts differ from retained acquisition evidence")
+	}
 	return nil
+}
+
+func retainedTrainingCallSemantic(call retainedCall, authority retainedRunAuthority, tables map[string][]retainedTableLeaf) (string, string, error) {
+	if len(call.outputs) == 0 {
+		return "", "", fmt.Errorf("training call lacks output")
+	}
+	var record []byte
+	for _, leaf := range tables[call.outputs[0]] {
+		if leaf.curriculum == authority.curriculum && leaf.scope == authority.policy && leaf.kind == 107 {
+			if record != nil {
+				return "", "", fmt.Errorf("training call output resolves more than once")
+			}
+			record = leaf.record
+		}
+	}
+	if record == nil {
+		return "", "", fmt.Errorf("training call output does not resolve")
+	}
+	d := func(index int) string { return rawText(call.payload[index]) }
+	var wire []byte
+	resultState := zeroObjectDigest
+	switch call.operation {
+	case 4:
+		outcome := "inapplicable"
+		if record[3] == 1 {
+			outcome, resultState = "applied", digestAt(record, 68)
+		}
+		wire, _ = json.Marshal([]any{"action-transition-row/v1", d(1), d(2), d(3), resultState, outcome})
+	case 5:
+		wire, _ = json.Marshal([]any{"action-applicability-row/v1", d(1), d(2), record[3] == 1, "valid"})
+	case 6:
+		wire, _ = json.Marshal([]any{"action-state-equality-row/v1", d(1), d(2), record[3] == 1, "valid"})
+	default:
+		return "", "", fmt.Errorf("not a training semantic call")
+	}
+	return shaHex(wire), resultState, nil
 }
 
 func lenOperation(calls []retainedCall, operation uint8) int {

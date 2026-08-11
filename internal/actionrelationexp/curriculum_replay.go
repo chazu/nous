@@ -120,7 +120,7 @@ func VerifyCurriculumReplay(value CurriculumReplay) error {
 			return err
 		}
 		if err := verifyRetainedRunReplay(record, expected, calls, objects, tables, structural[record.RunID]); err != nil {
-			return fmt.Errorf("curriculum replay run %s: %w", record.RunID, err)
+			return fmt.Errorf("curriculum replay run %s policy=%s world=%d: %w", record.RunID, expected.policy, expected.worldOrdinal, err)
 		}
 		seen[record.RunID] = true
 	}

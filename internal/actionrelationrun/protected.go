@@ -524,7 +524,7 @@ func verifyCommittedPanelOutcome(prerequisites panelPrerequisites, git func(...s
 		return readCommittedWorking(prerequisites.Root, git, prerequisites.Head, path)
 	}
 	reachable, err := actionrelationexp.VerifyRetainedPacks(actionrelationexp.RetainedPackRefs{
-		Panel: panel, Authority: report.Authority, RunEvidence: publication.RunEvidence,
+		Panel: panel, Authority: report.Authority, Fixture: publication.FixtureRoot, RunEvidence: publication.RunEvidence,
 		ObjectRoots: payload.ObjectPackRoots, IndexRoots: payload.IndexRoots,
 		JournalRoots: payload.JournalPackRoots, InputRoots: payload.InputPackRoots, DetailRoots: payload.DetailPackRoots,
 		Tables: payload.AcquisitionTables, StructuralMaps: payload.StructuralMaps, StoreBoundaries: payload.StoreBoundaries,
@@ -534,7 +534,7 @@ func verifyCommittedPanelOutcome(prerequisites panelPrerequisites, git func(...s
 	}
 	authorityRoot := strings.TrimSuffix(publication.RunEvidence.Path, "/manifests/run-evidence-root.json") + "/authority"
 	reachable = append(reachable,
-		publication.FixtureRoot.Path, publication.PrimaryExecution.Path, publication.AuditExecution.Path,
+		publication.PrimaryExecution.Path, publication.AuditExecution.Path,
 		publication.AuditAttestation.Path, publication.ExecutionCore.Path, publication.EvidencePayload.Path,
 		authorityRoot+"/publication.json",
 	)

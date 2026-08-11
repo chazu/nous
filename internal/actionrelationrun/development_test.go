@@ -227,6 +227,10 @@ func TestIsolatedSandboxAllowsOnlyWorkerOutputAndDeniesPrimaryRead(t *testing.T)
 	if err := os.WriteFile(secret, []byte("primary"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	privateScorer := filepath.Join(inputs, "private-scorer.json")
+	if err := os.WriteFile(privateScorer, []byte("sealed truth"), 0o400); err != nil {
+		t.Fatal(err)
+	}
 	profile := isolatedSandboxProfile("/bin/bash", inputs, allowed)
 	run := func(script, path string) error {
 		command := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/bash", "--noprofile", "--norc", "-c", script, "worker", path)
@@ -237,6 +241,9 @@ func TestIsolatedSandboxAllowsOnlyWorkerOutputAndDeniesPrimaryRead(t *testing.T)
 	}
 	if err := run(`IFS= read -r value < "$1"`, secret); err == nil {
 		t.Fatal("sandbox exposed primary output to audit")
+	}
+	if err := run(`IFS= read -r value < "$1"`, privateScorer); err == nil {
+		t.Fatal("sandbox exposed private scorer input to policy worker")
 	}
 	if err := run(`printf escaped > "$1"`, outside); err == nil {
 		t.Fatal("sandbox allowed a write outside the isolated namespace")

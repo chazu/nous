@@ -179,16 +179,14 @@ func ParsePolicyPanelSummary(reader io.Reader, size int64) (PolicyPanelSummary, 
 	return value, nil
 }
 
-func FinalizePolicyPanel(sealed SealedPanel, raw PolicyPanelSummary, consume func([]actionrelationexp.EvidenceFile) error) (PanelSummary, error) {
-	if consume == nil || actionrelationfixture.VerifyGeneratedPanel(sealed.attempts, sealed.fixture) != nil || VerifyPolicyPanelSummaryForPublic(raw, sealed.public) != nil {
+func FinalizePolicyPanel(sealed SealedPanel, raw PolicyPanelSummary, reopen func(string) ([]byte, error), consume func([]actionrelationexp.EvidenceFile) error) (PanelSummary, error) {
+	if reopen == nil || consume == nil || actionrelationfixture.VerifyGeneratedPanel(sealed.attempts, sealed.fixture) != nil || VerifyPolicyPanelSummaryForPublic(raw, sealed.public) != nil {
 		return PanelSummary{}, fmt.Errorf("private scorer and public policy panel differ")
 	}
 	result := PanelSummary{Panel: raw.Panel, Authority: raw.Authority, Fixture: sealed.fixture, RunEvidence: raw.RunEvidence, RunEvidenceManifest: raw.RunEvidenceManifest, ObjectRoots: slices.Clone(raw.ObjectRoots), IndexRoots: slices.Clone(raw.IndexRoots), JournalRoots: slices.Clone(raw.JournalRoots), InputRoots: slices.Clone(raw.InputRoots), DetailRoots: slices.Clone(raw.DetailRoots), Tables: slices.Clone(raw.Tables), StructuralMaps: slices.Clone(raw.StructuralMaps), StoreBoundaries: slices.Clone(raw.StoreBoundaries)}
 	evidenceRoot, _ := actionrelationexp.EvidenceRoot(raw.Panel)
 	fixtureFile := actionrelationexp.EvidenceFile{Path: actionrelationexp.ExpectedAuthorityPath(raw.Panel, "fixture-root"), Mode: "100644", Data: sealed.fixture.Canonical}
-	if err := consume([]actionrelationexp.EvidenceFile{fixtureFile}); err != nil {
-		return PanelSummary{}, err
-	}
+	delayed := []actionrelationexp.EvidenceFile{fixtureFile}
 	for curriculum, generated := range sealed.attempts {
 		scored, err := scorePolicyCurriculumSummary(generated, raw.Curricula[curriculum])
 		if err != nil {
@@ -206,9 +204,7 @@ func FinalizePolicyPanel(sealed SealedPanel, raw PolicyPanelSummary, consume fun
 		if err != nil {
 			return PanelSummary{}, err
 		}
-		if err := consume(files); err != nil {
-			return PanelSummary{}, err
-		}
+		delayed = append(delayed, files...)
 		result.ObjectRoots = append(result.ObjectRoots, objectRef)
 		result.IndexRoots = append(result.IndexRoots, indexRef)
 		result.WorldRows = append(result.WorldRows, scored.WorldRows...)
@@ -217,6 +213,35 @@ func FinalizePolicyPanel(sealed SealedPanel, raw PolicyPanelSummary, consume fun
 	result.WorldPolicyRowsRoot, _ = WorldPolicyRowsRoot(result.WorldRows)
 	result.CurriculumRowsRoot, _ = CurriculumPolicyRowsRoot(result.CurriculumRows)
 	if err := VerifyPanelSummary(result); err != nil {
+		return PanelSummary{}, err
+	}
+	provisional := make(map[string][]byte, len(delayed))
+	for _, file := range delayed {
+		if file.Mode != "100644" || provisional[file.Path] != nil {
+			return PanelSummary{}, fmt.Errorf("duplicate provisional scorer authority path")
+		}
+		provisional[file.Path] = file.Data
+	}
+	read := func(path string) ([]byte, error) {
+		if data, ok := provisional[path]; ok {
+			return slices.Clone(data), nil
+		}
+		return reopen(path)
+	}
+	fixtureRef, _ := actionrelationexp.Reference(fixtureFile.Path, fixtureFile.Data)
+	runRef, err := actionrelationexp.Reference(raw.RunEvidenceManifest.Path, raw.RunEvidenceManifest.Data)
+	if err != nil {
+		return PanelSummary{}, err
+	}
+	if _, err := actionrelationexp.VerifyRetainedPacks(actionrelationexp.RetainedPackRefs{
+		Panel: result.Panel, Authority: result.Authority, Fixture: fixtureRef, RunEvidence: runRef,
+		ObjectRoots: result.ObjectRoots, IndexRoots: result.IndexRoots,
+		JournalRoots: result.JournalRoots, InputRoots: result.InputRoots, DetailRoots: result.DetailRoots,
+		Tables: result.Tables, StructuralMaps: result.StructuralMaps, StoreBoundaries: result.StoreBoundaries,
+	}, read); err != nil {
+		return PanelSummary{}, fmt.Errorf("reconstruct scorer authority from retained typed evidence: %w", err)
+	}
+	if err := consume(delayed); err != nil {
 		return PanelSummary{}, err
 	}
 	return result, nil

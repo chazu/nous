@@ -91,6 +91,39 @@ func TestDevelopmentCurriculumExecutesExactAcquisitionAndSixWorldPolicyRows(t *t
 	if len(manifests.ManifestFiles) != 155 || len(manifests.JournalRoots) != 44 || len(manifests.Tables) != 14 {
 		t.Fatalf("manifest cardinalities files=%d journals=%d tables=%d", len(manifests.ManifestFiles), len(manifests.JournalRoots), len(manifests.Tables))
 	}
+	for name, mutate := range map[string]func(*WorldPolicyRow){
+		"match-count":       func(row *WorldPolicyRow) { row.MatchCounts.UtilityAttempts++ },
+		"certificate-count": func(row *WorldPolicyRow) { row.CertificateCounts.Attempted++ },
+		"sleep-count":       func(row *WorldPolicyRow) { row.SleepCount++ },
+		"behavior-equality": func(row *WorldPolicyRow) { row.BehaviorEqual = false },
+	} {
+		t.Run("retained-replay-rejects-summary-"+name, func(t *testing.T) {
+			mutated := result
+			mutated.WorldRows = slices.Clone(result.WorldRows)
+			mutated.CurriculumRows = slices.Clone(result.CurriculumRows)
+			row := mutated.WorldRows[0]
+			mutate(&row)
+			row, err = BuildWorldPolicyRow(row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutated.WorldRows[0] = row
+			curriculum := mutated.CurriculumRows[0]
+			curriculum.WorldRowDigests = slices.Clone(curriculum.WorldRowDigests)
+			curriculum.WorldRowDigests[0] = row.Digest
+			if name == "behavior-equality" {
+				curriculum.BehaviorEqual = false
+			}
+			curriculum, err = BuildCurriculumPolicyRow(curriculum)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutated.CurriculumRows[0] = curriculum
+			if _, err := BuildCurriculumEvidence(generated, mutated); err == nil {
+				t.Fatal("accepted worker-authored scorer field without retained reconstruction")
+			}
+		})
+	}
 }
 
 func TestExportedCurriculumExecutorRejectsProtectedPanelsBeforeConstruction(t *testing.T) {

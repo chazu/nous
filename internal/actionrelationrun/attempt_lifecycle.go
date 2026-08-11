@@ -504,7 +504,7 @@ func verifyLocalSuccessfulPanel(prerequisites panelPrerequisites, authority succ
 		return readRegularNoFollow(filepath.Join(prerequisites.Root, filepath.FromSlash(path)), 0o644)
 	}
 	reachable, err := actionrelationexp.VerifyRetainedPacks(actionrelationexp.RetainedPackRefs{
-		Panel: publication.Panel, Authority: report.Authority, RunEvidence: publication.RunEvidence,
+		Panel: publication.Panel, Authority: report.Authority, Fixture: publication.FixtureRoot, RunEvidence: publication.RunEvidence,
 		ObjectRoots: payload.ObjectPackRoots, IndexRoots: payload.IndexRoots,
 		JournalRoots: payload.JournalPackRoots, InputRoots: payload.InputPackRoots, DetailRoots: payload.DetailPackRoots,
 		Tables: payload.AcquisitionTables, StructuralMaps: payload.StructuralMaps, StoreBoundaries: payload.StoreBoundaries,
@@ -513,7 +513,7 @@ func verifyLocalSuccessfulPanel(prerequisites panelPrerequisites, authority succ
 		return fmt.Errorf("local retained evidence DAG: %w", err)
 	}
 	reachable = append(reachable,
-		publication.FixtureRoot.Path, publication.PrimaryExecution.Path, publication.AuditExecution.Path,
+		publication.PrimaryExecution.Path, publication.AuditExecution.Path,
 		publication.AuditAttestation.Path, publication.ExecutionCore.Path, publication.EvidencePayload.Path,
 	)
 	publicationLogical, err := filepath.Rel(prerequisites.Root, publicationPhysical)

@@ -39,7 +39,7 @@ func executeIsolatedPair(ctx context.Context, prerequisites panelPrerequisites, 
 	if err := checkDirectoryNoFollow(scratchParent); err != nil {
 		return isolatedPanelResult{}, fmt.Errorf("unsafe panel scratch namespace: %w", err)
 	}
-	inputRoot, binary, fixturePath, err := prepareIsolatedInputs(prerequisites, sealed)
+	inputRoot, binary, fixturePath, scorerPath, err := prepareIsolatedInputs(prerequisites, sealed)
 	if err != nil {
 		return isolatedPanelResult{}, err
 	}
@@ -68,16 +68,25 @@ func executeIsolatedPair(ctx context.Context, prerequisites panelPrerequisites, 
 	if err := comparePanelFiles(primary.writer, audit.writer); err != nil {
 		return isolatedPanelResult{}, err
 	}
-	final, err := actionrelationscore.FinalizePolicyPanel(sealed, primary.policy, func(files []actionrelationexp.EvidenceFile) error {
-		if err := primary.writer.writeAll(files); err != nil {
-			return err
-		}
-		return audit.writer.writeAll(files)
-	})
+	primarySealed, err := reopenIsolatedScorer(scorerPath, sealed.Digest())
 	if err != nil {
 		return isolatedPanelResult{}, err
 	}
-	primary.summary = final
+	primary.summary, err = finalizeIsolatedPolicyPanel(primarySealed, primary.policy, primary.writer)
+	if err != nil {
+		return isolatedPanelResult{}, fmt.Errorf("primary isolated scoring: %w", err)
+	}
+	auditSealed, err := reopenIsolatedScorer(scorerPath, sealed.Digest())
+	if err != nil {
+		return isolatedPanelResult{}, err
+	}
+	audit.summary, err = finalizeIsolatedPolicyPanel(auditSealed, audit.policy, audit.writer)
+	if err != nil {
+		return isolatedPanelResult{}, fmt.Errorf("audit isolated scoring: %w", err)
+	}
+	if !reflectPanelSummaries(primary.summary, audit.summary) {
+		return isolatedPanelResult{}, fmt.Errorf("primary and audit isolated scorer summaries differ")
+	}
 	if err := comparePanelFiles(primary.writer, audit.writer); err != nil {
 		return isolatedPanelResult{}, err
 	}
@@ -93,14 +102,14 @@ func executeIsolatedPair(ctx context.Context, prerequisites panelPrerequisites, 
 	return primary, nil
 }
 
-func prepareIsolatedInputs(prerequisites panelPrerequisites, sealed actionrelationscore.SealedPanel) (string, string, string, error) {
+func prepareIsolatedInputs(prerequisites panelPrerequisites, sealed actionrelationscore.SealedPanel) (string, string, string, string, error) {
 	root, err := os.MkdirTemp(filepath.Join(prerequisites.Root, ".nous"), ".actionrelation-inputs-")
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	fail := func(err error) (string, string, string, error) {
+	fail := func(err error) (string, string, string, string, error) {
 		removeIsolatedInputs(root)
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	binarySource := filepath.Join(prerequisites.Root, filepath.FromSlash(actionrelationexp.PanelBinaryPath))
 	binaryBytes, err := readRegularNoFollow(binarySource, 0o755)
@@ -135,12 +144,32 @@ func prepareIsolatedInputs(prerequisites panelPrerequisites, sealed actionrelati
 	if err := writeExclusiveSyncedMode(fixturePath, sealed.Public().Canonical(), 0o444); err != nil {
 		return fail(err)
 	}
+	scorerPath := filepath.Join(root, "private-scorer.json")
+	if err := writeExclusiveSyncedMode(scorerPath, sealed.Canonical(), 0o400); err != nil {
+		return fail(err)
+	}
 	for _, directory := range []string{filepath.Dir(binary), filepath.Join(root, "domains", "actionrelations"), filepath.Join(root, "domains"), filepath.Join(root, ".nous"), root} {
 		if err := os.Chmod(directory, 0o555); err != nil {
 			return fail(err)
 		}
 	}
-	return root, binary, fixturePath, nil
+	return root, binary, fixturePath, scorerPath, nil
+}
+
+func reopenIsolatedScorer(path, digest string) (actionrelationscore.SealedPanel, error) {
+	data, err := readRegularNoFollow(path, 0o400)
+	if err != nil {
+		return actionrelationscore.SealedPanel{}, fmt.Errorf("reopen private scorer: %w", err)
+	}
+	sealed, err := actionrelationscore.ParseSealedPanel(bytes.NewReader(data), int64(len(data)), digest)
+	if err != nil {
+		return actionrelationscore.SealedPanel{}, fmt.Errorf("reconstruct private scorer: %w", err)
+	}
+	return sealed, nil
+}
+
+func finalizeIsolatedPolicyPanel(sealed actionrelationscore.SealedPanel, policy actionrelationscore.PolicyPanelSummary, writer *panelWriter) (actionrelationscore.PanelSummary, error) {
+	return actionrelationscore.FinalizePolicyPanel(sealed, policy, writer.read, writer.writeAll)
 }
 
 func removeIsolatedInputs(root string) {
@@ -179,8 +208,12 @@ func deriveIsolatedGates(prerequisites panelPrerequisites, result isolatedPanelR
 	if err != nil {
 		return actionrelationscore.MechanicalGates{}, err
 	}
+	fixtureRef, err := actionrelationexp.Reference(actionrelationexp.ExpectedAuthorityPath(result.summary.Panel, "fixture-root"), result.summary.Fixture.Canonical)
+	if err != nil {
+		return actionrelationscore.MechanicalGates{}, err
+	}
 	reachable, err := actionrelationexp.VerifyRetainedPacks(actionrelationexp.RetainedPackRefs{
-		Panel: result.summary.Panel, Authority: result.summary.Authority, RunEvidence: runRef,
+		Panel: result.summary.Panel, Authority: result.summary.Authority, Fixture: fixtureRef, RunEvidence: runRef,
 		ObjectRoots: result.summary.ObjectRoots, IndexRoots: result.summary.IndexRoots,
 		JournalRoots: result.summary.JournalRoots, InputRoots: result.summary.InputRoots, DetailRoots: result.summary.DetailRoots,
 		Tables: result.summary.Tables, StructuralMaps: result.summary.StructuralMaps, StoreBoundaries: result.summary.StoreBoundaries,
@@ -188,12 +221,6 @@ func deriveIsolatedGates(prerequisites panelPrerequisites, result isolatedPanelR
 	if err != nil {
 		return actionrelationscore.MechanicalGates{}, fmt.Errorf("retained evidence DAG: %w", err)
 	}
-	fixturePath := actionrelationexp.ExpectedAuthorityPath(result.summary.Panel, "fixture-root")
-	fixtureBytes, err := read(fixturePath)
-	if err != nil || !bytes.Equal(fixtureBytes, result.summary.Fixture.Canonical) {
-		return actionrelationscore.MechanicalGates{}, fmt.Errorf("retained fixture authority changed")
-	}
-	reachable = append(reachable, fixturePath)
 	slices.Sort(reachable)
 	if !slices.Equal(reachable, mapKeys(result.writer.files)) {
 		return actionrelationscore.MechanicalGates{}, fmt.Errorf("retained evidence contains unreachable files")
@@ -312,7 +339,14 @@ func isolatedSandboxProfile(binary, inputRoot, outputRoot string) string {
 	profile.WriteString("(allow process-exec (literal ")
 	profile.WriteString(strconv.Quote(binary))
 	profile.WriteString("))\n(allow sysctl-read)\n")
-	profile.WriteString("(allow file-read* (literal \"/\") (subpath \"/usr\") (subpath \"/System\") (subpath \"/private/var/db\") (literal \"/dev/null\") (subpath ")
+	profile.WriteString("(allow file-read* (literal \"/\") (subpath \"/usr\") (subpath \"/System\") (subpath \"/private/var/db\") (literal \"/dev/null\") (literal ")
+	profile.WriteString(strconv.Quote(binary))
+	profile.WriteString(") (literal ")
+	profile.WriteString(strconv.Quote(filepath.Join(inputRoot, "public-panel.json")))
+	profile.WriteString(") (subpath ")
+	profile.WriteString(strconv.Quote(filepath.Join(inputRoot, "domains", "actionrelations")))
+	profile.WriteString("))\n")
+	profile.WriteString("(allow file-read-metadata (subpath ")
 	profile.WriteString(strconv.Quote(inputRoot))
 	profile.WriteString("))\n")
 	profile.WriteString("(allow file-write* (subpath ")
