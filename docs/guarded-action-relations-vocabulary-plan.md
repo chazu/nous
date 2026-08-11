@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Status: provisional Part 3 Vocabulary 3 plan, revision 14.
+Status: provisional Part 3 Vocabulary 3 plan, revision 15.
 
 Revision 1 was committed at
 `971aad8b223e98d5e4d56f8e395c8de96543663e` and unanimously rejected by
@@ -98,6 +98,15 @@ range reconstructs those rows byte-for-byte. Both objects therefore fit the
 frozen 1,024-byte small-object class without weakening replay or any aggregate
 cap. Revision 14 requires a fresh unanimous exact-commit plan review before
 its implementation can be accepted or any panel can run.
+
+Revision 15 closes architecture review's recursive-commitment blocker. A v2
+completed-subtree row binds the submitted edge digest as well as the child
+subtree and terminal-set roots, and the parent kind-25 root retains those v2
+completion digests in direct-child loop order. Each ancestor therefore commits
+recursively to every descendant edge and terminal union. Exact one-to-one
+parent/taken/edge/completion matching removes discoverability ambiguity while
+preserving the acyclic child-first construction and eight-reference small-
+object bound.
 
 This plan narrows and, in revision 5, explicitly amends the
 [Part 3 vocabulary research program](vocabulary-research-program-v3.md). The
@@ -751,8 +760,8 @@ The remaining set, proof map, and earlier-sibling authority have exact wires:
 ```text
 ["remaining-occurrences/v1",[occurrenceDigest...]]
 ["sleep-proof-map/v1",[[sleeperDigest,propagationCoreDigest]...]]
-["completed-subtree/v1",parentNodeDigest,takenOccurrenceDigest,
- subtreeRoot,terminalSetRoot,"completed"]
+["completed-subtree/v2",parentNodeDigest,takenOccurrenceDigest,
+ edgeDigest,subtreeRoot,terminalSetRoot,"completed"]
 ```
 
 Occurrence and proof-map rows are sorted by occurrence digest and unique. Empty
@@ -760,11 +769,14 @@ remaining/proof-map roots are SHA-256 of their respective empty canonical wire.
 A completed subtree is constructible only after every reachable submitted edge
 under that earlier sibling has terminated or been validly sleep-blocked and its
 terminal-set root is closed. `subtreeRoot` is SHA-256 of
-`["sleep-subtree-root/v1",rootNodeDigest,[edgeDigest...]]` in recorded DFS
-loop order, where the listed edges are exactly the root node's direct submitted
-children. Each edge's matching completed-subtree row recursively names the
-child subtree, so a depth-first traversal reconstructs the complete global DFS
-preorder without repeating descendant edge digests in every ancestor.
+`["sleep-subtree-root/v1",rootNodeDigest,[completedSubtreeDigest...]]` in
+recorded DFS loop order, where the listed v2 rows are exactly the root node's
+direct submitted children. Each completion binds its unique matching edge,
+child subtree root, and child terminal-set root. A depth-first traversal thus
+reconstructs and cryptographically commits the complete global DFS preorder
+without repeating descendant edge digests in every ancestor. There is exactly
+one completion for each listed `(parentNodeDigest,takenOccurrenceDigest,
+edgeDigest)` tuple and no unlisted or multiply matched completion is legal.
 `terminalSetRoot` is SHA-256 of
 `["sleep-terminal-set/v1",[terminalBehaviorDigest...]]` in sorted unique order.
 
@@ -1552,7 +1564,7 @@ Object-index kind is a separate closed decoder enum:
 | 19 | `sleep-proof-map/v1` |
 | 20 | `sleep-search-node/v1` |
 | 21 | `sleep-search-edge/v1` |
-| 22 | `completed-subtree/v1` |
+| 22 | `completed-subtree/v2` |
 | 23 | `action-terminal/v1` |
 | 24 | `sleep-terminal-set/v1` |
 | 25 | `sleep-subtree-root/v1` |
@@ -1667,7 +1679,8 @@ rows formerly duplicated in the v2 attempt wire.
 The certificate, attempt, code-25 envelope, and cache row all name the same
 root; construction order is calls, root, certificate, attempt, finalization,
 then propagation. The worst code-25 envelope is 623 bytes and remains in the
-1,024-byte class. A kind-25 subtree root names at most eight direct child edges,
+1,024-byte class. A kind-25 subtree root names at most eight direct child
+completion digests,
 and a kind-44 v3 attempt names one bounded operation range, so both remain in
 the 1,024-byte class independently of descendant search size. The kind-36
 verifier requires exactly 66 embedded draw rows,
