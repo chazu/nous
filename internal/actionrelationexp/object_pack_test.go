@@ -4,10 +4,24 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"testing"
+
+	"github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
 func objectWire(kind uint16, marker string) []byte {
+	switch kind {
+	case 1:
+		wire, _ := (actionrelations.State{Cells: []actionrelations.Cell{{Name: marker, Value: 0}}}).CanonicalJSON()
+		return wire
+	case 3:
+		wire, _ := (actionrelations.Occurrence{Action: actionrelations.SemanticAction{Kind: "add", XRole: "c0", N: 1}, Ordinal: 0}).CanonicalJSON()
+		return wire
+	case 7:
+		wire, _ := (actionrelations.Guard{}).CanonicalJSON()
+		return wire
+	}
 	wire, _ := json.Marshal([]any{objectKinds[kind], marker})
 	return wire
 }
@@ -66,25 +80,37 @@ func TestObjectBundleRejectsCorruptionAndCrossKindIndex(t *testing.T) {
 	}
 }
 
-func TestObjectPacksSplitGreedilyAtFrozenCap(t *testing.T) {
-	records := make([]ObjectRecord, 260)
+func TestObjectPacksSplitGreedilyAtCap(t *testing.T) {
+	records := make([]ObjectRecord, 50)
 	for index := range records {
-		padding := bytes.Repeat([]byte{'x'}, 64900)
-		wire, _ := json.Marshal([]any{objectKinds[1], index, string(padding)})
+		wire, err := (actionrelations.State{Cells: []actionrelations.Cell{{Name: fmt.Sprintf("s%07d", index), Value: index % 4}}}).CanonicalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
 		records[index] = ObjectRecord{Kind: 1, Bytes: wire}
 	}
-	bundle, err := BuildObjectBundle(ObjectScope{Curriculum: 12, Class: "utility"}, records)
+	const packCap = 256
+	evidenceRoot, err := EvidenceRoot("development")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bundle.ObjectFiles) != 2 || len(bundle.ObjectFiles[0].Data) > MaximumPackBytes || len(bundle.ObjectFiles[1].Data) > MaximumPackBytes {
-		t.Fatalf("pack count/sizes=%d %d/%d", len(bundle.ObjectFiles), len(bundle.ObjectFiles[0].Data), len(bundle.ObjectFiles[1].Data))
+	bundle, err := buildObjectBundle(evidenceRoot, ObjectScope{Curriculum: 12, Class: "utility"}, records, packCap, MaximumIndexRows, MaximumIndexBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.ObjectFiles) < 2 {
+		t.Fatalf("pack count=%d", len(bundle.ObjectFiles))
+	}
+	for index, file := range bundle.ObjectFiles {
+		if len(file.Data) > packCap {
+			t.Fatalf("pack %d size=%d", index, len(file.Data))
+		}
 	}
 	nextLength := int(binary.BigEndian.Uint32(bundle.ObjectFiles[1].Data[len(ObjectHeader) : len(ObjectHeader)+4]))
-	if len(bundle.ObjectFiles[0].Data)+4+nextLength <= MaximumPackBytes {
+	if len(bundle.ObjectFiles[0].Data)+4+nextLength <= packCap {
 		t.Fatal("first pack did not use greedy maximal framing")
 	}
-	if err := VerifyObjectBundle(bundle); err != nil {
+	if err := verifyObjectBundle(bundle, packCap); err != nil {
 		t.Fatal(err)
 	}
 }

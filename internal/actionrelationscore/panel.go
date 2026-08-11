@@ -8,14 +8,6 @@ import (
 	"github.com/chazu/nous/internal/actionrelationfixture"
 )
 
-type PanelCurriculumEvidence struct {
-	Curriculum     int
-	ManifestFiles  []actionrelationexp.EvidenceFile
-	PackFiles      []actionrelationexp.EvidenceFile
-	WorldRows      []WorldPolicyRow
-	CurriculumRows []CurriculumPolicyRow
-}
-
 type PanelSummary struct {
 	Panel               string
 	Authority           string
@@ -34,79 +26,6 @@ type PanelSummary struct {
 	StoreBoundaries     []actionrelationexp.StoreBoundaryRow
 	WorldPolicyRowsRoot string
 	CurriculumRowsRoot  string
-}
-
-// ExecuteSealedPanel consumes a verified supervisor fixture and has no access
-// to the seed authority that constructed it.
-func ExecuteSealedPanel(domainsDir string, sealed SealedPanel, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error) (PanelSummary, error) {
-	if prepare == nil || consume == nil {
-		return PanelSummary{}, fmt.Errorf("sealed panel requires preparation and evidence consumers")
-	}
-	if sealed.panel == "" || sealed.authority == "" || actionrelationfixture.VerifyGeneratedPanel(sealed.attempts, sealed.fixture) != nil {
-		return PanelSummary{}, fmt.Errorf("invalid sealed panel")
-	}
-	return executeGeneratedPanel(sealed.panel, sealed.authority, sealed.attempts, sealed.fixture, prepare, consume, func(generated actionrelationfixture.GeneratedAttempt) (CurriculumResult, error) {
-		return executeCurriculum(domainsDir, generated)
-	})
-}
-
-func executeGeneratedPanel(panel, authority string, attempts []actionrelationfixture.GeneratedAttempt, fixture actionrelationfixture.PanelFixture, prepare func(actionrelationfixture.PanelFixture) error, consume func(PanelCurriculumEvidence) error, score func(actionrelationfixture.GeneratedAttempt) (CurriculumResult, error)) (PanelSummary, error) {
-	if err := prepare(fixture); err != nil {
-		return PanelSummary{}, err
-	}
-	result := PanelSummary{Panel: panel, Authority: authority, Fixture: fixture}
-	var err error
-	var records []actionrelationexp.RunEvidenceRecord
-	for curriculum, generated := range attempts {
-		scored, err := score(generated)
-		if err != nil {
-			return PanelSummary{}, fmt.Errorf("%s curriculum %d: %w", panel, curriculum, err)
-		}
-		evidence, err := BuildCurriculumEvidence(generated, scored)
-		if err != nil {
-			return PanelSummary{}, fmt.Errorf("%s curriculum %d evidence: %w", panel, curriculum, err)
-		}
-		manifests, err := BuildCurriculumManifests(scored, evidence)
-		if err != nil {
-			return PanelSummary{}, fmt.Errorf("%s curriculum %d manifests: %w", panel, curriculum, err)
-		}
-		chunk := PanelCurriculumEvidence{
-			Curriculum: curriculum, ManifestFiles: manifests.ManifestFiles, PackFiles: manifests.PackFiles,
-			WorldRows: slices.Clone(scored.WorldRows), CurriculumRows: slices.Clone(scored.CurriculumRows),
-		}
-		if err := consume(chunk); err != nil {
-			return PanelSummary{}, err
-		}
-		result.WorldRows = append(result.WorldRows, scored.WorldRows...)
-		result.CurriculumRows = append(result.CurriculumRows, scored.CurriculumRows...)
-		result.ObjectRoots = append(result.ObjectRoots, manifests.ObjectRoots...)
-		result.IndexRoots = append(result.IndexRoots, manifests.IndexRoots...)
-		result.JournalRoots = append(result.JournalRoots, manifests.JournalRoots...)
-		result.InputRoots = append(result.InputRoots, manifests.InputRoots...)
-		result.DetailRoots = append(result.DetailRoots, manifests.DetailRoots...)
-		result.Tables = append(result.Tables, manifests.Tables...)
-		result.StructuralMaps = append(result.StructuralMaps, manifests.StructuralMap)
-		result.StoreBoundaries = append(result.StoreBoundaries, manifests.StoreBoundaries...)
-		records = append(records, evidence.RunEvidence...)
-	}
-	result.RunEvidence, err = actionrelationexp.BuildRunEvidencePack(result.Panel, result.Authority, records)
-	if err != nil {
-		return PanelSummary{}, err
-	}
-	evidenceRoot, _ := actionrelationexp.EvidenceRoot(result.Panel)
-	result.RunEvidenceManifest = actionrelationexp.EvidenceFile{Path: evidenceRoot + "/manifests/run-evidence-root.json", Mode: "100644", Data: result.RunEvidence.Canonical}
-	result.WorldPolicyRowsRoot, err = WorldPolicyRowsRoot(result.WorldRows)
-	if err != nil {
-		return PanelSummary{}, err
-	}
-	result.CurriculumRowsRoot, err = CurriculumPolicyRowsRoot(result.CurriculumRows)
-	if err != nil {
-		return PanelSummary{}, err
-	}
-	if err := VerifyPanelSummary(result); err != nil {
-		return PanelSummary{}, err
-	}
-	return result, nil
 }
 
 func VerifyPanelSummary(value PanelSummary) error {

@@ -19,27 +19,12 @@ func TestCompetenceEvidencePacksRetainExactCaseResultPreimages(t *testing.T) {
 	if err != nil || VerifyEvidence(evidence) != nil {
 		t.Fatal(err)
 	}
-	build, _ := actionrelationexp.Reference("docs/actionrelations-build-authority.json", []byte("build"))
-	caseRef, _ := actionrelationexp.Reference(competenceRootPath+"/cases-root.json", evidence.CaseManifest.Canonical)
-	resultRef, _ := actionrelationexp.Reference(competenceRootPath+"/results-root.json", evidence.ResultManifest.Canonical)
-	root, err := BuildRoot(Root{SourceRoot: shaHex([]byte("source")), BinaryDigest: shaHex([]byte("binary")), BuildAuthority: build, CommandArgv: []string{".nous/bin/actionrelation-nous-v1", "-stage", "competence"}, Environment: []actionrelationexp.EnvironmentRow{{Key: "GOMAXPROCS", Value: "1"}}, Evidence: evidence, CaseManifestRef: caseRef, ResultManifestRef: resultRef})
-	if err != nil || root.Digest == "" || VerifyRoot(root) != nil {
-		t.Fatal(err)
-	}
 	files := map[string][]byte{}
 	for _, file := range append(append([]EvidenceFile{}, evidence.CaseFiles...), evidence.ResultFiles...) {
 		files[file.Path] = file.Data
 	}
-	parsedEvidence, err := ParseEvidence(evidence.CaseManifest.Canonical, evidence.ResultManifest.Canonical, files)
-	if err != nil {
+	if _, err := ParseEvidence(evidence.CaseManifest.Canonical, evidence.ResultManifest.Canonical, files); err != nil {
 		t.Fatal(err)
-	}
-	parsedRoot, err := ParseRoot(root.Canonical, parsedEvidence)
-	if err != nil || parsedRoot.Digest != root.Digest {
-		t.Fatalf("parse root: %v", err)
-	}
-	if _, err := ParseRoot(append(append([]byte{}, root.Canonical...), '\n'), parsedEvidence); err == nil {
-		t.Fatal("accepted trailing competence root bytes")
 	}
 	corruptFiles := map[string][]byte{}
 	for path, data := range files {
@@ -53,6 +38,38 @@ func TestCompetenceEvidencePacksRetainExactCaseResultPreimages(t *testing.T) {
 	corrupt.ResultFiles[0].Data[10] ^= 1
 	if VerifyEvidence(corrupt) == nil {
 		t.Fatal("accepted corrupted competence result pack")
+	}
+}
+
+func TestCompetenceRootRequiresFrozenUniverseAndExactInvocation(t *testing.T) {
+	_, evidence, err := RunEvidence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	build, _ := actionrelationexp.Reference("docs/actionrelations-build-authority.json", []byte("build"))
+	caseRef, _ := actionrelationexp.Reference(competenceRootPath+"/cases-root.json", evidence.CaseManifest.Canonical)
+	resultRef, _ := actionrelationexp.Reference(competenceRootPath+"/results-root.json", evidence.ResultManifest.Canonical)
+	environment := []actionrelationexp.EnvironmentRow{{Key: "GOMAXPROCS", Value: "1"}, {Key: "LC_ALL", Value: "C"}, {Key: "PATH", Value: "/opt/homebrew/bin:/usr/bin:/bin"}, {Key: "TZ", Value: "UTC"}}
+	root, err := BuildRoot(Root{SourceRoot: shaHex([]byte("source")), BinaryDigest: shaHex([]byte("binary")), BuildAuthority: build, CommandArgv: []string{"/repo/.nous/bin/actionrelation-nous-v1", "actionrelation-trials", "-stage", "competence", "-repo-root", "/repo"}, Environment: environment, Evidence: evidence, CaseManifestRef: caseRef, ResultManifestRef: resultRef})
+	if err != nil || root.Digest == "" || VerifyRoot(root) != nil {
+		t.Fatal(err)
+	}
+	parsedRoot, err := ParseRoot(root.Canonical, evidence)
+	if err != nil || parsedRoot.Digest != root.Digest {
+		t.Fatalf("parse root: %v", err)
+	}
+	if _, err := ParseRoot(append(append([]byte{}, root.Canonical...), '\n'), evidence); err == nil {
+		t.Fatal("accepted trailing competence root bytes")
+	}
+	minimalCases := []CaseRow{{Suite: "suite", CaseID: "case", Input: shaHex([]byte("input")), Expected: shaHex([]byte("result"))}}
+	minimal, err := BuildEvidence(minimalCases, []ResultRow{{Suite: "suite", CaseID: "case", Production: minimalCases[0].Expected, Oracle: minimalCases[0].Expected}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	minimalCaseRef, _ := actionrelationexp.Reference(competenceRootPath+"/cases-root.json", minimal.CaseManifest.Canonical)
+	minimalResultRef, _ := actionrelationexp.Reference(competenceRootPath+"/results-root.json", minimal.ResultManifest.Canonical)
+	if _, err := BuildRoot(Root{SourceRoot: shaHex([]byte("source")), BinaryDigest: shaHex([]byte("binary")), BuildAuthority: build, CommandArgv: root.CommandArgv, Environment: environment, Evidence: minimal, CaseManifestRef: minimalCaseRef, ResultManifestRef: minimalResultRef}); err == nil {
+		t.Fatal("accepted invented competence universe")
 	}
 }
 

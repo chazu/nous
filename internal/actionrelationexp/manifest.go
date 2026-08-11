@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	PlanCommit        = "15808faae785fe22b025b6de3a6751ed6d365c00"
+	PlanCommit        = "95860673664799ea1e18c7cb1f7e433238830216"
 	ExperimentVersion = "actionrelations/v1"
 	SeedAuthority     = "part3/actionrelations/v1"
 )

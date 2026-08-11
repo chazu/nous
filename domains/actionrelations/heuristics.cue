@@ -166,7 +166,7 @@ units: [
 						"abState" @ "baState" @ "equalityRequest" @ ar-state-equal? "equality" !
 					then
 					"AR.Observation." "case" @ concat "observationRequest" !
-					"state" @ "a" @ "b" @ "aInitial" @ "bInitial" @ "bAfterA" @ "aAfterB" @ "equality" @ "case" @ "label" get-slot "observationRequest" @ ar-observation-assemble "observation" !
+					"state" @ "a" @ "b" @ "aInitial" @ "bInitial" @ "bAfterA" @ "aAfterB" @ "equality" @ "observationRequest" @ ar-observation-assemble "observation" !
 					"observation" @ nil !=
 					if
 						"experiment" @ "observation" @ "experiment" set-slot

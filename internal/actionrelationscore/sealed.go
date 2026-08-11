@@ -44,6 +44,7 @@ type SealedPanel struct {
 	fixture   actionrelationfixture.PanelFixture
 	canonical []byte
 	digest    string
+	public    PublicPanel
 }
 
 func PrepareDevelopmentPanel() (SealedPanel, error) {
@@ -74,6 +75,8 @@ func (s SealedPanel) Canonical() []byte { return slices.Clone(s.canonical) }
 
 func (s SealedPanel) Digest() string { return s.digest }
 
+func (s SealedPanel) Public() PublicPanel { return s.public }
+
 func sealPanel(attempts []actionrelationfixture.GeneratedAttempt, fixture actionrelationfixture.PanelFixture) (SealedPanel, error) {
 	if err := actionrelationfixture.VerifyGeneratedPanel(attempts, fixture); err != nil {
 		return SealedPanel{}, err
@@ -90,7 +93,11 @@ func sealPanel(attempts []actionrelationfixture.GeneratedAttempt, fixture action
 	if err != nil || int64(len(canonical)) > maximumSealedPanelBytes {
 		return SealedPanel{}, fmt.Errorf("sealed panel exceeds temporary input cap")
 	}
-	return SealedPanel{panel: fixture.Panel, authority: fixture.Authority, attempts: attempts, fixture: fixture, canonical: canonical, digest: sealedDigest(canonical)}, nil
+	public, err := buildPublicPanel(attempts, fixture)
+	if err != nil {
+		return SealedPanel{}, err
+	}
+	return SealedPanel{panel: fixture.Panel, authority: fixture.Authority, attempts: attempts, fixture: fixture, canonical: canonical, digest: sealedDigest(canonical), public: public}, nil
 }
 
 func ParseSealedPanel(reader io.Reader, size int64, digest string) (SealedPanel, error) {
@@ -119,7 +126,11 @@ func ParseSealedPanel(reader io.Reader, size int64, digest string) (SealedPanel,
 	if wire.Panel != wire.Fixture.Panel || wire.Authority != wire.Fixture.Authority || actionrelationfixture.VerifyGeneratedPanel(attempts, wire.Fixture) != nil {
 		return SealedPanel{}, fmt.Errorf("sealed panel authority does not reconstruct")
 	}
-	return SealedPanel{panel: wire.Panel, authority: wire.Authority, attempts: attempts, fixture: wire.Fixture, canonical: data, digest: digest}, nil
+	public, err := buildPublicPanel(attempts, wire.Fixture)
+	if err != nil {
+		return SealedPanel{}, err
+	}
+	return SealedPanel{panel: wire.Panel, authority: wire.Authority, attempts: attempts, fixture: wire.Fixture, canonical: data, digest: digest, public: public}, nil
 }
 
 func normalizeAttemptSeeds(attempt *actionrelationfixture.GeneratedAttempt) {

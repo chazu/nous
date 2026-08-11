@@ -220,10 +220,14 @@ func TestIsolatedSandboxAllowsOnlyWorkerOutputAndDeniesPrimaryRead(t *testing.T)
 	secret := filepath.Join(denied, "primary.pack")
 	outside := filepath.Join(t.TempDir(), "outside.pack")
 	inside := filepath.Join(allowed, "audit.pack")
+	inputs, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(secret, []byte("primary"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	profile := isolatedSandboxProfile("/bin/bash", allowed, []string{denied})
+	profile := isolatedSandboxProfile("/bin/bash", inputs, allowed)
 	run := func(script, path string) error {
 		command := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/bash", "--noprofile", "--norc", "-c", script, "worker", path)
 		return command.Run()

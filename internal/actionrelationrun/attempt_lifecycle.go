@@ -164,7 +164,11 @@ func eraseRecoverySecret(prerequisites panelPrerequisites, panel string, claim a
 	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
-	if err != nil || len(data) != 32 || digest(data) != running.AttemptCommitment {
+	if err != nil || len(data) != 32 {
+		return fmt.Errorf("locked recovery secret preimage changed")
+	}
+	alreadyErased := bytes.Equal(data, make([]byte, 32))
+	if !alreadyErased && digest(data) != running.AttemptCommitment {
 		return fmt.Errorf("locked recovery secret preimage changed")
 	}
 	parent, leaf, err := openParentNoFollow(path, false, 0)
@@ -172,22 +176,24 @@ func eraseRecoverySecret(prerequisites panelPrerequisites, panel string, claim a
 		return err
 	}
 	defer unix.Close(parent)
-	fd, err := unix.Openat(parent, leaf, unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return err
-	}
-	file := os.NewFile(uintptr(fd), path)
-	zeros := make([]byte, 32)
-	_, writeErr := file.WriteAt(zeros, 0)
-	if writeErr == nil {
-		writeErr = file.Sync()
-	}
-	closeErr := file.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	if closeErr != nil {
-		return closeErr
+	if !alreadyErased {
+		fd, openErr := unix.Openat(parent, leaf, unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if openErr != nil {
+			return openErr
+		}
+		file := os.NewFile(uintptr(fd), path)
+		zeros := make([]byte, 32)
+		_, writeErr := file.WriteAt(zeros, 0)
+		if writeErr == nil {
+			writeErr = file.Sync()
+		}
+		closeErr := file.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 	}
 	if err := unix.Unlinkat(parent, leaf, 0); err != nil {
 		return err

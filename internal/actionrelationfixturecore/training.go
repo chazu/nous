@@ -23,6 +23,47 @@ type Case struct {
 	BInitiallyApplicable bool
 }
 
+// PublicCase is the complete policy-visible training input. Labels and latent
+// generator metadata are deliberately absent; the policy must reconstruct an
+// observation through charged semantic transitions.
+type PublicCase struct {
+	Ordinal     int
+	State       []byte
+	AOccurrence []byte
+	BOccurrence []byte
+}
+
+func PublicCases(cases []Case) ([]PublicCase, error) {
+	if len(cases) != TrainingCount {
+		return nil, fmt.Errorf("public training requires %d cases", TrainingCount)
+	}
+	result := make([]PublicCase, len(cases))
+	for index, testCase := range cases {
+		if testCase.Ordinal != index {
+			return nil, fmt.Errorf("public training ordinal %d changed", index)
+		}
+		if _, err := actionrelations.ParseState(testCase.State); err != nil {
+			return nil, err
+		}
+		if _, err := actionrelations.ParseOccurrence(testCase.AOccurrence); err != nil {
+			return nil, err
+		}
+		if _, err := actionrelations.ParseOccurrence(testCase.BOccurrence); err != nil {
+			return nil, err
+		}
+		result[index] = PublicCase{Ordinal: index, State: append([]byte(nil), testCase.State...), AOccurrence: append([]byte(nil), testCase.AOccurrence...), BOccurrence: append([]byte(nil), testCase.BOccurrence...)}
+	}
+	return result, nil
+}
+
+func (c PublicCase) caseWithoutTruth() Case {
+	return Case{Ordinal: c.Ordinal, State: c.State, AOccurrence: c.AOccurrence, BOccurrence: c.BOccurrence}
+}
+
+func ViewsPublic(testCase PublicCase) ([]View, error) {
+	return Views(testCase.caseWithoutTruth())
+}
+
 // Training returns eight disjoint-add commutations followed by one witness for
 // each negative diagnostic, with the second conflict reserved for event order.
 func Training() ([]Case, error) {

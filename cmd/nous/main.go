@@ -77,8 +77,8 @@ func actionRelationTrialsCmd(args []string) {
 	panel := fs.String("panel", "development", "development, validation, or locked")
 	_ = fs.String("unlock-token", "", "locked execute token actionrelations/v1:<exact-clean-HEAD>")
 	workerRole := fs.String("worker-role", "", "internal isolated worker role")
-	fixtureInput := fs.String("fixture-input", "", "internal sealed fixture input")
-	fixtureDigest := fs.String("fixture-digest", "", "internal sealed fixture digest")
+	publicInput := fs.String("public-input", "", "internal public policy input")
+	publicDigest := fs.String("public-digest", "", "internal public policy input digest")
 	outputRoot := fs.String("output-root", "", "internal isolated output root")
 	evidenceCap := fs.Int64("evidence-cap", 0, "internal isolated evidence cap")
 	fs.Parse(args)
@@ -113,7 +113,7 @@ func actionRelationTrialsCmd(args []string) {
 		}
 		err, canonical = runErr, value.Canonical
 	case "isolated-policy-worker":
-		canonical, err = actionrelationrun.ExecuteIsolatedPolicyWorker(root, *panel, *workerRole, *fixtureInput, *fixtureDigest, *outputRoot, *evidenceCap, os.Args)
+		canonical, err = actionrelationrun.ExecuteIsolatedPolicyWorker(root, *panel, *workerRole, *publicInput, *publicDigest, *outputRoot, *evidenceCap, os.Args)
 	default:
 		err = fmt.Errorf("unknown actionrelation stage %q", *stage)
 	}

@@ -180,8 +180,11 @@ func collectAcquisitionObjects(store *unit.Store) ([]ObjectRecord, error) {
 			return nil, fmt.Errorf("unclassified acquisition object %q", name)
 		}
 		canonical := []byte(u.GetString("canonicalObject"))
-		if shaHex(canonical) != u.GetString("objectDigest") || ValidateObject(kind, canonical) != nil {
-			return nil, fmt.Errorf("invalid acquisition object %q", name)
+		if shaHex(canonical) != u.GetString("objectDigest") {
+			return nil, fmt.Errorf("invalid acquisition object digest %q", name)
+		}
+		if err := ValidateObject(kind, canonical); err != nil {
+			return nil, fmt.Errorf("invalid acquisition object %q: %w", name, err)
 		}
 		digest := u.GetString("objectDigest")
 		if previous, exists := byDigest[digest]; exists {

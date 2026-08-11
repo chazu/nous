@@ -1,9 +1,13 @@
 package actionrelationrun
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/chazu/nous/internal/actionrelationcap"
+	"github.com/chazu/nous/internal/actionrelationexp"
 )
 
 func TestProtectedSecretWriteIsExclusiveAndModeExact(t *testing.T) {
@@ -34,5 +38,28 @@ func TestProtectedOutputPreflightAllowsOnlyCommittedClaimAtPrepare(t *testing.T)
 	}
 	if err := requireProtectedOutputsAbsent(root, "validation", false); err == nil {
 		t.Fatal("claim stage accepted an existing claim")
+	}
+}
+
+func TestLockedRecoveryFinishesUnlinkAfterSecretWasAlreadyZeroed(t *testing.T) {
+	gitCommon := t.TempDir()
+	claim := actionrelationexp.Claim{Digest: digest([]byte("claim"))}
+	location, locationDigest, err := actionrelationcap.LockedSecretLocation(claim.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(gitCommon, filepath.FromSlash(location))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	running := actionrelationexp.Running{AttemptCommitment: digest([]byte("original secret")), SecretLocationDigest: &locationDigest}
+	if err := eraseRecoverySecret(panelPrerequisites{GitCommonDir: gitCommon}, "locked", claim, running); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("zeroed recovery secret remains: %v", err)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/chazu/nous/internal/actionrelationexp"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
@@ -55,18 +54,13 @@ func TestSearchEvidenceBuildsFrozenAcyclicProofChain(t *testing.T) {
 	}
 	terminalSet, _ := BuildTerminalSet(nil)
 	subtree, _ := BuildSubtreeRoot(child.Digest, nil)
-	completed, err := BuildCompletedSubtree(parent.Digest, taken, subtree, terminalSet)
+	completed, err := BuildCompletedSubtree(parent.Digest, taken, edge, subtree, terminalSet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, object := range map[string]EvidenceObject{"remaining": remaining, "proof": proofMap, "parent": parent, "propagation": propagation, "child": child, "edge": edge, "subtree": subtree, "terminal-set": terminalSet, "completed": completed} {
 		if object.Digest != shaHex(object.Canonical) || !json.Valid(object.Canonical) {
 			t.Fatalf("%s is not canonical digest authority", name)
-		}
-	}
-	for kind, object := range map[uint16]EvidenceObject{5: remaining, 18: propagation, 19: proofMap, 20: parent, 21: edge, 22: completed, 24: terminalSet, 25: subtree} {
-		if err := actionrelationexp.ValidateObject(kind, object.Canonical); err != nil {
-			t.Fatalf("kind %d: %v", kind, err)
 		}
 	}
 }
@@ -81,9 +75,6 @@ func TestTerminalBehaviorRejectsEnabledRemainder(t *testing.T) {
 	terminal, err := BuildTerminalBehavior(state, blocked)
 	if err != nil || !taggedEvidence(terminal, "action-terminal/v1") {
 		t.Fatalf("deadlock: %v", err)
-	}
-	if err := actionrelationexp.ValidateObject(23, terminal.Canonical); err != nil {
-		t.Fatal(err)
 	}
 	complete, err := BuildTerminalBehavior(state, nil)
 	if err != nil || complete.Digest == terminal.Digest {

@@ -11,6 +11,7 @@ import (
 	"github.com/chazu/nous/internal/actionrelationacquire"
 	"github.com/chazu/nous/internal/actionrelationcertify"
 	"github.com/chazu/nous/internal/actionrelationmatch"
+	"github.com/chazu/nous/internal/actionrelationoracle"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
@@ -42,7 +43,13 @@ func TestLearnedArtifactFiltersCertifiedSleepWithoutChangingBehavior(t *testing.
 		t.Fatal(err)
 	}
 	for _, policy := range []actionrelationsearch.Policy{actionrelationsearch.NousSleep, actionrelationsearch.NoGuardSleep} {
-		result, err := actionrelationsearch.Search(world, policy, actionrelationsearch.Artifact{Relations: relations})
+		result, err := actionrelationsearch.SearchWithCertifier(world, policy, actionrelationsearch.Artifact{Relations: relations}, func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error) {
+			stateJSON, _ := state.CanonicalJSON()
+			leftJSON, _ := left.Action.CanonicalJSON()
+			rightJSON, _ := right.Action.CanonicalJSON()
+			observation, oracleErr := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
+			return oracleErr == nil && observation.Label == "commutes", oracleErr
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

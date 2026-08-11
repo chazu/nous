@@ -27,9 +27,52 @@ type CurriculumEvidence struct {
 }
 
 func BuildCurriculumEvidence(generated actionrelationfixture.GeneratedAttempt, scored CurriculumResult) (CurriculumEvidence, error) {
-	result := CurriculumEvidence{Curriculum: generated.Context.Curriculum, Transcripts: map[string]actionrelationexp.TranscriptBundle{}}
+	policyResult := scored
+	policyResult.WorldRows = nil
+	policyResult.CurriculumRows = nil
+	result, err := BuildPolicyCurriculumEvidence(policyResult)
+	if err != nil {
+		return CurriculumEvidence{}, err
+	}
 	if generated.Context.Panel != scored.Panel || generated.Context.Authority != scored.Authority || generated.Context.Curriculum != scored.Curriculum || generated.Curriculum.Family != scored.Family || len(scored.WorldRows) != 42 || len(scored.CurriculumRows) != 7 {
 		return result, fmt.Errorf("scoring and fixture authority differ")
+	}
+	authorityRecords, err := curriculumAuthorityObjects(generated, scored)
+	if err != nil {
+		return result, err
+	}
+	evidenceRoot, _ := actionrelationexp.EvidenceRoot(scored.Panel)
+	result.Authority, err = actionrelationexp.BuildObjectBundleAt(evidenceRoot, actionrelationexp.ObjectScope{Curriculum: scored.Curriculum, Class: "authority"}, authorityRecords)
+	if err != nil {
+		return result, fmt.Errorf("authority object bundle: %w", err)
+	}
+	var tables []actionrelationexp.TableBundle
+	for _, acquisition := range []Acquisition{scored.Nous, scored.NoGuard} {
+		kinds := []uint16{101, 102, 103, 104, 105, 106, 107, 108}
+		if acquisition.Boundary.Scope == "no-guard" {
+			kinds = []uint16{102, 103, 105, 106, 107, 108}
+		}
+		for _, kind := range kinds {
+			tables = append(tables, acquisition.Evidence.Tables[kind])
+		}
+	}
+	if err := actionrelationexp.VerifyCurriculumReplay(actionrelationexp.CurriculumReplay{
+		Panel: scored.Panel, Authority: scored.Authority, Curriculum: scored.Curriculum,
+		Objects: []actionrelationexp.ObjectBundle{result.NousPreboundary, result.NoGuardPreboundary, result.Utility, result.Authority},
+		Tables:  tables, StructuralMap: result.StructuralMap, RunEvidence: result.RunEvidence, Transcripts: result.Transcripts,
+	}); err != nil {
+		return result, fmt.Errorf("curriculum evidence replay: %w", err)
+	}
+	return result, nil
+}
+
+// BuildPolicyCurriculumEvidence closes only policy-produced evidence. It is
+// safe to call inside the public worker because scorer truth, score rows,
+// generator ledgers, and fixture preimages are added by the supervisor later.
+func BuildPolicyCurriculumEvidence(scored CurriculumResult) (CurriculumEvidence, error) {
+	result := CurriculumEvidence{Curriculum: scored.Curriculum, Transcripts: map[string]actionrelationexp.TranscriptBundle{}}
+	if scored.Panel == "" || scored.Authority == "" || scored.Curriculum < 0 || len(scored.WorldRows) != 0 || len(scored.CurriculumRows) != 0 {
+		return result, fmt.Errorf("invalid unscored policy evidence")
 	}
 	if scored.Nous.Boundary.Verify(scored.Nous.Evidence) != nil || scored.NoGuard.Boundary.Verify(scored.NoGuard.Evidence) != nil {
 		return result, fmt.Errorf("invalid acquisition preboundary")
@@ -109,15 +152,6 @@ func BuildCurriculumEvidence(generated actionrelationfixture.GeneratedAttempt, s
 	if err != nil {
 		return result, fmt.Errorf("utility object bundle: %w", err)
 	}
-	authorityRecords, err := curriculumAuthorityObjects(generated, scored)
-	if err != nil {
-		return result, err
-	}
-	result.Authority, err = actionrelationexp.BuildObjectBundleAt(evidenceRoot, actionrelationexp.ObjectScope{Curriculum: scored.Curriculum, Class: "authority"}, authorityRecords)
-	if err != nil {
-		return result, fmt.Errorf("authority object bundle: %w", err)
-	}
-
 	for _, acquisition := range []Acquisition{scored.Nous, scored.NoGuard} {
 		record, err := acquisitionRunEvidence(acquisition, structuralMap.RunRoots[acquisition.Evidence.Transcript.RunID])
 		if err != nil {
@@ -192,13 +226,24 @@ func utilityChargedObjects(run actionrelationutility.SearchRun) ([]actionrelatio
 		}
 		result = append(result, actionrelationexp.ObjectRecord{Kind: 27, Bytes: []byte(reservation.GetString("canonicalObject"))})
 	}
+	if run.Terminal == "budget-exhausted" {
+		rejected := run.WorkTerminal.RejectedReservation
+		if rejected.Digest == "" || rejected.Digest != objectDigest(rejected.Canonical) {
+			return nil, fmt.Errorf("run %s lacks rejected reservation preimage", run.RunID)
+		}
+		result = append(result, actionrelationexp.ObjectRecord{Kind: 27, Bytes: slices.Clone(rejected.Canonical)})
+	}
 	return uniqueObjectRecords(result), nil
 }
 
 func curriculumAuthorityObjects(generated actionrelationfixture.GeneratedAttempt, scored CurriculumResult) ([]actionrelationexp.ObjectRecord, error) {
+	return curriculumAuthorityObjectsDelayed(generated, scored, scored.Nous.Boundary.Canonical, scored.NoGuard.Boundary.Canonical)
+}
+
+func curriculumAuthorityObjectsDelayed(generated actionrelationfixture.GeneratedAttempt, scored CurriculumResult, nousBoundary, noGuardBoundary []byte) ([]actionrelationexp.ObjectRecord, error) {
 	result := []actionrelationexp.ObjectRecord{
-		{Kind: 35, Bytes: slices.Clone(scored.Nous.Boundary.Canonical)},
-		{Kind: 35, Bytes: slices.Clone(scored.NoGuard.Boundary.Canonical)},
+		{Kind: 35, Bytes: slices.Clone(nousBoundary)},
+		{Kind: 35, Bytes: slices.Clone(noGuardBoundary)},
 		{Kind: 47, Bytes: slices.Clone(generated.Fixture.Canonical)},
 	}
 	for _, ledger := range generated.AttemptLedgers {

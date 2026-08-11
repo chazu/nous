@@ -296,7 +296,13 @@ func runSearchTerminalSets() ([]CaseRow, []ResultRow, error) {
 		}
 		worldJSON, _ := normalized.CanonicalJSON()
 		for policyOrdinal, policy := range policies {
-			production, err := actionrelationsearch.Search(world, policy, actionrelationsearch.Artifact{})
+			production, err := actionrelationsearch.SearchWithCertifier(world, policy, actionrelationsearch.Artifact{}, func(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error) {
+				stateJSON, _ := state.CanonicalJSON()
+				leftJSON, _ := left.Action.CanonicalJSON()
+				rightJSON, _ := right.Action.CanonicalJSON()
+				observation, oracleErr := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
+				return oracleErr == nil && observation.Label == "commutes", oracleErr
+			})
 			if err != nil || !slices.Equal(production.TerminalDigests, oracle) {
 				return nil, nil, fmt.Errorf("search disagreement world=%d policy=%s", worldOrdinal, policy)
 			}

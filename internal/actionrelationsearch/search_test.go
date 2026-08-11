@@ -4,8 +4,17 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/chazu/nous/internal/actionrelationoracle"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
+
+func oracleTestCertifier(state actionrelations.State, left, right actionrelations.Occurrence) (bool, error) {
+	stateJSON, _ := state.CanonicalJSON()
+	leftJSON, _ := left.Action.CanonicalJSON()
+	rightJSON, _ := right.Action.CanonicalJSON()
+	observation, err := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
+	return err == nil && observation.Label == "commutes", err
+}
 
 func TestCertifiedPoliciesPreserveTerminalBehaviors(t *testing.T) {
 	world := actionrelations.World{
@@ -24,7 +33,7 @@ func TestCertifiedPoliciesPreserveTerminalBehaviors(t *testing.T) {
 		t.Fatalf("complete evidence: %v", err)
 	}
 	for _, policy := range []Policy{Lexical, StaticSleep, DynamicSleep} {
-		result, err := Search(world, policy, Artifact{})
+		result, err := SearchWithCertifier(world, policy, Artifact{}, oracleTestCertifier)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +90,7 @@ func TestConflictingActionsAreNeverSleepPruned(t *testing.T) {
 		},
 	}
 	complete, _ := Search(world, Complete, Artifact{})
-	dynamic, _ := Search(world, DynamicSleep, Artifact{})
+	dynamic, _ := SearchWithCertifier(world, DynamicSleep, Artifact{}, oracleTestCertifier)
 	if !slices.Equal(complete.TerminalDigests, dynamic.TerminalDigests) || dynamic.SleepPropagations != 0 {
 		t.Fatalf("complete=%+v dynamic=%+v", complete, dynamic)
 	}

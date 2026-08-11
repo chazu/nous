@@ -1,4 +1,4 @@
-package actionrelationsearch
+package actionrelationutility
 
 import (
 	"bytes"
@@ -7,7 +7,24 @@ import (
 	"slices"
 
 	"github.com/chazu/nous/internal/actionrelationoracle"
+	"github.com/chazu/nous/internal/actionrelationsearch"
 )
+
+type parsedNode struct{ state, remaining, proofMap string }
+type parsedEdge struct {
+	digest, parent, taken, child string
+	propagations                 []string
+}
+type parsedPropagation struct{ digest, parent, taken, sleeper, source, authority, certificate, successor, childRemaining string }
+type parsedCompleted struct{ digest, parent, taken, edge, subtree, terminalSet string }
+type parsedSubtree struct {
+	digest, node string
+	preorder     []string
+}
+type parsedTerminal struct {
+	digest, state, terminal string
+	remaining               []string
+}
 
 type semanticOccurrence struct {
 	canonical []byte
@@ -28,7 +45,7 @@ func VerifyCertificateDecisionSemantics(stateJSON, aOccurrenceJSON, bOccurrenceJ
 	if err != nil || bytes.Compare(a.canonical, b.canonical) >= 0 {
 		return fmt.Errorf("certificate decision pair is not canonical and distinct")
 	}
-	stateDigest, aDigest, bDigest := shaHex(stateJSON), shaHex(aOccurrenceJSON), shaHex(bOccurrenceJSON)
+	stateDigest, aDigest, bDigest := digestBytesText(stateJSON), digestBytesText(aOccurrenceJSON), digestBytesText(bOccurrenceJSON)
 	aInitial, err := actionrelationoracle.Apply(stateJSON, a.action)
 	if err != nil {
 		return err
@@ -39,7 +56,7 @@ func VerifyCertificateDecisionSemantics(stateJSON, aOccurrenceJSON, bOccurrenceJ
 	}
 	rowDigest := func(row []any) string {
 		canonical, _ := json.Marshal(row)
-		return shaHex(canonical)
+		return digestBytesText(canonical)
 	}
 	appRow := func(inputState, occurrence string, applicable bool) string {
 		return rowDigest([]any{"action-applicability-row/v1", inputState, occurrence, applicable, "valid"})
@@ -47,7 +64,7 @@ func VerifyCertificateDecisionSemantics(stateJSON, aOccurrenceJSON, bOccurrenceJ
 	transitionRow := func(inputState, occurrence, applicability string, transition actionrelationoracle.Transition) string {
 		outcome, output := "inapplicable", semanticZeroDigest
 		if transition.Applicable {
-			outcome, output = "applied", shaHex(transition.State)
+			outcome, output = "applied", digestBytesText(transition.State)
 		}
 		return rowDigest([]any{"action-transition-row/v1", inputState, occurrence, applicability, output, outcome})
 	}
@@ -63,12 +80,12 @@ func VerifyCertificateDecisionSemantics(stateJSON, aOccurrenceJSON, bOccurrenceJ
 		if err != nil {
 			return err
 		}
-		aState, bState := shaHex(aInitial.State), shaHex(bInitial.State)
+		aState, bState := digestBytesText(aInitial.State), digestBytesText(bInitial.State)
 		bCrossApp := appRow(aState, bDigest, bAfterA.Applicable)
 		aCrossApp := appRow(bState, aDigest, aAfterB.Applicable)
 		wantRows = append(wantRows, bCrossApp, aCrossApp, transitionRow(aState, bDigest, bCrossApp, bAfterA), transitionRow(bState, aDigest, aCrossApp, aAfterB))
 		if bAfterA.Applicable && aAfterB.Applicable {
-			abDigest, baDigest := shaHex(bAfterA.State), shaHex(aAfterB.State)
+			abDigest, baDigest := digestBytesText(bAfterA.State), digestBytesText(aAfterB.State)
 			wantRows = append(wantRows, rowDigest([]any{"action-state-equality-row/v1", abDigest, baDigest, bytes.Equal(bAfterA.State, aAfterB.State), "valid"}))
 		}
 	}
@@ -80,7 +97,7 @@ func VerifyCertificateDecisionSemantics(stateJSON, aOccurrenceJSON, bOccurrenceJ
 		return err
 	}
 	if observation.Label == "commutes" {
-		if result != "certified" || !digestText(certificateDigest) {
+		if result != "certified" || !digestTextUtility(certificateDigest) {
 			return fmt.Errorf("commuting decision was not certified")
 		}
 		return verifySemanticCertificate(certificateCanonical, certificateDigest, stateDigest, aDigest, bDigest, a, b, observation)
@@ -94,74 +111,71 @@ func VerifyCertificateDecisionSemantics(stateJSON, aOccurrenceJSON, bOccurrenceJ
 // VerifyResultSemantics independently replays every retained transition,
 // terminal, sleeping proof, and certified local diamond from digest-addressed
 // state, occurrence, and certificate preimages.
-func VerifyResultSemantics(result Result, canonicalByDigest map[string][]byte) error {
-	if err := VerifyResultEvidence(result); err != nil {
+func VerifyResultSemantics(result actionrelationsearch.Result, canonicalByDigest map[string][]byte) error {
+	if err := actionrelationsearch.VerifyResultEvidence(result); err != nil {
 		return err
 	}
 	remaining := map[string][]string{}
 	for _, object := range result.RemainingSets {
-		row, _ := evidenceRow(object, 2)
+		row, _ := semanticEvidenceRow(object, 2)
 		var values []string
 		_ = json.Unmarshal(row[1], &values)
 		remaining[object.Digest] = values
 	}
-	proofs := map[string][]ProofEntry{}
+	proofs := map[string][]actionrelationsearch.ProofEntry{}
 	for _, object := range result.ProofMaps {
-		row, _ := evidenceRow(object, 2)
+		row, _ := semanticEvidenceRow(object, 2)
 		var raw [][]json.RawMessage
 		_ = json.Unmarshal(row[1], &raw)
 		for _, fields := range raw {
-			proofs[object.Digest] = append(proofs[object.Digest], ProofEntry{SleeperDigest: stringValue(fields[0]), PropagationDigest: stringValue(fields[1])})
+			proofs[object.Digest] = append(proofs[object.Digest], actionrelationsearch.ProofEntry{SleeperDigest: stringValue(fields[0]), PropagationDigest: stringValue(fields[1])})
 		}
 	}
 	nodes := map[string]parsedNode{}
 	for _, object := range result.Nodes {
-		row, _ := evidenceRow(object, 4)
+		row, _ := semanticEvidenceRow(object, 4)
 		nodes[object.Digest] = parsedNode{state: stringValue(row[1]), remaining: stringValue(row[2]), proofMap: stringValue(row[3])}
 	}
 	edges := map[string]parsedEdge{}
 	edgesByParent := map[string][]parsedEdge{}
 	for _, object := range result.SearchEdges {
-		row, _ := evidenceRow(object, 5)
+		row, _ := semanticEvidenceRow(object, 5)
 		parsed := parsedEdge{digest: object.Digest, parent: stringValue(row[1]), taken: stringValue(row[2]), child: stringValue(row[4])}
 		_ = json.Unmarshal(row[3], &parsed.propagations)
 		edges[object.Digest] = parsed
 	}
 	subtrees := map[string]parsedSubtree{}
 	for _, object := range result.SubtreeRoots {
-		row, _ := evidenceRow(object, 3)
+		row, _ := semanticEvidenceRow(object, 3)
 		parsed := parsedSubtree{digest: object.Digest, node: stringValue(row[1])}
 		_ = json.Unmarshal(row[2], &parsed.preorder)
 		subtrees[object.Digest] = parsed
 	}
-	completedByParentTaken := map[string]parsedCompleted{}
+	completed := map[string]parsedCompleted{}
 	for _, object := range result.CompletedSubtrees {
-		row, _ := evidenceRow(object, 6)
-		parsed := parsedCompleted{digest: object.Digest, parent: stringValue(row[1]), taken: stringValue(row[2]), subtree: stringValue(row[3]), terminalSet: stringValue(row[4])}
-		completedByParentTaken[parsed.parent+parsed.taken] = parsed
+		row, _ := semanticEvidenceRow(object, 7)
+		parsed := parsedCompleted{digest: object.Digest, parent: stringValue(row[1]), taken: stringValue(row[2]), edge: stringValue(row[3]), subtree: stringValue(row[4]), terminalSet: stringValue(row[5])}
+		completed[object.Digest] = parsed
 	}
 	for _, subtree := range subtrees {
-		position := 0
-		for position < len(subtree.preorder) {
-			edge := edges[subtree.preorder[position]]
+		for _, completionDigest := range subtree.preorder {
+			edge := edges[completed[completionDigest].edge]
 			edgesByParent[subtree.node] = append(edgesByParent[subtree.node], edge)
-			child := subtrees[completedByParentTaken[edge.parent+edge.taken].subtree]
-			position += 1 + len(child.preorder)
 		}
 	}
 	terminalsByNode := map[string]parsedTerminal{}
 	for _, object := range result.TerminalBehaviors {
-		row, _ := evidenceRow(object, 4)
+		row, _ := semanticEvidenceRow(object, 4)
 		var stateJSON json.RawMessage
 		var occurrenceDigests []string
 		_ = json.Unmarshal(row[1], &stateJSON)
 		_ = json.Unmarshal(row[2], &occurrenceDigests)
-		remainingObject := evidenceWire([]any{"remaining-occurrences/v1", occurrenceDigests})
-		terminalsByNode[shaHex(stateJSON)+remainingObject.Digest] = parsedTerminal{digest: object.Digest, state: shaHex(stateJSON), remaining: occurrenceDigests, terminal: stringValue(row[3])}
+		remainingCanonical, _ := json.Marshal([]any{"remaining-occurrences/v1", occurrenceDigests})
+		terminalsByNode[digestBytesText(stateJSON)+digestBytesText(remainingCanonical)] = parsedTerminal{digest: object.Digest, state: digestBytesText(stateJSON), remaining: occurrenceDigests, terminal: stringValue(row[3])}
 	}
 	propagations := map[string]parsedPropagation{}
 	for _, object := range result.Propagations {
-		row, _ := evidenceRow(object, 9)
+		row, _ := semanticEvidenceRow(object, 9)
 		propagations[object.Digest] = parsedPropagation{
 			digest: object.Digest, parent: stringValue(row[1]), taken: stringValue(row[2]), sleeper: stringValue(row[3]),
 			source: stringValue(row[4]), authority: stringValue(row[5]), certificate: stringValue(row[6]), successor: stringValue(row[7]), childRemaining: stringValue(row[8]),
@@ -174,7 +188,7 @@ func VerifyResultSemantics(result Result, canonicalByDigest map[string][]byte) e
 			return data, nil
 		}
 		data := canonicalByDigest[digest]
-		if shaHex(data) != digest || actionrelationoracle.ValidateState(data) != nil {
+		if digestBytesText(data) != digest || actionrelationoracle.ValidateState(data) != nil {
 			return nil, fmt.Errorf("missing independent state preimage %s", digest)
 		}
 		states[digest] = data
@@ -186,7 +200,7 @@ func VerifyResultSemantics(result Result, canonicalByDigest map[string][]byte) e
 		}
 		data := canonicalByDigest[digest]
 		value, err := parseSemanticOccurrence(data)
-		if err != nil || shaHex(data) != digest {
+		if err != nil || digestBytesText(data) != digest {
 			return semanticOccurrence{}, fmt.Errorf("missing independent occurrence preimage %s", digest)
 		}
 		occurrences[digest] = value
@@ -235,7 +249,7 @@ func VerifyResultSemantics(result Result, canonicalByDigest map[string][]byte) e
 				return err
 			}
 			transition, err := actionrelationoracle.Apply(stateJSON, taken.action)
-			if err != nil || !transition.Applicable || shaHex(transition.State) != nodes[edge.child].state {
+			if err != nil || !transition.Applicable || digestBytesText(transition.State) != nodes[edge.child].state {
 				return fmt.Errorf("search edge is not the independent transition")
 			}
 		}
@@ -302,7 +316,7 @@ func parseSemanticOccurrence(data []byte) (semanticOccurrence, error) {
 
 func verifySemanticCertificate(data []byte, certificateDigest, stateDigest, takenDigest, sleeperDigest string, taken, sleeper semanticOccurrence, observation actionrelationoracle.Observation) error {
 	var row []json.RawMessage
-	if json.Unmarshal(data, &row) != nil || len(row) != 10 || stringValue(row[0]) != "local-diamond-certificate/v1" || shaHex(data) != certificateDigest {
+	if json.Unmarshal(data, &row) != nil || len(row) != 10 || stringValue(row[0]) != "local-diamond-certificate/v1" || digestBytesText(data) != certificateDigest {
 		return fmt.Errorf("sleep propagation lacks certificate preimage")
 	}
 	aDigest, bDigest := takenDigest, sleeperDigest
@@ -312,7 +326,7 @@ func verifySemanticCertificate(data []byte, certificateDigest, stateDigest, take
 		abState, baState = baState, abState
 	}
 	var equal bool
-	if stringValue(row[1]) != stateDigest || stringValue(row[2]) != aDigest || stringValue(row[3]) != bDigest || !digestText(stringValue(row[4])) || stringValue(row[5]) != shaHex(abState) || stringValue(row[6]) != shaHex(baState) || json.Unmarshal(row[7], &equal) != nil || !equal || stringValue(row[8]) != aDigest || !digestText(stringValue(row[9])) {
+	if stringValue(row[1]) != stateDigest || stringValue(row[2]) != aDigest || stringValue(row[3]) != bDigest || !digestTextUtility(stringValue(row[4])) || stringValue(row[5]) != digestBytesText(abState) || stringValue(row[6]) != digestBytesText(baState) || json.Unmarshal(row[7], &equal) != nil || !equal || stringValue(row[8]) != aDigest || !digestTextUtility(stringValue(row[9])) {
 		return fmt.Errorf("certificate does not reconstruct its independent diamond")
 	}
 	want, _ := json.Marshal(row)
@@ -320,6 +334,21 @@ func verifySemanticCertificate(data []byte, certificateDigest, stateDigest, take
 		return fmt.Errorf("noncanonical certificate preimage")
 	}
 	return nil
+}
+
+func semanticEvidenceRow(object actionrelationsearch.EvidenceObject, length int) ([]json.RawMessage, error) {
+	if object.Digest != digestBytesText(object.Canonical) {
+		return nil, fmt.Errorf("semantic evidence digest changed")
+	}
+	var row []json.RawMessage
+	if json.Unmarshal(object.Canonical, &row) != nil || len(row) != length {
+		return nil, fmt.Errorf("invalid semantic evidence row")
+	}
+	want, _ := json.Marshal(row)
+	if !bytes.Equal(want, object.Canonical) {
+		return nil, fmt.Errorf("noncanonical semantic evidence row")
+	}
+	return row, nil
 }
 
 func edgeIndex(edges []parsedEdge, taken string) int {

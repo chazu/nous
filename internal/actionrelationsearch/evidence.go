@@ -124,11 +124,11 @@ func BuildSubtreeRoot(rootNodeDigest string, preorderEdgeDigests []string) (Evid
 	return evidenceWire([]any{"sleep-subtree-root/v1", rootNodeDigest, slices.Clone(preorderEdgeDigests)}), nil
 }
 
-func BuildCompletedSubtree(parentNodeDigest, takenOccurrenceDigest string, subtreeRoot, terminalSet EvidenceObject) (EvidenceObject, error) {
-	if !digestText(parentNodeDigest) || !digestText(takenOccurrenceDigest) || !taggedEvidence(subtreeRoot, "sleep-subtree-root/v1") || !taggedEvidence(terminalSet, "sleep-terminal-set/v1") {
+func BuildCompletedSubtree(parentNodeDigest, takenOccurrenceDigest string, edge, subtreeRoot, terminalSet EvidenceObject) (EvidenceObject, error) {
+	if !digestText(parentNodeDigest) || !digestText(takenOccurrenceDigest) || !taggedEvidence(edge, "sleep-search-edge/v1") || !taggedEvidence(subtreeRoot, "sleep-subtree-root/v1") || !taggedEvidence(terminalSet, "sleep-terminal-set/v1") {
 		return EvidenceObject{}, fmt.Errorf("invalid completed subtree")
 	}
-	return evidenceWire([]any{"completed-subtree/v1", parentNodeDigest, takenOccurrenceDigest, subtreeRoot.Digest, terminalSet.Digest, "completed"}), nil
+	return evidenceWire([]any{"completed-subtree/v2", parentNodeDigest, takenOccurrenceDigest, edge.Digest, subtreeRoot.Digest, terminalSet.Digest, "completed"}), nil
 }
 
 func evidenceWire(row []any) EvidenceObject {

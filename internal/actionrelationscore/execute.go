@@ -8,6 +8,7 @@ import (
 	"github.com/chazu/nous/internal/actionrelationacquire"
 	"github.com/chazu/nous/internal/actionrelationexp"
 	"github.com/chazu/nous/internal/actionrelationfixture"
+	"github.com/chazu/nous/internal/actionrelationfixturecore"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 	"github.com/chazu/nous/internal/actionrelationutility"
 	"github.com/chazu/nous/internal/dsl"
@@ -44,18 +45,37 @@ func ExecuteCurriculum(domainsDir string, generated actionrelationfixture.Genera
 }
 
 func executeCurriculum(domainsDir string, generated actionrelationfixture.GeneratedAttempt) (CurriculumResult, error) {
-	context := generated.Context
+	training, err := actionrelationfixturecore.PublicCases(generated.Training)
+	if err != nil {
+		return CurriculumResult{}, err
+	}
+	worlds := make([]PublicWorld, len(generated.Curriculum.Worlds))
+	for index, view := range generated.Curriculum.Worlds {
+		worlds[index] = PublicWorld{State: view.State, Actions: slices.Clone(view.Actions)}
+	}
+	public := PublicCurriculum{Curriculum: generated.Context.Curriculum, Training: training, Worlds: worlds}
+	result, err := executePolicyCurriculum(domainsDir, generated.Context.Panel, generated.Context.Authority, public)
+	if err != nil {
+		return result, err
+	}
+	return scorePolicyCurriculum(generated, result)
+}
+
+func executePolicyCurriculum(domainsDir, panel, authority string, public PublicCurriculum) (CurriculumResult, error) {
 	result := CurriculumResult{
-		Panel: context.Panel, Authority: context.Authority, Curriculum: context.Curriculum,
-		Family: generated.Curriculum.Family, Runs: map[actionrelationsearch.Policy][]actionrelationutility.SearchRun{},
+		Panel: panel, Authority: authority, Curriculum: public.Curriculum,
+		Runs:           map[actionrelationsearch.Policy][]actionrelationutility.SearchRun{},
 		OperationRoots: map[string]actionrelationexp.OperationRoot{},
 	}
-	nous, err := executeAcquisition(domainsDir, context.Panel, context.Authority, context.Curriculum, result.Family, "nous")
+	if len(public.Training) != actionrelationfixturecore.TrainingCount || len(public.Worlds) != 6 {
+		return result, fmt.Errorf("invalid public policy curriculum")
+	}
+	nous, err := executeAcquisition(domainsDir, panel, authority, public.Curriculum, public.Training, "nous")
 	if err != nil {
 		return result, err
 	}
 	result.Nous = nous
-	noGuard, err := executeAcquisition(domainsDir, context.Panel, context.Authority, context.Curriculum, result.Family, "no-guard")
+	noGuard, err := executeAcquisition(domainsDir, panel, authority, public.Curriculum, public.Training, "no-guard")
 	if err != nil {
 		return result, err
 	}
@@ -65,47 +85,69 @@ func executeCurriculum(domainsDir string, generated actionrelationfixture.Genera
 
 	for policyOrdinal, policy := range Policies {
 		acquisition := acquisitionForPolicy(result, policy)
-		acquisitionVector, terminal, artifactDigest, acquisitionTerminalDigest, acquisitionRoot, err := acquisitionFields(acquisition, policy)
+		acquisitionVector, _, _, _, _, err := acquisitionFields(acquisition, policy)
 		if err != nil {
 			return result, fmt.Errorf("policy %s acquisition: %w", policy, err)
 		}
-		training := trainingMatchCounts(acquisition)
 		lifecycle := acquisitionVector
 		priorPhysical, histories := 0, 0
-		worldRows := make([]WorldPolicyRow, 6)
 		worldRuns := make([]actionrelationutility.SearchRun, 6)
-		searchVector := [12]int{}
-		behaviorEqual := true
-		aggregateTerminal := terminal
-		children := make([]string, 0, 7)
-		if acquisitionRoot != "" {
-			children = append(children, acquisitionRoot)
-		}
-		for worldOrdinal, view := range generated.Curriculum.Worlds {
+		for worldOrdinal, view := range public.Worlds {
 			world := actionrelations.World{State: view.State, Actions: view.Actions}
 			budget := actionrelationutility.WorkBudget{LifecycleCap: LifecycleCap, PhysicalCap: policyPhysicalCap(policy), PriorPhysical: priorPhysical, ReservedTerminals: 5 - worldOrdinal}
-			token := fmt.Sprintf("score-c%04d-p%02d-w%d", context.Curriculum, policyOrdinal, worldOrdinal)
+			token := fmt.Sprintf("policy-c%04d-p%02d-w%d", public.Curriculum, policyOrdinal, worldOrdinal)
 			var run actionrelationutility.SearchRun
 			switch policy {
 			case actionrelationsearch.NousSleep, actionrelationsearch.NoGuardSleep, actionrelationsearch.LearnedNoUse:
-				run, err = actionrelationutility.ExecuteLearnedPolicyWithBudget(acquisition.Evidence.Run.Store, acquisition.Evidence.Run.Artifact, acquisition.Boundary.BoundaryUnit, world, policy, context.Panel, context.Authority, context.Curriculum, worldOrdinal, lifecycle, budget, token)
+				run, err = actionrelationutility.ExecuteLearnedPolicyWithBudget(acquisition.Evidence.Run.Store, acquisition.Evidence.Run.Artifact, acquisition.Boundary.BoundaryUnit, world, policy, panel, authority, public.Curriculum, worldOrdinal, lifecycle, budget, token)
 			default:
-				run, err = actionrelationutility.ExecutePolicyContinuing(domainsDir, world, policy, context.Panel, context.Authority, context.Curriculum, worldOrdinal, lifecycle, budget, token)
+				run, err = actionrelationutility.ExecutePolicyContinuing(domainsDir, world, policy, panel, authority, public.Curriculum, worldOrdinal, lifecycle, budget, token)
 			}
 			if err != nil {
 				return result, fmt.Errorf("policy %s world %d: %w", policy, worldOrdinal, err)
 			}
-			currentVector, err := actionrelationutility.MeterWorkVector(run.Records)
-			if err != nil {
-				return result, err
-			}
-			addVector(&searchVector, currentVector)
 			lifecycle = run.WorkVector
 			priorPhysical += run.PhysicalWork
 			histories += run.Search.HistoryCount
 			if histories > HistoryCap {
 				return result, fmt.Errorf("policy %s crossed curriculum history cap", policy)
 			}
+			worldRuns[worldOrdinal] = run
+			result.OperationRoots[run.RunRoot.Digest] = run.RunRoot
+		}
+		result.Runs[policy] = worldRuns
+	}
+	return result, nil
+}
+
+func scorePolicyCurriculum(generated actionrelationfixture.GeneratedAttempt, result CurriculumResult) (CurriculumResult, error) {
+	context := generated.Context
+	if result.Panel != context.Panel || result.Authority != context.Authority || result.Curriculum != context.Curriculum || len(generated.Truth.Worlds) != 6 || len(generated.Curriculum.Worlds) != 6 {
+		return result, fmt.Errorf("private scorer and public policy authority differ")
+	}
+	result.Family = generated.Curriculum.Family
+	for _, policy := range Policies {
+		acquisition := acquisitionForPolicy(result, policy)
+		acquisitionVector, terminal, artifactDigest, acquisitionTerminalDigest, acquisitionRoot, err := acquisitionFields(acquisition, policy)
+		if err != nil {
+			return result, fmt.Errorf("policy %s acquisition: %w", policy, err)
+		}
+		training := trainingMatchCounts(acquisition)
+		lifecycle, searchVector := acquisitionVector, [12]int{}
+		behaviorEqual, aggregateTerminal := true, terminal
+		children := make([]string, 0, 7)
+		if acquisitionRoot != "" {
+			children = append(children, acquisitionRoot)
+		}
+		worldRows := make([]WorldPolicyRow, 6)
+		for worldOrdinal, view := range generated.Curriculum.Worlds {
+			run := result.Runs[policy][worldOrdinal]
+			currentVector, err := actionrelationutility.MeterWorkVector(run.Records)
+			if err != nil {
+				return result, err
+			}
+			addVector(&searchVector, currentVector)
+			lifecycle = run.WorkVector
 			truth := generated.Truth.Worlds[worldOrdinal]
 			equal := run.Terminal == "completed" && slices.Equal(run.Search.TerminalDigests, truth.Terminals)
 			behaviorEqual = behaviorEqual && equal
@@ -134,9 +176,8 @@ func executeCurriculum(domainsDir string, generated actionrelationfixture.Genera
 			if err != nil {
 				return result, err
 			}
-			worldRows[worldOrdinal], worldRuns[worldOrdinal] = row, run
+			worldRows[worldOrdinal] = row
 			children = append(children, run.RunRoot.Digest)
-			result.OperationRoots[run.RunRoot.Digest] = run.RunRoot
 		}
 		if aggregateTerminal == "not-applicable" || aggregateTerminal == "completed" || aggregateTerminal == "no-discovery" {
 			aggregateTerminal = "completed"
@@ -169,7 +210,6 @@ func executeCurriculum(domainsDir string, generated actionrelationfixture.Genera
 		if err != nil {
 			return result, err
 		}
-		result.Runs[policy] = worldRuns
 		result.WorldRows = append(result.WorldRows, worldRows...)
 		result.CurriculumRows = append(result.CurriculumRows, curriculumRow)
 		result.OperationRoots[operationRoot.Digest] = operationRoot
@@ -184,14 +224,14 @@ func executeCurriculum(domainsDir string, generated actionrelationfixture.Genera
 	return result, nil
 }
 
-func executeAcquisition(domainsDir, panel, authority string, curriculum, family int, scope string) (Acquisition, error) {
+func executeAcquisition(domainsDir, panel, authority string, curriculum int, training []actionrelationfixturecore.PublicCase, scope string) (Acquisition, error) {
 	token := fmt.Sprintf("score-acquire-%s-c%04d", scope, curriculum)
 	var session *actionrelationacquire.Session
 	var err error
 	if scope == "nous" {
-		session, err = actionrelationacquire.BeginFor(domainsDir, token, family, curriculum, panel, authority)
+		session, err = actionrelationacquire.BeginPublicFor(domainsDir, token, training, scope, panel, authority, curriculum)
 	} else {
-		session, err = actionrelationacquire.BeginNoGuardFor(domainsDir, token, family, curriculum, panel, authority)
+		session, err = actionrelationacquire.BeginPublicFor(domainsDir, token, training, scope, panel, authority, curriculum)
 	}
 	if err != nil {
 		return Acquisition{}, err
@@ -263,86 +303,11 @@ func trainingMatchCounts(acquisition Acquisition) MatchCounts {
 }
 
 func utilityMatchCounts(records []dsl.ActionRelationMeterRecord, truth actionrelationfixture.WorldTruth, base MatchCounts) (MatchCounts, error) {
-	type pair struct {
-		state       string
-		occurrences []string
-		results     []bool
-	}
-	lookup := map[string]string{}
-	for _, row := range truth.PairRows {
-		lookup[row.StateDigest+row.ADigest+row.BDigest] = row.Label
-	}
-	var current *pair
-	finish := func() error {
-		if current == nil {
-			return nil
-		}
-		base.UtilityAttempts++
-		matched := len(current.results) > 0
-		for _, value := range current.results {
-			matched = matched && value
-		}
-		if matched {
-			base.UtilityMatches++
-			if len(current.occurrences) != 2 {
-				return fmt.Errorf("matched pair lacks applicability authority")
-			}
-			a, b := current.occurrences[0], current.occurrences[1]
-			if a > b {
-				a, b = b, a
-			}
-			label, ok := lookup[current.state+a+b]
-			if !ok {
-				return fmt.Errorf("matched pair absent from scorer truth")
-			}
-			if label != "commutes" {
-				base.UtilityFalseMatches++
-			}
-		}
-		current = nil
-		return nil
-	}
-	for _, record := range records {
-		if record.Code == 21 {
-			if current != nil && len(current.occurrences) == 2 {
-				if err := finish(); err != nil {
-					return MatchCounts{}, err
-				}
-			}
-			if current == nil {
-				current = &pair{}
-			}
-			if len(record.Outputs) != 1 {
-				return MatchCounts{}, fmt.Errorf("applicability call lacks row")
-			}
-			var row []json.RawMessage
-			var tag, state, occurrence, status string
-			var applicable bool
-			if json.Unmarshal(record.Outputs[0], &row) != nil || len(row) != 5 || json.Unmarshal(row[0], &tag) != nil || json.Unmarshal(row[1], &state) != nil || json.Unmarshal(row[2], &occurrence) != nil || json.Unmarshal(row[3], &applicable) != nil || json.Unmarshal(row[4], &status) != nil || tag != "action-applicability-row/v1" || status != "valid" || !applicable {
-				return MatchCounts{}, fmt.Errorf("invalid learned pair applicability row")
-			}
-			if current.state != "" && current.state != state {
-				return MatchCounts{}, fmt.Errorf("learned pair changed state")
-			}
-			current.state = state
-			current.occurrences = append(current.occurrences, occurrence)
-		}
-		if record.Code == 9 {
-			if current == nil || len(record.Outputs) != 1 {
-				return MatchCounts{}, fmt.Errorf("relation match lacks pair authority")
-			}
-			var row []json.RawMessage
-			var matched bool
-			if json.Unmarshal(record.Outputs[0], &row) != nil || len(row) != 12 || json.Unmarshal(row[10], &matched) != nil {
-				return MatchCounts{}, fmt.Errorf("invalid relation match row")
-			}
-			current.results = append(current.results, matched)
-		}
-	}
-	if err := finish(); err != nil {
+	trace, err := collectPolicyPairTrace(records)
+	if err != nil {
 		return MatchCounts{}, err
 	}
-	return base, nil
+	return scorePolicyPairTrace(trace, truth, base)
 }
 
 func certificateCounts(records []dsl.ActionRelationMeterRecord) CertificateCounts {

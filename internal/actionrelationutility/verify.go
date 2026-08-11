@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/chazu/nous/internal/actionrelationexp"
+	"github.com/chazu/nous/internal/actionrelationledger"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 	"github.com/chazu/nous/internal/unit"
 )
@@ -98,14 +99,39 @@ func verifyWorkTerminal(run SearchRun) error {
 	if err != nil {
 		return err
 	}
-	var runID, rejected, terminal string
+	var runID, rejectedDigest, terminal string
 	var phase, total, remaining int
 	var vector [12]int
-	if json.Unmarshal(row[1], &runID) != nil || json.Unmarshal(row[2], &phase) != nil || json.Unmarshal(row[3], &rejected) != nil || json.Unmarshal(row[4], &terminal) != nil || json.Unmarshal(row[5], &vector) != nil || json.Unmarshal(row[6], &total) != nil || json.Unmarshal(row[7], &remaining) != nil || runID != run.RunID || phase != 2 || terminal != "budget-exhausted" || !digestTextUtility(rejected) || vector != run.WorkVector || total != run.WorkTotal || remaining != 0 {
+	if json.Unmarshal(row[1], &runID) != nil || json.Unmarshal(row[2], &phase) != nil || json.Unmarshal(row[3], &rejectedDigest) != nil || json.Unmarshal(row[4], &terminal) != nil || json.Unmarshal(row[5], &vector) != nil || json.Unmarshal(row[6], &total) != nil || json.Unmarshal(row[7], &remaining) != nil || runID != run.RunID || phase != 2 || terminal != "budget-exhausted" || !digestTextUtility(rejectedDigest) || vector != run.WorkVector || total != run.WorkTotal || remaining != 0 {
 		return fmt.Errorf("invalid work-terminal authority")
 	}
 	if len(run.Records) == 0 || run.Records[len(run.Records)-1].Code != 19 || len(run.Records[len(run.Records)-1].Outputs) != 1 || digestBytesText(run.Records[len(run.Records)-1].Outputs[0]) != run.WorkTerminal.Digest {
 		return fmt.Errorf("work terminal is not the final charged output")
+	}
+	rejected := run.WorkTerminal.RejectedReservation
+	if rejected.Digest != rejectedDigest || actionrelationledger.VerifyReservation(rejected, run.WorkCap) != nil || rejected.Status != "rejected-cap" || rejected.RunID != run.RunID || rejected.TotalBefore+len(rejected.OperationCodes) < run.WorkCap {
+		return fmt.Errorf("work terminal lacks exact rejected reservation authority")
+	}
+	terminalSource := storeUnitByDigestUtility(run.Store, run.Records[len(run.Records)-1].SourceTaskDigest)
+	if terminalSource == nil {
+		return fmt.Errorf("work terminal lacks terminal reservation")
+	}
+	terminalReservation, err := actionrelationledger.ParseReservation([]byte(terminalSource.GetString("canonicalObject")))
+	if err != nil || actionrelationledger.VerifyReservation(terminalReservation, run.WorkCap) != nil || terminalReservation.Status != "reserved" || !slices.Equal(terminalReservation.OperationCodes, []uint8{19}) || terminalReservation.TotalBefore != rejected.TotalBefore || terminalReservation.TotalAfter != rejected.TotalBefore+1 {
+		return fmt.Errorf("work terminal reservation does not reconstruct")
+	}
+	return nil
+}
+
+func storeUnitByDigestUtility(store *unit.Store, digest string) *unit.Unit {
+	if store == nil {
+		return nil
+	}
+	for _, name := range store.All() {
+		value := store.Get(name)
+		if value != nil && value.GetString("objectDigest") == digest {
+			return value
+		}
 	}
 	return nil
 }
@@ -153,7 +179,7 @@ func verifyCertificateAuthority(run SearchRun) error {
 		}
 	}
 	if run.Terminal == "completed" {
-		if err := actionrelationsearch.VerifyResultSemantics(run.Search, semanticObjects); err != nil {
+		if err := VerifyResultSemantics(run.Search, semanticObjects); err != nil {
 			return fmt.Errorf("utility search semantics: %w", err)
 		}
 	}
@@ -207,7 +233,7 @@ func verifyCertificateAuthority(run SearchRun) error {
 			return fmt.Errorf("cache row changed pair authority")
 		}
 		attempt := objects[attemptDigest]
-		if len(attempt.row) != 10 || utilityRowTag(attempt.row) != "local-diamond-certificate-attempt/v2" || utilityString(attempt.row[1]) != state || utilityString(attempt.row[6]) != rootDigest || utilityString(attempt.row[7]) != result || utilityString(attempt.row[8]) != certificateDigest || utilityString(attempt.row[9]) != "valid" {
+		if len(attempt.row) != 9 || utilityRowTag(attempt.row) != "local-diamond-certificate-attempt/v3" || utilityString(attempt.row[1]) != state || utilityString(attempt.row[5]) != rootDigest || utilityString(attempt.row[6]) != result || utilityString(attempt.row[7]) != certificateDigest || utilityString(attempt.row[8]) != "valid" {
 			return fmt.Errorf("cache row does not resolve its certificate attempt")
 		}
 		aDigest, bDigest := utilityString(attempt.row[2]), utilityString(attempt.row[3])
@@ -243,15 +269,14 @@ func verifyCertificateAuthority(run SearchRun) error {
 				operationRows = append(operationRows, digestBytesText(record.Outputs[0]))
 			}
 		}
-		var attemptRows []string
-		if json.Unmarshal(attempt.row[5], &attemptRows) != nil || misses != 1 || !slices.Equal(operationRows, attemptRows) {
-			return fmt.Errorf("certificate attempt operation rows do not reconstruct: range=%v attempt=%v misses=%d", operationRows, attemptRows, misses)
+		if misses != 1 {
+			return fmt.Errorf("certificate attempt operation range has %d cache misses", misses)
 		}
 		certificateCanonical := []byte(nil)
 		if certificateDigest != utilityZeroDigest {
 			certificateCanonical = semanticObjects[certificateDigest]
 		}
-		if err := actionrelationsearch.VerifyCertificateDecisionSemantics(semanticObjects[state], semanticObjects[aDigest], semanticObjects[bDigest], attemptRows, result, certificateDigest, certificateCanonical); err != nil {
+		if err := VerifyCertificateDecisionSemantics(semanticObjects[state], semanticObjects[aDigest], semanticObjects[bDigest], operationRows, result, certificateDigest, certificateCanonical); err != nil {
 			return fmt.Errorf("certificate decision semantics: %w", err)
 		}
 		if result == "certified" {

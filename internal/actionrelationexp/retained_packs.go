@@ -7,7 +7,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+
+	"github.com/chazu/nous/internal/actionrelationledger"
 )
+
+type retainedObjectValue struct {
+	kind      uint16
+	canonical []byte
+	classes   map[string]bool
+}
+
+type retainedRunAuthority struct {
+	curriculum    int
+	operationRoot string
+	phase         uint8
+	workTerminal  string
+	work          [12]int
+	initialWork   [12]int
+	terminal      string
+	world         string
+	policy        string
+	terminalSet   string
+	historyCount  int
+}
+
+type retainedCurriculumAuthority struct {
+	runs map[string]retainedRunAuthority
+}
 
 // RetainedPackRefs is the complete physical-pack authority reachable from a
 // panel payload. Read must return the exact bytes retained at a logical path.
@@ -39,11 +65,10 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	}
 	reachable := map[string]bool{}
 	retainedLeaves := map[string]bool{}
-	type retainedObject struct {
-		kind      uint16
-		canonical []byte
-	}
-	retainedObjects := map[string]retainedObject{}
+	retainedTableLeaves := map[string][]retainedTableLeaf{}
+	retainedObjects := map[string]retainedObjectValue{}
+	retainedByCurriculum := make([]map[string]retainedObjectValue, curricula)
+	curriculumAuthorities := make([]retainedCurriculumAuthority, curricula)
 	readPath := func(path, digest string) ([]byte, error) {
 		if !safeEvidencePath(path) || !digestText(digest) || reachable[path] {
 			return nil, fmt.Errorf("duplicate or invalid retained path %q", path)
@@ -70,6 +95,10 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	type indexAuthority struct{ digest, objectSet string }
 	indexAuthorities := map[scopeKey]indexAuthority{}
 	indexes := make(map[scopeKey]ObjectManifestRef, len(value.IndexRoots))
+	objectCounts := make([]int, curricula)
+	indexShards := make([]int, curricula)
+	largeCounts := make([][4]int, curricula)
+	mediumCounts := make([]int, curricula)
 	for _, ref := range value.IndexRoots {
 		key := scopeKey{ref.Scope.Curriculum, ref.Scope.Class}
 		if ref.Scope.validate() != nil || indexes[key].Path != "" {
@@ -100,6 +129,14 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 			return nil, fmt.Errorf("index root does not reconstruct: %s", indexRef.Path)
 		}
 		bundle := ObjectBundle{Scope: objectRef.Scope, ObjectRoot: objectRoot, IndexRoot: indexRoot}
+		if key.curriculum < 0 || key.curriculum >= curricula {
+			return nil, fmt.Errorf("object scope curriculum is outside panel")
+		}
+		objectCounts[key.curriculum] += objectRoot.TotalRecords
+		indexShards[key.curriculum] += len(indexRoot.Shards)
+		if objectCounts[key.curriculum] > MaximumCurriculumObjects || indexShards[key.curriculum] > MaximumCurriculumIndexes {
+			return nil, fmt.Errorf("curriculum object/index capacity exceeded")
+		}
 		objectPayloads := map[string][]byte{}
 		for _, shard := range objectRoot.Shards {
 			file, err := readFile(shard.Path, shard.ByteLength, shard.PackDigest)
@@ -108,8 +145,14 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 			}
 			bundle.ObjectFiles = append(bundle.ObjectFiles, file)
 			for offset := len(ObjectHeader); offset < len(file.Data); {
+				if len(file.Data)-offset < 4 {
+					return nil, fmt.Errorf("truncated retained object frame")
+				}
 				length := int(binary.BigEndian.Uint32(file.Data[offset : offset+4]))
 				offset += 4
+				if length < 1 || length > len(file.Data)-offset {
+					return nil, fmt.Errorf("invalid retained object frame")
+				}
 				objectDigest := shaHex(file.Data[offset : offset+length])
 				retainedLeaves[objectDigest] = true
 				objectPayloads[objectDigest] = bytes.Clone(file.Data[offset : offset+length])
@@ -131,18 +174,48 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				row := file.Data[offset:][:ObjectIndexRowBytes]
 				digest := hex.EncodeToString(row[:32])
 				kind := binary.BigEndian.Uint16(row[44:46])
+				switch kind {
+				case 10, 28:
+					largeCounts[key.curriculum][0]++
+				case 29:
+					largeCounts[key.curriculum][1]++
+				case 36:
+					largeCounts[key.curriculum][2]++
+				case 9, 35, 47:
+					mediumCounts[key.curriculum]++
+				}
 				if prior, ok := retainedObjects[digest]; ok && (prior.kind != kind || !bytes.Equal(prior.canonical, objectPayloads[digest])) {
 					return nil, fmt.Errorf("cross-kind retained object collision")
 				}
-				retainedObjects[digest] = retainedObject{kind: kind, canonical: objectPayloads[digest]}
+				object := retainedObjects[digest]
+				if object.classes == nil {
+					object = retainedObjectValue{kind: kind, canonical: objectPayloads[digest], classes: map[string]bool{}}
+				}
+				object.classes[key.class] = true
+				retainedObjects[digest] = object
+				if retainedByCurriculum[key.curriculum] == nil {
+					retainedByCurriculum[key.curriculum] = map[string]retainedObjectValue{}
+				}
+				retainedByCurriculum[key.curriculum][digest] = object
 			}
 		}
 		indexDigest, _ := indexRoot.Digest()
 		indexAuthorities[key] = indexAuthority{digest: indexDigest, objectSet: indexRoot.ObjectSetRoot}
 		delete(indexes, key)
 	}
+	for curriculum := range curricula {
+		largeCounts[curriculum][3] = largeCounts[curriculum][0] + largeCounts[curriculum][1] + largeCounts[curriculum][2]
+		if largeCounts[curriculum][0] > 32 || largeCounts[curriculum][1] > 32 || largeCounts[curriculum][2] > 32 || largeCounts[curriculum][3] > 96 || mediumCounts[curriculum] > 512 {
+			return nil, fmt.Errorf("curriculum per-class object capacity exceeded: %d", curriculum)
+		}
+	}
 	if len(indexes) != 0 {
 		return nil, fmt.Errorf("orphan retained index root")
+	}
+	for curriculum, objects := range retainedByCurriculum {
+		if err := verifyCurriculumAuthorityObjects(value.Panel, value.Authority, curriculum, objects, &curriculumAuthorities[curriculum]); err != nil {
+			return nil, fmt.Errorf("retained curriculum authority %d: %w", curriculum, err)
+		}
 	}
 
 	type transcriptRoots struct {
@@ -189,7 +262,8 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	}
 	journalDigests, inputDigests, detailDigests := map[string]string{}, map[string]string{}, map[string]string{}
 	chargedRoots := map[string]string{}
-	chargedOutputs := map[string][]string{}
+	transcriptCalls := map[string][]retainedCall{}
+	transcriptBundles := map[string]TranscriptBundle{}
 	for runID, refs := range transcripts {
 		if refs.journal.Path == "" || refs.input.Path == "" || refs.detail.Path == "" {
 			return nil, fmt.Errorf("incomplete retained transcript %s", runID)
@@ -218,22 +292,25 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				*item.files = append(*item.files, file)
 			}
 		}
+		calls, err := decodeRetainedCalls(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("retained transcript %s calls: %w", runID, err)
+		}
+		bundle.CallIDs = make([]string, len(calls))
+		bundle.EnvelopeDigests = make([]string, len(calls))
+		for index, call := range calls {
+			bundle.CallIDs[index] = call.callID
+			bundle.EnvelopeDigests[index] = call.envelopeDigest
+		}
 		if err := VerifyTranscript(bundle); err != nil {
 			return nil, fmt.Errorf("retained transcript %s: %w", runID, err)
 		}
+		transcriptBundles[runID] = bundle
+		transcriptCalls[runID] = calls
 		journalDigests[runID], _ = bundle.JournalRoot.Digest()
 		inputDigests[runID], _ = bundle.InputRoot.Digest()
 		detailDigests[runID], _ = bundle.DetailRoot.Digest()
 		chargedRoots[runID], _ = ChargedOutputsRoot(bundle)
-		for shardOrdinal, file := range bundle.DetailFiles {
-			shard := bundle.DetailRoot.Shards[shardOrdinal]
-			for local := 0; local < shard.RecordCount; local++ {
-				row := file.Data[len(DetailHeader)+local*DetailRowBytes:][:DetailRowBytes]
-				for output := 0; output < int(row[75]); output++ {
-					chargedOutputs[runID] = append(chargedOutputs[runID], hex.EncodeToString(row[128+output*32:160+output*32]))
-				}
-			}
-		}
 	}
 
 	tableDigests := map[string][]string{}
@@ -260,6 +337,7 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 				leafDigest := hex.EncodeToString(leaf[:])
 				bundle.LeafDigests = append(bundle.LeafDigests, leafDigest)
 				retainedLeaves[leafDigest] = true
+				retainedTableLeaves[leafDigest] = append(retainedTableLeaves[leafDigest], retainedTableLeaf{kind: manifest.Kind, curriculum: manifest.Curriculum, scope: manifest.Scope, manifest: ref.Digest, ordinal: ordinal, record: bytes.Clone(file.Data[start : start+manifest.RecordSize])})
 			}
 		}
 		if err := VerifyTableBundle(bundle); err != nil {
@@ -353,6 +431,15 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		return nil, fmt.Errorf("duplicate run-evidence pack")
 	}
 	reachable[runPackPath] = true
+	expectedRuns := map[string]retainedRunAuthority{}
+	for _, curriculum := range curriculumAuthorities {
+		for runID, authority := range curriculum.runs {
+			if _, duplicate := expectedRuns[runID]; duplicate {
+				return nil, fmt.Errorf("duplicate expected run identity")
+			}
+			expectedRuns[runID] = authority
+		}
+	}
 	for _, record := range runPack.Records {
 		if journalDigests[record.RunID] != record.JournalRoot || inputDigests[record.RunID] != record.InputRoot || detailDigests[record.RunID] != record.DetailRoot || chargedRoots[record.RunID] != record.ChargedRoot || structuralRoots[record.RunID] != record.StructuralRoot {
 			return nil, fmt.Errorf("run-evidence row does not close retained run %s", record.RunID)
@@ -360,16 +447,39 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 		if !structuralObjects[record.RunID][fmt.Sprintf("46:%s", record.OperationRoot)] {
 			return nil, fmt.Errorf("run-evidence operation root is not structurally retained: %s", record.RunID)
 		}
+		authority, ok := expectedRuns[record.RunID]
+		operationObject, operationOK := retainedObjects[authority.operationRoot]
+		if !ok || !operationOK || operationObject.kind != 46 || record.OperationRoot != authority.operationRoot {
+			return nil, fmt.Errorf("run-evidence identity or operation root is not expected: %s", record.RunID)
+		}
+		operation := OperationRoot{Canonical: operationObject.canonical, Digest: authority.operationRoot}
+		decoded, decodeErr := decodeOperationRoot(mustObjectRow(operationObject.canonical))
+		if decodeErr != nil || decoded.Phase != authority.phase || VerifyOperationRange(operation, transcriptBundles[record.RunID]) != nil {
+			return nil, fmt.Errorf("run-evidence operation range does not replay: %s", record.RunID)
+		}
+		wantWorkTerminal := authority.workTerminal
+		if wantWorkTerminal == zeroObjectDigest {
+			wantWorkTerminal = ""
+		}
+		if record.WorkTerminal != wantWorkTerminal {
+			return nil, fmt.Errorf("run-evidence work terminal differs from score row: %s", record.RunID)
+		}
+		delete(expectedRuns, record.RunID)
 		if record.WorkTerminal != "" && !retainedLeaves[record.WorkTerminal] {
 			return nil, fmt.Errorf("run-evidence work terminal is not retained: %s", record.RunID)
 		}
-		for _, output := range chargedOutputs[record.RunID] {
-			if !retainedLeaves[output] {
-				return nil, fmt.Errorf("charged output lacks retained typed leaf: %s/%s", record.RunID, output)
+		for _, call := range transcriptCalls[record.RunID] {
+			for _, output := range call.outputs {
+				if !retainedLeaves[output] {
+					return nil, fmt.Errorf("charged output lacks retained typed leaf: %s/%s", record.RunID, output)
+				}
 			}
 		}
+		if err := verifyRetainedRunReplay(record, authority, transcriptCalls[record.RunID], retainedByCurriculum[authority.curriculum], retainedTableLeaves, structuralObjects[record.RunID]); err != nil {
+			return nil, fmt.Errorf("retained run %s replay: %w", record.RunID, err)
+		}
 	}
-	if len(runPack.Records) != len(transcripts) || len(runPack.Records) != len(structuralRoots) {
+	if len(expectedRuns) != 0 || len(runPack.Records) != len(transcripts) || len(runPack.Records) != len(structuralRoots) {
 		return nil, fmt.Errorf("retained run-evidence coverage mismatch")
 	}
 	paths := make([]string, 0, len(reachable))
@@ -378,6 +488,262 @@ func VerifyRetainedPacks(value RetainedPackRefs, read func(string) ([]byte, erro
 	}
 	slices.Sort(paths)
 	return paths, nil
+}
+
+func verifyCurriculumAuthorityObjects(panel, authority string, curriculum int, objects map[string]retainedObjectValue, result *retainedCurriculumAuthority) error {
+	if len(objects) == 0 || result == nil {
+		return fmt.Errorf("empty curriculum object set")
+	}
+	fixtures := map[string]decodedFixture{}
+	ledgers := map[string]decodedAttemptLedger{}
+	truth := map[string][]struct {
+		digest string
+		value  decodedTruthShard
+	}{}
+	worldRows := map[string]decodedWorldPolicyRow{}
+	curriculumRows := map[string]decodedCurriculumPolicyRow{}
+	operationRoots := map[string]decodedOperationRoot{}
+	workTerminals := map[string]decodedWorkTerminal{}
+	reservations := map[string]struct{}{}
+	worldObjects := map[string]bool{}
+	for digest, object := range objects {
+		var row []json.RawMessage
+		if json.Unmarshal(object.canonical, &row) != nil {
+			return fmt.Errorf("object %s no longer decodes", digest)
+		}
+		switch object.kind {
+		case 4:
+			worldObjects[digest] = true
+		case 27:
+			if _, err := decodeReservation(object.canonical); err != nil {
+				return err
+			}
+			reservations[digest] = struct{}{}
+		case 29:
+			value, err := decodeTruthShard(row)
+			if err != nil || !object.classes["authority"] {
+				return fmt.Errorf("truth shard outside authority scope")
+			}
+			truth[value.World] = append(truth[value.World], struct {
+				digest string
+				value  decodedTruthShard
+			}{digest, value})
+		case 32:
+			value, err := decodeWorldPolicyRow(row)
+			if err != nil || !object.classes["authority"] || value.Panel != panel || value.Curriculum != curriculum {
+				return fmt.Errorf("world-policy row outside curriculum authority")
+			}
+			worldRows[digest] = value
+		case 33:
+			value, err := decodeCurriculumPolicyRow(row)
+			if err != nil || !object.classes["authority"] || value.Panel != panel || value.Curriculum != curriculum {
+				return fmt.Errorf("curriculum-policy row outside curriculum authority")
+			}
+			curriculumRows[digest] = value
+		case 36:
+			value, err := decodeAttemptLedger(row)
+			if err != nil || !object.classes["authority"] || value.Panel != panel || value.Curriculum != curriculum {
+				return fmt.Errorf("attempt ledger outside curriculum authority")
+			}
+			ledgers[digest] = value
+		case 46:
+			value, err := decodeOperationRoot(row)
+			if err != nil {
+				return err
+			}
+			operationRoots[digest] = value
+		case 47:
+			value, err := decodeFixture(row)
+			if err != nil || !object.classes["authority"] || value.Panel != panel || value.Curriculum != curriculum {
+				return fmt.Errorf("fixture outside curriculum authority")
+			}
+			fixtures[digest] = value
+		case 49:
+			value, err := decodeWorkTerminal(row)
+			if err != nil {
+				return err
+			}
+			workTerminals[digest] = value
+		}
+	}
+	if len(fixtures) != 1 || len(worldRows) != 42 || len(curriculumRows) != 7 {
+		return fmt.Errorf("authority cardinality fixtures=%d worlds=%d curricula=%d", len(fixtures), len(worldRows), len(curriculumRows))
+	}
+	var fixture decodedFixture
+	for _, value := range fixtures {
+		fixture = value
+	}
+	if fixture.Family != curriculum%8 {
+		return fmt.Errorf("fixture family changed")
+	}
+	if len(ledgers) != fixture.Accepted+1 || len(fixture.AttemptLedgers) != len(ledgers) {
+		return fmt.Errorf("fixture ledger count does not close")
+	}
+	for attempt, digest := range fixture.AttemptLedgers {
+		ledger, ok := ledgers[digest]
+		if !ok || ledger.Attempt != attempt || ledger.Authority == "" || attempt < fixture.Accepted && ledger.Terminal != "rejected" || attempt == fixture.Accepted && ledger.Terminal != "accepted" {
+			return fmt.Errorf("fixture ledger %d does not close", attempt)
+		}
+	}
+	for ordinal, digest := range fixture.Worlds {
+		if !worldObjects[digest] {
+			return fmt.Errorf("fixture world %d lacks retained semantic core", ordinal)
+		}
+		shards := truth[digest]
+		if len(shards) == 0 {
+			return fmt.Errorf("fixture world %d lacks scorer truth", ordinal)
+		}
+		slices.SortFunc(shards, func(a, b struct {
+			digest string
+			value  decodedTruthShard
+		}) int {
+			return a.value.Ordinal - b.value.Ordinal
+		})
+		for index, shard := range shards {
+			if shard.value.Ordinal != index || shard.value.Count != len(shards) || !slices.Equal(shard.value.Terminals, shards[0].value.Terminals) {
+				return fmt.Errorf("truth shards for world %d do not partition", ordinal)
+			}
+			if index > 0 && compareTruthPair(shards[index-1].value.Pairs[len(shards[index-1].value.Pairs)-1], shard.value.Pairs[0]) >= 0 {
+				return fmt.Errorf("truth rows for world %d overlap", ordinal)
+			}
+		}
+		delete(truth, digest)
+	}
+	if len(truth) != 0 {
+		return fmt.Errorf("unreachable scorer truth world")
+	}
+	type worldKey struct {
+		policy  string
+		ordinal int
+	}
+	worldGrid := map[worldKey]string{}
+	for digest, row := range worldRows {
+		if row.Family != fixture.Family || row.World != fixture.Worlds[row.WorldOrdinal] {
+			return fmt.Errorf("world-policy row changed fixture identity")
+		}
+		key := worldKey{row.Policy, row.WorldOrdinal}
+		if worldGrid[key] != "" {
+			return fmt.Errorf("duplicate world-policy grid cell")
+		}
+		worldGrid[key] = digest
+		root, ok := operationRoots[row.OperationRoot]
+		if !ok || root.Variant != "range" || root.Phase != 2 {
+			return fmt.Errorf("world-policy operation root does not resolve")
+		}
+		if row.Terminal == "budget-exhausted" {
+			terminal, ok := workTerminals[row.WorkTerminal]
+			if !ok || terminal.RunID != root.RunID {
+				return fmt.Errorf("world-policy work terminal does not resolve")
+			}
+			if _, ok := reservations[terminal.Rejected]; !ok {
+				return fmt.Errorf("work terminal rejected reservation is absent")
+			}
+		}
+	}
+	for _, policy := range []string{"complete", "lexical-order", "static-rw-sleep", "dynamic-diamond-sleep", "nous-guarded-sleep", "no-guard-sleep", "learned-no-use"} {
+		for ordinal := 0; ordinal < 6; ordinal++ {
+			if worldGrid[worldKey{policy, ordinal}] == "" {
+				return fmt.Errorf("missing world-policy grid cell %s/%d", policy, ordinal)
+			}
+		}
+	}
+	curriculumPolicies := map[string]bool{}
+	expectedRuns := map[string]retainedRunAuthority{}
+	acquisitionRoots := map[string]string{}
+	addExpected := func(runID string, value retainedRunAuthority) error {
+		if prior, ok := expectedRuns[runID]; ok && prior != value {
+			return fmt.Errorf("run authority changed across policy rows")
+		}
+		expectedRuns[runID] = value
+		return nil
+	}
+	for _, row := range curriculumRows {
+		if row.Family != fixture.Family || curriculumPolicies[row.Policy] {
+			return fmt.Errorf("duplicate or cross-family curriculum policy")
+		}
+		curriculumPolicies[row.Policy] = true
+		for ordinal, digest := range row.WorldRows {
+			if digest != worldGrid[worldKey{row.Policy, ordinal}] {
+				return fmt.Errorf("curriculum policy world row %d does not close", ordinal)
+			}
+		}
+		root, ok := operationRoots[row.OperationRoot]
+		if !ok || root.Variant != "concat" {
+			return fmt.Errorf("curriculum operation concat does not resolve")
+		}
+		worldChildren := make([]string, 6)
+		initialWork := row.AcquisitionWork
+		for ordinal := 0; ordinal < 6; ordinal++ {
+			worldRow := worldRows[worldGrid[worldKey{row.Policy, ordinal}]]
+			worldChildren[ordinal] = worldRow.OperationRoot
+			runID, err := actionrelationledger.UtilityRunID(panel, authority, curriculum, row.Policy, ordinal, fixture.Worlds[ordinal])
+			operation := operationRoots[worldRow.OperationRoot]
+			if err != nil || operation.Variant != "range" || operation.Phase != 2 || operation.RunID != runID {
+				return fmt.Errorf("utility run identity does not reconstruct: %s/%d", row.Policy, ordinal)
+			}
+			authority := retainedRunAuthority{
+				curriculum: curriculum, operationRoot: worldRow.OperationRoot, phase: 2,
+				workTerminal: worldRow.WorkTerminal, work: worldRow.Work, initialWork: initialWork,
+				terminal: worldRow.Terminal, world: worldRow.World, policy: worldRow.Policy,
+				terminalSet: worldRow.TerminalSet, historyCount: worldRow.HistoryCount,
+			}
+			if err := addExpected(runID, authority); err != nil {
+				return fmt.Errorf("utility run authority %s/%d: %w", row.Policy, ordinal, err)
+			}
+			for index := range initialWork {
+				initialWork[index] += worldRow.Work[index]
+			}
+		}
+		wantChildren := slices.Clone(worldChildren)
+		acquisitionScope := ""
+		switch row.Policy {
+		case "nous-guarded-sleep", "learned-no-use":
+			acquisitionScope = "nous"
+		case "no-guard-sleep":
+			acquisitionScope = "no-guard"
+		}
+		if acquisitionScope != "" {
+			if len(root.Children) != 7 {
+				return fmt.Errorf("curriculum operation concat lacks acquisition child")
+			}
+			acquisitionRoot := root.Children[0]
+			operation, ok := operationRoots[acquisitionRoot]
+			runID, err := actionrelationledger.AcquisitionRunID(panel, authority, curriculum, acquisitionScope)
+			if !ok || err != nil || operation.Variant != "range" || operation.Phase != 1 || operation.RunID != runID || acquisitionRoots[acquisitionScope] != "" && acquisitionRoots[acquisitionScope] != acquisitionRoot {
+				return fmt.Errorf("acquisition run identity does not reconstruct: %s", acquisitionScope)
+			}
+			acquisitionRoots[acquisitionScope] = acquisitionRoot
+			if err := addExpected(runID, retainedRunAuthority{
+				curriculum: curriculum, operationRoot: acquisitionRoot, phase: 1,
+				workTerminal: row.AcquisitionTerminal, work: row.AcquisitionWork,
+				terminal: row.Acquisition, policy: acquisitionScope,
+			}); err != nil {
+				return fmt.Errorf("acquisition run authority %s: %w", acquisitionScope, err)
+			}
+			wantChildren = append([]string{acquisitionRoot}, wantChildren...)
+		} else if row.Acquisition != "not-applicable" || len(root.Children) != 6 {
+			return fmt.Errorf("baseline curriculum row carries acquisition authority")
+		}
+		if !slices.Equal(root.Children, wantChildren) {
+			return fmt.Errorf("curriculum operation concat children do not reconstruct")
+		}
+		for _, child := range root.Children {
+			if _, ok := operationRoots[child]; !ok {
+				return fmt.Errorf("curriculum operation child is absent")
+			}
+		}
+	}
+	if len(expectedRuns) != 44 || len(acquisitionRoots) != 2 {
+		return fmt.Errorf("expected run authority count=%d acquisitions=%d", len(expectedRuns), len(acquisitionRoots))
+	}
+	result.runs = expectedRuns
+	return nil
+}
+
+func mustObjectRow(data []byte) []json.RawMessage {
+	var row []json.RawMessage
+	_ = json.Unmarshal(data, &row)
+	return row
 }
 
 func ParseObjectPackRoot(data []byte) (ObjectPackRoot, error) {

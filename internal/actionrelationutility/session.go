@@ -25,8 +25,9 @@ type Session struct {
 }
 
 type WorkTerminal struct {
-	Canonical []byte
-	Digest    string
+	Canonical           []byte
+	Digest              string
+	RejectedReservation actionrelationledger.Reservation
 }
 
 func BeginSession(store *unit.Store, runID, token string, initialTotal, cap int) (*Session, error) {
@@ -163,7 +164,7 @@ func (s *Session) TerminateBudget(rejected actionrelationledger.Reservation) (Wo
 	total := sumWorkVector(vector)
 	wire, _ := json.Marshal([]any{"action-work-terminal/v1", s.RunID, 2, rejected.Digest, "budget-exhausted", vector, total, 0})
 	digestBytes := sha256.Sum256(wire)
-	terminal := WorkTerminal{Canonical: wire, Digest: hex.EncodeToString(digestBytes[:])}
+	terminal := WorkTerminal{Canonical: wire, Digest: hex.EncodeToString(digestBytes[:]), RejectedReservation: rejected}
 	if err := dsl.ChargeActionRelationMeter(s.MeterToken, 19, 12, "budget-terminal", [][]byte{[]byte(rejected.Digest)}, [][]byte{wire}); err != nil {
 		return WorkTerminal{}, err
 	}

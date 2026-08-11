@@ -216,9 +216,10 @@ func (t *acquisitionCallTranslator) translate(meter dsl.ActionRelationMeterRecor
 		if barrier == nil {
 			return call, fmt.Errorf("missing freeze barrier")
 		}
-		winners := make([]string, len(barrier.GetStrings("winnerResults")))
-		for index, name := range barrier.GetStrings("winnerResults") {
-			winners[index] = t.run.Store.Get(name).GetString("objectDigest")
+		barrierRow, err := row([]byte(barrier.GetString("canonicalObject")))
+		var winners []string
+		if err != nil || len(barrierRow) != 6 || json.Unmarshal(barrierRow[4], &winners) != nil {
+			return call, fmt.Errorf("invalid freeze barrier winners")
 		}
 		call.Payload = []any{"artifact-freeze", barrier.GetString("objectDigest"), winners, experiment.GetString("semanticTrainingRoot")}
 		call.OutputDigests = []string{digest(meter.Outputs[0])}

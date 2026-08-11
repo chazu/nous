@@ -27,9 +27,15 @@ func TestBuildAuthorityClosesSourceToolAndNonInputRows(t *testing.T) {
 		BuildHead: strings.Repeat("c", 40), SourceRoot: sourceRoot, SourceRows: []SourceRow{row},
 		GitVersion: "git version 2.52.0", GoVersion: "go version go1.25.12 darwin/arm64",
 		GoExecutablePath: "/opt/go/bin/go", GoExecutableDigest: shaHex([]byte("go")), MiseTomlDigest: shaHex([]byte("mise")),
-		BuildArgv:        []string{"/opt/go/bin/go", "build", "-trimpath", "-o", PanelBinaryPath, "./cmd/nous"},
-		BuildEnvironment: []EnvironmentRow{{Key: "CGO_ENABLED", Value: "0"}, {Key: "GOFLAGS", Value: ""}, {Key: "GOWORK", Value: "off"}},
-		GOOS:             "darwin", GOARCH: "arm64", CGOEnabled: "0", BinaryPath: PanelBinaryPath,
+		BuildArgv: []string{"/opt/go/bin/go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", PanelBinaryPath, "./cmd/nous"},
+		BuildEnvironment: []EnvironmentRow{
+			{Key: "CGO_ENABLED", Value: "0"}, {Key: "GOARCH", Value: "arm64"}, {Key: "GOCACHE", Value: "/tmp/cache"},
+			{Key: "GOENV", Value: "off"}, {Key: "GOFLAGS", Value: ""}, {Key: "GOMODCACHE", Value: "/tmp/mod"},
+			{Key: "GOOS", Value: "darwin"}, {Key: "GOPATH", Value: "/tmp/gopath"}, {Key: "GOPROXY", Value: "off"},
+			{Key: "GOSUMDB", Value: "off"}, {Key: "GOTOOLCHAIN", Value: "local"}, {Key: "GOWORK", Value: "off"},
+			{Key: "HOME", Value: "/tmp/home"}, {Key: "LC_ALL", Value: "C"}, {Key: "TMPDIR", Value: "/tmp/build"}, {Key: "TZ", Value: "UTC"},
+		},
+		GOOS: "darwin", GOARCH: "arm64", CGOEnabled: "0", BinaryPath: PanelBinaryPath,
 		BinaryDigest: shaHex([]byte("binary")), GoVersionMDigest: shaHex([]byte("version-m")),
 		NonInputRows: []NonInputRow{{Path: ".git/hooks", Status: "present-not-read"}, {Path: "go.work", Status: "present-not-read"}, {Path: "go.work.sum", Status: "present-not-read"}},
 	})

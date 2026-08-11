@@ -26,7 +26,7 @@ func TestObservationAssemblerFoldsExplicitCommutingDiamond(t *testing.T) {
 	vm.stack = []Value{
 		StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal(string(bJSON)),
 		StringVal(aInitial), StringVal(bInitial), StringVal(bAfterA), StringVal(aAfterB), StringVal(equality),
-		StringVal("commutes"), StringVal("AR.Observation.Commutes"),
+		StringVal("AR.Observation.Commutes"),
 	}
 	if err := bARObservationAssemble(vm); err != nil {
 		t.Fatal(err)
@@ -35,14 +35,6 @@ func TestObservationAssemblerFoldsExplicitCommutingDiamond(t *testing.T) {
 	observation := store.Get(name)
 	if observation == nil || observation.GetString("label") != "commutes" || observation.GetString("objectDigest") == "" {
 		t.Fatalf("observation=%#v", observation)
-	}
-	vm.stack = []Value{
-		StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal(string(bJSON)),
-		StringVal(aInitial), StringVal(bInitial), StringVal(bAfterA), StringVal(aAfterB), StringVal(equality),
-		StringVal("conflicts"), StringVal("AR.Observation.Forged"),
-	}
-	if err := bARObservationAssemble(vm); err != nil || !vm.pop().IsNil() || store.Has("AR.Observation.Forged") {
-		t.Fatal("assembler accepted a forged label")
 	}
 }
 
@@ -61,7 +53,7 @@ func TestObservationAssemblerRequiresOnlyLegalEnablingCrossStep(t *testing.T) {
 	vm.stack = []Value{
 		StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal(string(bJSON)),
 		StringVal(aInitial), StringVal(bInitial), StringVal(""), StringVal(aAfterB), StringVal(""),
-		StringVal("b-enables-a"), StringVal("AR.Observation.Enables"),
+		StringVal("AR.Observation.Enables"),
 	}
 	if err := bARObservationAssemble(vm); err != nil {
 		t.Fatal(err)
@@ -85,7 +77,7 @@ func TestGuardRowsNameFactsAndFoldInLiteralOrder(t *testing.T) {
 	bAfterA, ab := recordARTransition(t, vm, afterA, bJSON, "Guard.B.AfterA")
 	aAfterB, ba := recordARTransition(t, vm, afterB, aJSON, "Guard.A.AfterB")
 	equality := recordAREquality(t, vm, ab, ba, "Guard.Equality")
-	vm.stack = []Value{StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal(string(bJSON)), StringVal(aInitial), StringVal(bInitial), StringVal(bAfterA), StringVal(aAfterB), StringVal(equality), StringVal("commutes"), StringVal("Guard.Observation")}
+	vm.stack = []Value{StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal(string(bJSON)), StringVal(aInitial), StringVal(bInitial), StringVal(bAfterA), StringVal(aAfterB), StringVal(equality), StringVal("Guard.Observation")}
 	_ = bARObservationAssemble(vm)
 	observationName := vm.pop().AsString()
 	vm.stack = []Value{StringVal(string(stateJSON)), StringVal(string(aJSON)), StringVal("Guard.Facts.A")}

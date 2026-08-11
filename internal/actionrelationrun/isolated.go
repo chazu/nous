@@ -18,7 +18,6 @@ import (
 
 	"github.com/chazu/nous/internal/actionrelationcompetence"
 	"github.com/chazu/nous/internal/actionrelationexp"
-	"github.com/chazu/nous/internal/actionrelationfixture"
 	"github.com/chazu/nous/internal/actionrelationscore"
 	"golang.org/x/sys/unix"
 )
@@ -27,6 +26,7 @@ const isolatedStage = "isolated-policy-worker"
 
 type isolatedPanelResult struct {
 	summary actionrelationscore.PanelSummary
+	policy  actionrelationscore.PolicyPanelSummary
 	writer  *panelWriter
 	gates   actionrelationscore.MechanicalGates
 }
@@ -39,15 +39,11 @@ func executeIsolatedPair(ctx context.Context, prerequisites panelPrerequisites, 
 	if err := checkDirectoryNoFollow(scratchParent); err != nil {
 		return isolatedPanelResult{}, fmt.Errorf("unsafe panel scratch namespace: %w", err)
 	}
-	fixtureRoot, err := os.MkdirTemp(scratchParent, ".actionrelation-fixture-")
+	inputRoot, binary, fixturePath, err := prepareIsolatedInputs(prerequisites, sealed)
 	if err != nil {
 		return isolatedPanelResult{}, err
 	}
-	defer os.RemoveAll(fixtureRoot)
-	fixturePath := filepath.Join(fixtureRoot, "sealed-panel.json")
-	if err := writeExclusiveSyncedMode(fixturePath, sealed.Canonical(), 0o444); err != nil {
-		return isolatedPanelResult{}, err
-	}
+	defer removeIsolatedInputs(inputRoot)
 	primaryRoot, err := os.MkdirTemp(scratchParent, ".actionrelation-primary-")
 	if err != nil {
 		return isolatedPanelResult{}, err
@@ -58,19 +54,30 @@ func executeIsolatedPair(ctx context.Context, prerequisites panelPrerequisites, 
 		return isolatedPanelResult{}, err
 	}
 	defer os.RemoveAll(auditRoot)
-	evidenceRoot, _ := actionrelationexp.EvidenceRoot(sealed.Panel())
-	canonicalOutput := filepath.Join(prerequisites.Root, filepath.FromSlash(evidenceRoot))
-	primary, err := runIsolatedWorker(ctx, prerequisites, sealed, "primary", fixturePath, primaryRoot, capBytes, []string{canonicalOutput})
+	primary, err := runIsolatedWorker(ctx, prerequisites, sealed, binary, inputRoot, "primary", fixturePath, primaryRoot, capBytes)
 	if err != nil {
 		return isolatedPanelResult{}, err
 	}
-	audit, err := runIsolatedWorker(ctx, prerequisites, sealed, "audit", fixturePath, auditRoot, capBytes, []string{canonicalOutput, primaryRoot})
+	audit, err := runIsolatedWorker(ctx, prerequisites, sealed, binary, inputRoot, "audit", fixturePath, auditRoot, capBytes)
 	if err != nil {
 		return isolatedPanelResult{}, err
 	}
-	if !reflectPanelSummaries(primary.summary, audit.summary) {
-		return isolatedPanelResult{}, fmt.Errorf("primary and audit isolated panel summaries differ")
+	if !reflectPolicyPanelSummaries(primary.policy, audit.policy) {
+		return isolatedPanelResult{}, fmt.Errorf("primary and audit isolated policy summaries differ")
 	}
+	if err := comparePanelFiles(primary.writer, audit.writer); err != nil {
+		return isolatedPanelResult{}, err
+	}
+	final, err := actionrelationscore.FinalizePolicyPanel(sealed, primary.policy, func(files []actionrelationexp.EvidenceFile) error {
+		if err := primary.writer.writeAll(files); err != nil {
+			return err
+		}
+		return audit.writer.writeAll(files)
+	})
+	if err != nil {
+		return isolatedPanelResult{}, err
+	}
+	primary.summary = final
 	if err := comparePanelFiles(primary.writer, audit.writer); err != nil {
 		return isolatedPanelResult{}, err
 	}
@@ -84,6 +91,69 @@ func executeIsolatedPair(ctx context.Context, prerequisites panelPrerequisites, 
 		return isolatedPanelResult{}, err
 	}
 	return primary, nil
+}
+
+func prepareIsolatedInputs(prerequisites panelPrerequisites, sealed actionrelationscore.SealedPanel) (string, string, string, error) {
+	root, err := os.MkdirTemp(filepath.Join(prerequisites.Root, ".nous"), ".actionrelation-inputs-")
+	if err != nil {
+		return "", "", "", err
+	}
+	fail := func(err error) (string, string, string, error) {
+		removeIsolatedInputs(root)
+		return "", "", "", err
+	}
+	binarySource := filepath.Join(prerequisites.Root, filepath.FromSlash(actionrelationexp.PanelBinaryPath))
+	binaryBytes, err := readRegularNoFollow(binarySource, 0o755)
+	if err != nil || digestBytes(binaryBytes) != prerequisites.Build.BinaryDigest {
+		return fail(fmt.Errorf("reviewed executable is not an exact no-follow regular file"))
+	}
+	binary := filepath.Join(root, filepath.FromSlash(actionrelationexp.PanelBinaryPath))
+	if err := writeExclusiveSyncedMode(binary, binaryBytes, 0o555); err != nil {
+		return fail(err)
+	}
+	domainCount := 0
+	for _, row := range prerequisites.Build.SourceRows {
+		if row.Role != "domain" || !strings.HasPrefix(row.Path, "domains/actionrelations/") {
+			continue
+		}
+		if row.GitMode != "100644" {
+			return fail(fmt.Errorf("reviewed actionrelations domain has noncanonical mode"))
+		}
+		data, readErr := readRegularNoFollow(filepath.Join(prerequisites.Root, filepath.FromSlash(row.Path)), 0o644)
+		if readErr != nil || int64(len(data)) != row.ByteLength || digestBytes(data) != row.Digest {
+			return fail(fmt.Errorf("reviewed domain input changed: %s", row.Path))
+		}
+		if writeErr := writeExclusiveSyncedMode(filepath.Join(root, filepath.FromSlash(row.Path)), data, 0o444); writeErr != nil {
+			return fail(writeErr)
+		}
+		domainCount++
+	}
+	if domainCount != 3 {
+		return fail(fmt.Errorf("reviewed actionrelations domain snapshot is incomplete"))
+	}
+	fixturePath := filepath.Join(root, "public-panel.json")
+	if err := writeExclusiveSyncedMode(fixturePath, sealed.Public().Canonical(), 0o444); err != nil {
+		return fail(err)
+	}
+	for _, directory := range []string{filepath.Dir(binary), filepath.Join(root, "domains", "actionrelations"), filepath.Join(root, "domains"), filepath.Join(root, ".nous"), root} {
+		if err := os.Chmod(directory, 0o555); err != nil {
+			return fail(err)
+		}
+	}
+	return root, binary, fixturePath, nil
+}
+
+func removeIsolatedInputs(root string) {
+	if root == "" {
+		return
+	}
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && entry.IsDir() {
+			_ = os.Chmod(path, 0o700)
+		}
+		return nil
+	})
+	_ = os.RemoveAll(root)
 }
 
 func deriveIsolatedGates(prerequisites panelPrerequisites, result isolatedPanelResult) (actionrelationscore.MechanicalGates, error) {
@@ -137,13 +207,13 @@ func digestBytes(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func runIsolatedWorker(ctx context.Context, prerequisites panelPrerequisites, sealed actionrelationscore.SealedPanel, role, fixturePath, outputRoot string, capBytes int64, deniedReadRoots []string) (isolatedPanelResult, error) {
-	binary := filepath.Join(prerequisites.Root, filepath.FromSlash(actionrelationexp.PanelBinaryPath))
-	argv := isolatedWorkerArgv(binary, prerequisites.Root, sealed.Panel(), role, fixturePath, sealed.Digest(), outputRoot, capBytes)
-	profile := isolatedSandboxProfile(binary, outputRoot, deniedReadRoots)
+func runIsolatedWorker(ctx context.Context, prerequisites panelPrerequisites, sealed actionrelationscore.SealedPanel, binary, inputRoot, role, fixturePath, outputRoot string, capBytes int64) (isolatedPanelResult, error) {
+	argv := isolatedWorkerArgv(binary, inputRoot, sealed.Panel(), role, fixturePath, sealed.Public().Digest(), outputRoot, capBytes)
+	profile := isolatedSandboxProfile(binary, inputRoot, outputRoot)
 	command := exec.CommandContext(ctx, "/usr/bin/sandbox-exec", append([]string{"-p", profile}, argv...)...)
-	command.Dir = prerequisites.Root
+	command.Dir = inputRoot
 	command.Env = environmentStrings(competenceEnvironment)
+	command.ExtraFiles = nil
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.Output()
@@ -151,8 +221,8 @@ func runIsolatedWorker(ctx context.Context, prerequisites panelPrerequisites, se
 		return isolatedPanelResult{}, fmt.Errorf("%s isolated worker failed: %w: %s", role, err, strings.TrimSpace(stderr.String()))
 	}
 	canonical := bytes.TrimSuffix(stdout, []byte{'\n'})
-	summary, err := actionrelationscore.ParsePanelSummary(bytes.NewReader(canonical), int64(len(canonical)))
-	if err != nil || summary.Panel != sealed.Panel() || summary.Authority != sealed.Authority() || summary.Fixture.Digest != sealed.Fixture().Digest {
+	summary, err := actionrelationscore.ParsePolicyPanelSummary(bytes.NewReader(canonical), int64(len(canonical)))
+	if err != nil || actionrelationscore.VerifyPolicyPanelSummaryForPublic(summary, sealed.Public()) != nil {
 		return isolatedPanelResult{}, fmt.Errorf("%s isolated worker returned invalid summary", role)
 	}
 	evidenceRoot, _ := actionrelationexp.EvidenceRoot(sealed.Panel())
@@ -160,10 +230,10 @@ func runIsolatedWorker(ctx context.Context, prerequisites panelPrerequisites, se
 	if err != nil {
 		return isolatedPanelResult{}, fmt.Errorf("%s isolated evidence: %w", role, err)
 	}
-	return isolatedPanelResult{summary: summary, writer: writer}, nil
+	return isolatedPanelResult{policy: summary, writer: writer}, nil
 }
 
-func ExecuteIsolatedPolicyWorker(repoRoot, panel, role, fixturePath, fixtureDigest, outputRoot string, capBytes int64, argv []string) ([]byte, error) {
+func ExecuteIsolatedPolicyWorker(repoRoot, panel, role, publicPath, publicDigest, outputRoot string, capBytes int64, argv []string) ([]byte, error) {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return nil, err
@@ -172,7 +242,7 @@ func ExecuteIsolatedPolicyWorker(repoRoot, panel, role, fixturePath, fixtureDige
 	if err != nil {
 		return nil, err
 	}
-	fixturePath, err = filepath.EvalSymlinks(fixturePath)
+	publicPath, err = filepath.EvalSymlinks(publicPath)
 	if err != nil {
 		return nil, err
 	}
@@ -181,18 +251,17 @@ func ExecuteIsolatedPolicyWorker(repoRoot, panel, role, fixturePath, fixtureDige
 		return nil, err
 	}
 	binary := filepath.Join(root, filepath.FromSlash(actionrelationexp.PanelBinaryPath))
-	want := isolatedWorkerArgv(binary, root, panel, role, fixturePath, fixtureDigest, outputRoot, capBytes)
+	want := isolatedWorkerArgv(binary, root, panel, role, publicPath, publicDigest, outputRoot, capBytes)
 	wantCap := map[string]int64{"development": developmentEvidenceCap, "validation": validationEvidenceCap, "locked": lockedEvidenceCap}[panel]
-	wantFixtureParent := filepath.Join(root, ".nous", ".actionrelation-fixture-")
-	wantOutputParent := filepath.Join(root, ".nous", ".actionrelation-"+role+"-")
+	wantOutputPrefix := ".actionrelation-" + role + "-"
 	executable, executableErr := os.Executable()
 	executable, evalExecutableErr := filepath.EvalSymlinks(executable)
-	if !slices.Equal(argv, want) || !exactProcessEnvironment(competenceEnvironment) || role != "primary" && role != "audit" || capBytes != wantCap || !strings.HasPrefix(fixturePath, wantFixtureParent) || filepath.Base(fixturePath) != "sealed-panel.json" || !strings.HasPrefix(outputRoot, wantOutputParent) || executableErr != nil || evalExecutableErr != nil || executable != binary {
+	if !slices.Equal(argv, want) || !exactProcessEnvironment(competenceEnvironment) || role != "primary" && role != "audit" || capBytes != wantCap || publicPath != filepath.Join(root, "public-panel.json") || !strings.HasPrefix(filepath.Base(outputRoot), wantOutputPrefix) || executableErr != nil || evalExecutableErr != nil || executable != binary {
 		return nil, fmt.Errorf("noncanonical isolated policy-worker invocation")
 	}
-	fixtureInfo, err := os.Lstat(fixturePath)
-	if err != nil || !fixtureInfo.Mode().IsRegular() || fixtureInfo.Mode().Perm() != 0o444 || fixtureInfo.Size() < 1 {
-		return nil, fmt.Errorf("invalid read-only sealed fixture input")
+	publicInfo, err := os.Lstat(publicPath)
+	if err != nil || !publicInfo.Mode().IsRegular() || publicInfo.Mode().Perm() != 0o444 || publicInfo.Size() < 1 {
+		return nil, fmt.Errorf("invalid read-only public policy input")
 	}
 	outputInfo, err := os.Lstat(outputRoot)
 	if err != nil || !outputInfo.IsDir() || outputInfo.Mode().Perm() != 0o700 {
@@ -202,25 +271,21 @@ func ExecuteIsolatedPolicyWorker(repoRoot, panel, role, fixturePath, fixtureDige
 	if err != nil || len(entries) != 0 {
 		return nil, fmt.Errorf("isolated output namespace is not empty")
 	}
-	file, err := os.Open(fixturePath)
+	file, err := os.Open(publicPath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	sealed, err := actionrelationscore.ParseSealedPanel(file, fixtureInfo.Size(), fixtureDigest)
-	if err != nil || sealed.Panel() != panel {
-		return nil, fmt.Errorf("isolated fixture authority does not reconstruct")
+	public, err := actionrelationscore.ParsePublicPanel(file, publicInfo.Size(), publicDigest)
+	if err != nil || public.Panel() != panel {
+		return nil, fmt.Errorf("isolated public policy authority does not reconstruct")
 	}
 	evidenceRoot, _ := actionrelationexp.EvidenceRoot(panel)
 	writer := newPanelWriter(outputRoot, evidenceRoot, capBytes)
-	fixtureAuthorityPath := actionrelationexp.ExpectedAuthorityPath(panel, "fixture-root")
-	prepare := func(fixture actionrelationfixture.PanelFixture) error {
-		return writer.write(actionrelationexp.EvidenceFile{Path: fixtureAuthorityPath, Mode: "100644", Data: fixture.Canonical})
-	}
-	consume := func(chunk actionrelationscore.PanelCurriculumEvidence) error {
+	consume := func(chunk actionrelationscore.PolicyPanelCurriculumEvidence) error {
 		return writer.writeAll(append(slices.Clone(chunk.ManifestFiles), chunk.PackFiles...))
 	}
-	summary, err := actionrelationscore.ExecuteSealedPanel(filepath.Join(root, "domains"), sealed, prepare, consume)
+	summary, err := actionrelationscore.ExecutePublicPanel(filepath.Join(root, "domains"), public, consume)
 	if err != nil {
 		return nil, err
 	}
@@ -230,31 +295,29 @@ func ExecuteIsolatedPolicyWorker(repoRoot, panel, role, fixturePath, fixtureDige
 	if err := writer.write(summary.RunEvidence.File); err != nil {
 		return nil, err
 	}
-	return actionrelationscore.MarshalPanelSummary(summary)
+	return actionrelationscore.MarshalPolicyPanelSummary(summary)
 }
 
 func isolatedWorkerArgv(binary, repoRoot, panel, role, fixturePath, fixtureDigest, outputRoot string, capBytes int64) []string {
 	return []string{
 		binary, "actionrelation-trials", "-stage", isolatedStage, "-panel", panel, "-repo-root", repoRoot,
-		"-worker-role", role, "-fixture-input", fixturePath, "-fixture-digest", fixtureDigest,
+		"-worker-role", role, "-public-input", fixturePath, "-public-digest", fixtureDigest,
 		"-output-root", outputRoot, "-evidence-cap", strconv.FormatInt(capBytes, 10),
 	}
 }
 
-func isolatedSandboxProfile(binary, outputRoot string, deniedReadRoots []string) string {
+func isolatedSandboxProfile(binary, inputRoot, outputRoot string) string {
 	var profile strings.Builder
-	profile.WriteString("(version 1)\n(allow default)\n(deny network*)\n(deny process-exec)\n")
+	profile.WriteString("(version 1)\n(deny default)\n")
 	profile.WriteString("(allow process-exec (literal ")
 	profile.WriteString(strconv.Quote(binary))
-	profile.WriteString("))\n(deny file-write*)\n")
+	profile.WriteString("))\n(allow sysctl-read)\n")
+	profile.WriteString("(allow file-read* (literal \"/\") (subpath \"/usr\") (subpath \"/System\") (subpath \"/private/var/db\") (literal \"/dev/null\") (subpath ")
+	profile.WriteString(strconv.Quote(inputRoot))
+	profile.WriteString("))\n")
 	profile.WriteString("(allow file-write* (subpath ")
 	profile.WriteString(strconv.Quote(outputRoot))
 	profile.WriteString("))\n")
-	for _, root := range deniedReadRoots {
-		profile.WriteString("(deny file-read* (subpath ")
-		profile.WriteString(strconv.Quote(root))
-		profile.WriteString("))\n")
-	}
 	return profile.String()
 }
 
@@ -354,5 +417,11 @@ func promotePanelWriter(writer *panelWriter, repoRoot string) error {
 func reflectPanelSummaries(left, right actionrelationscore.PanelSummary) bool {
 	leftBytes, leftErr := actionrelationscore.MarshalPanelSummary(left)
 	rightBytes, rightErr := actionrelationscore.MarshalPanelSummary(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftBytes, rightBytes)
+}
+
+func reflectPolicyPanelSummaries(left, right actionrelationscore.PolicyPanelSummary) bool {
+	leftBytes, leftErr := actionrelationscore.MarshalPolicyPanelSummary(left)
+	rightBytes, rightErr := actionrelationscore.MarshalPolicyPanelSummary(right)
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftBytes, rightBytes)
 }

@@ -79,7 +79,7 @@ func bARCertificateAssemble(vm *VM) error {
 		vm.push(Nil())
 		return nil
 	}
-	attemptWire, _ := json.Marshal([]any{"local-diamond-certificate-attempt/v2", stateDigest, aDigest, bDigest, witnessDigest, operationRows, operationRootValue.AsString(), result, certificateDigest, status})
+	attemptWire, _ := json.Marshal([]any{"local-diamond-certificate-attempt/v3", stateDigest, aDigest, bDigest, witnessDigest, operationRootValue.AsString(), result, certificateDigest, status})
 	attemptName, err := arStoreCanonical(vm, requested.AsString(), "ActionRelationCertificateAttempt", attemptWire, map[string]any{
 		"stateDigest": stateDigest, "aOccurrenceDigest": aDigest, "bOccurrenceDigest": bDigest, "witnessDigest": witnessDigest, "operationRows": operationRows,
 		"operationRoot": operationRootValue.AsString(), "result": result, "certificateDigest": certificateDigest, "certificateUnit": certificateName, "status": status,

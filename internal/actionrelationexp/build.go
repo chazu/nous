@@ -165,19 +165,15 @@ func buildAuthorityCanonical(value BuildAuthority) ([]byte, error) {
 	if !boundedASCII(value.GitVersion, 256) || !boundedASCII(value.GoVersion, 256) || !canonicalAbsolutePath(value.GoExecutablePath) || !digestText(value.GoExecutableDigest) || !digestText(value.MiseTomlDigest) || !safeToken(value.GOOS) || !safeToken(value.GOARCH) || value.CGOEnabled != "0" && value.CGOEnabled != "1" || value.BinaryPath != PanelBinaryPath || !digestText(value.BinaryDigest) || !digestText(value.GoVersionMDigest) {
 		return nil, fmt.Errorf("invalid build tool or binary authority")
 	}
-	if len(value.BuildArgv) < 2 || len(value.BuildArgv) > 64 {
+	wantArgv := []string{value.GoExecutablePath, "build", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", PanelBinaryPath, "./cmd/nous"}
+	if !slices.Equal(value.BuildArgv, wantArgv) {
 		return nil, fmt.Errorf("invalid build argv")
-	}
-	for _, argument := range value.BuildArgv {
-		if argument == "" || len(argument) > 4096 || !utf8.ValidString(argument) || strings.HasPrefix(argument, "-overlay") || strings.HasPrefix(argument, "-tags") {
-			return nil, fmt.Errorf("invalid build argument")
-		}
 	}
 	environment, err := environmentWires(value.BuildEnvironment)
 	if err != nil {
 		return nil, err
 	}
-	if environmentValue(value.BuildEnvironment, "GOFLAGS") != "" || environmentValue(value.BuildEnvironment, "GOWORK") != "off" || !environmentHas(value.BuildEnvironment, "GOFLAGS") || !environmentHas(value.BuildEnvironment, "GOWORK") {
+	if err := verifyExactBuildEnvironment(value); err != nil {
 		return nil, fmt.Errorf("noncanonical Go build environment")
 	}
 	nonInputs, err := nonInputRowWires(value.NonInputRows)
@@ -199,6 +195,38 @@ func buildAuthorityCanonical(value BuildAuthority) ([]byte, error) {
 		environment, value.GOOS, value.GOARCH, value.CGOEnabled,
 		value.BinaryPath, value.BinaryDigest, value.GoVersionMDigest, nonInputs,
 	})
+}
+
+func verifyExactBuildEnvironment(value BuildAuthority) error {
+	want := map[string]string{
+		"CGO_ENABLED": value.CGOEnabled,
+		"GOARCH":      value.GOARCH,
+		"GOENV":       "off",
+		"GOFLAGS":     "",
+		"GOOS":        value.GOOS,
+		"GOPROXY":     "off",
+		"GOSUMDB":     "off",
+		"GOTOOLCHAIN": "local",
+		"GOWORK":      "off",
+		"LC_ALL":      "C",
+		"TZ":          "UTC",
+	}
+	pathKeys := map[string]bool{"GOCACHE": true, "GOMODCACHE": true, "GOPATH": true, "HOME": true, "TMPDIR": true}
+	if len(value.BuildEnvironment) != len(want)+len(pathKeys) {
+		return fmt.Errorf("wrong build environment cardinality")
+	}
+	for _, row := range value.BuildEnvironment {
+		if expected, ok := want[row.Key]; ok {
+			if row.Value != expected {
+				return fmt.Errorf("wrong %s", row.Key)
+			}
+			continue
+		}
+		if !pathKeys[row.Key] || !canonicalAbsolutePath(row.Value) {
+			return fmt.Errorf("unexpected build environment key %s", row.Key)
+		}
+	}
+	return nil
 }
 
 func sourceRowWires(rows []SourceRow) ([]any, error) {

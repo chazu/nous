@@ -24,18 +24,23 @@ const (
 	ObjectIndexRowBytes = 96
 )
 
+const (
+	MaximumCurriculumObjects = 65_248
+	MaximumCurriculumIndexes = 19
+)
+
 var objectKinds = map[uint16]string{
 	1: "finite-action-state/v1", 2: "finite-action-semantic/v1", 3: "action-occurrence/v1", 4: "finite-action-world-core/v1",
 	5: "remaining-occurrences/v1", 6: "action-relation-pattern/v1", 7: "action-guard/v1", 8: "action-local-facts/v1",
 	9: "guarded-action-relation/v1", 10: "guarded-action-artifact/v1", 11: "action-training-evidence/v1", 12: "action-presentation-view/v1",
 	13: "action-normalization-proof/v1", 14: "learned-witness/v1", 15: "static-witness/v1", 16: "dynamic-witness/v1",
 	17: "local-diamond-certificate/v1", 18: "sleep-propagation-core/v1", 19: "sleep-proof-map/v1", 20: "sleep-search-node/v1",
-	21: "sleep-search-edge/v1", 22: "completed-subtree/v1", 23: "action-terminal/v1", 24: "sleep-terminal-set/v1",
+	21: "sleep-search-edge/v1", 22: "completed-subtree/v2", 23: "action-terminal/v1", 24: "sleep-terminal-set/v1",
 	25: "sleep-subtree-root/v1", 26: "certificate-cache-row/v3", 27: "compound-work-reservation/v1", 28: "action-guard-search-barrier/v1",
 	29: "action-scorer-truth-shard/v1", 32: "actionrelation-world-policy-row/v2", 33: "actionrelation-curriculum-policy-row/v2",
 	35: "action-store-boundary/v3", 36: "action-generator-attempt-ledger/v2", 37: "action-validity-row/v1", 38: "action-applicability-row/v1",
 	39: "action-transition-row/v1", 40: "action-state-equality-row/v1", 41: "action-literal-evaluation-row/v1", 42: "action-relation-match-row/v1",
-	43: "action-unanimous-use/v1", 44: "local-diamond-certificate-attempt/v2", 45: "action-raw-input/v1", 46: "actionrelation-operation-root/v1",
+	43: "action-unanimous-use/v1", 44: "local-diamond-certificate-attempt/v3", 45: "action-raw-input/v1", 46: "actionrelation-operation-root/v1",
 	47: "actionrelation-curriculum-fixture/v1", 48: "action-static-footprint-row/v1", 49: "action-work-terminal/v1",
 }
 
@@ -86,7 +91,7 @@ type ObjectPackRoot struct {
 }
 
 func (r ObjectPackRoot) CanonicalJSON() ([]byte, error) {
-	if err := r.Scope.validate(); err != nil || r.TotalRecords < 1 || len(r.Shards) < 1 {
+	if err := r.Scope.validate(); err != nil || r.TotalRecords < 1 || r.TotalRecords > MaximumCurriculumObjects || len(r.Shards) < 1 {
 		return nil, fmt.Errorf("invalid object pack root")
 	}
 	rows := make([]any, len(r.Shards))
@@ -127,7 +132,7 @@ type IndexRoot struct {
 }
 
 func (r IndexRoot) CanonicalJSON() ([]byte, error) {
-	if err := r.Scope.validate(); err != nil || !digestText(r.ObjectPackRootDigest) || !digestText(r.ObjectSetRoot) || r.TotalRows < 1 || len(r.Shards) < 1 {
+	if err := r.Scope.validate(); err != nil || !digestText(r.ObjectPackRootDigest) || !digestText(r.ObjectSetRoot) || r.TotalRows < 1 || r.TotalRows > MaximumCurriculumObjects || len(r.Shards) < 1 || len(r.Shards) > MaximumCurriculumIndexes {
 		return nil, fmt.Errorf("invalid index root")
 	}
 	rows := make([]any, len(r.Shards))
@@ -177,7 +182,7 @@ func BuildObjectBundleAt(evidenceRoot string, scope ObjectScope, records []Objec
 }
 
 func buildObjectBundle(evidenceRoot string, scope ObjectScope, records []ObjectRecord, maxPackBytes, maxIndexRows, maxIndexBytes int) (ObjectBundle, error) {
-	if !validEvidenceRoot(evidenceRoot) || scope.validate() != nil || len(records) == 0 || maxPackBytes <= len(ObjectHeader)+4 || maxIndexRows < 1 || maxIndexBytes < len(IndexHeader)+ObjectIndexRowBytes {
+	if !validEvidenceRoot(evidenceRoot) || scope.validate() != nil || len(records) == 0 || len(records) > MaximumCurriculumObjects || maxPackBytes <= len(ObjectHeader)+4 || maxIndexRows < 1 || maxIndexBytes < len(IndexHeader)+ObjectIndexRowBytes {
 		return ObjectBundle{}, fmt.Errorf("invalid object bundle shape")
 	}
 	objects := make([]packedObject, len(records))
@@ -273,6 +278,9 @@ func buildObjectBundle(evidenceRoot string, scope ObjectScope, records []ObjectR
 		first = last
 	}
 	indexRoot := IndexRoot{Scope: scope, ObjectPackRootDigest: objectRootDigest, TotalRows: len(objects), ObjectSetRoot: objectSetRoot, Shards: indexShards}
+	if len(indexShards) > MaximumCurriculumIndexes {
+		return ObjectBundle{}, fmt.Errorf("object index exceeds frozen shard cap")
+	}
 	if _, err := indexRoot.CanonicalJSON(); err != nil {
 		return ObjectBundle{}, err
 	}
@@ -291,7 +299,14 @@ func validEvidenceRoot(root string) bool {
 
 func ValidateObject(kind uint16, data []byte) error {
 	want, ok := objectKinds[kind]
-	if !ok || len(data) == 0 || len(data) > 65536 || !utf8.Valid(data) {
+	limit := 1024
+	if kind == 9 || kind == 35 || kind == 47 {
+		limit = 4096
+	}
+	if kind == 10 || kind == 28 || kind == 29 || kind == 36 {
+		limit = 65536
+	}
+	if !ok || len(data) == 0 || len(data) > limit || !utf8.Valid(data) {
 		return fmt.Errorf("invalid object kind or size")
 	}
 	var row []json.RawMessage
@@ -306,10 +321,20 @@ func ValidateObject(kind uint16, data []byte) error {
 	if err := json.Unmarshal(row[0], &got); err != nil || got != want {
 		return fmt.Errorf("kind %d decodes as %q want %q", kind, got, want)
 	}
+	if err := validateTypedObject(kind, data, row); err != nil {
+		return fmt.Errorf("kind %d typed decode: %w", kind, err)
+	}
 	return nil
 }
 
 func VerifyObjectBundle(bundle ObjectBundle) error {
+	return verifyObjectBundle(bundle, MaximumPackBytes)
+}
+
+func verifyObjectBundle(bundle ObjectBundle, maxPackBytes int) error {
+	if maxPackBytes <= len(ObjectHeader)+4 || maxPackBytes > MaximumPackBytes {
+		return fmt.Errorf("invalid object pack cap")
+	}
 	if err := bundle.Scope.validate(); err != nil || bundle.Scope != bundle.ObjectRoot.Scope || bundle.Scope != bundle.IndexRoot.Scope || len(bundle.ObjectFiles) != len(bundle.ObjectRoot.Shards) || len(bundle.IndexFiles) != len(bundle.IndexRoot.Shards) {
 		return fmt.Errorf("object bundle authority mismatch")
 	}
@@ -357,7 +382,7 @@ func VerifyObjectBundle(bundle ObjectBundle) error {
 				return fmt.Errorf("invalid next object pack")
 			}
 			nextLength := int(binary.BigEndian.Uint32(next.Data[len(ObjectHeader) : len(ObjectHeader)+4]))
-			if len(file.Data)+4+nextLength <= MaximumPackBytes {
+			if len(file.Data)+4+nextLength <= maxPackBytes {
 				return fmt.Errorf("non-greedy object shard")
 			}
 		}

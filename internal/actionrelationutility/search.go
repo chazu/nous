@@ -33,6 +33,7 @@ type SearchRun struct {
 	WorkVector        [12]int
 	InitialWork       [12]int
 	WorkTotal         int
+	WorkCap           int
 	ProofRoots        []actionrelationexp.OperationRoot
 	PhysicalWork      int
 	PriorPhysical     int
@@ -198,7 +199,7 @@ func finishSearchRun(evidenceRoot string, session *Session, runID, worldDigest s
 	if err != nil {
 		return SearchRun{}, err
 	}
-	run := SearchRun{EvidenceRoot: evidenceRoot, RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), ProofRoots: slices.Clone(proofRoots), PhysicalWork: len(records), PriorPhysical: priorPhysical, StructuralObjects: structural}
+	run := SearchRun{EvidenceRoot: evidenceRoot, RunID: runID, WorldDigest: worldDigest, Policy: policy, Store: session.Store, Search: result, Records: records, Transcript: transcript, RunRoot: runRoot, Terminal: terminal, WorkTerminal: workTerminal, WorkVector: workVector, InitialWork: initialWork, WorkTotal: sumWorkVector(workVector), WorkCap: session.Cap, ProofRoots: slices.Clone(proofRoots), PhysicalWork: len(records), PriorPhysical: priorPhysical, StructuralObjects: structural}
 	if err := VerifySearchRun(run); err != nil {
 		return SearchRun{}, err
 	}
@@ -430,13 +431,12 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 			return completeVisit{}, err
 		}
 		r.record(&r.result.SearchEdges, edge)
-		edgePreorder = append(edgePreorder, edge.Digest)
-		edgePreorder = append(edgePreorder, child.edgePreorder...)
 		terminals = append(terminals, child.terminals...)
 		historyCount += child.historyCount
 		r.result.Edges++
-		completed, _ := actionrelationsearch.BuildCompletedSubtree(node.Digest, takenDigest, child.subtree, child.terminalSet)
+		completed, _ := actionrelationsearch.BuildCompletedSubtree(node.Digest, takenDigest, edge, child.subtree, child.terminalSet)
 		r.record(&r.result.CompletedSubtrees, completed)
+		edgePreorder = append(edgePreorder, completed.Digest)
 		earlierSubtrees[takenDigest] = completed.Digest
 		earlier = append(earlier, taken)
 	}
@@ -460,8 +460,8 @@ func (r *completeRunner) recordProofRoot(root actionrelationexp.OperationRoot) {
 }
 
 func (r *completeRunner) recordStructuralBytes(kind uint16, canonical []byte) error {
-	if actionrelationexp.ValidateObject(kind, canonical) != nil {
-		return fmt.Errorf("invalid structural object kind %d", kind)
+	if err := actionrelationexp.ValidateObject(kind, canonical); err != nil {
+		return fmt.Errorf("invalid structural object kind %d (%d bytes): %w", kind, len(canonical), err)
 	}
 	hash := sha256.Sum256(canonical)
 	digest := hex.EncodeToString(hash[:])
@@ -531,8 +531,8 @@ func collectStructuralObjects(result actionrelationsearch.Result, proofRoots []a
 	}
 	unique := map[string]keyed{}
 	for _, object := range objects {
-		if actionrelationexp.ValidateObject(object.Kind, object.Bytes) != nil {
-			return nil, fmt.Errorf("invalid structural output kind %d", object.Kind)
+		if err := actionrelationexp.ValidateObject(object.Kind, object.Bytes); err != nil {
+			return nil, fmt.Errorf("invalid structural output kind %d (%d bytes): %w", object.Kind, len(object.Bytes), err)
 		}
 		hash := sha256.Sum256(object.Bytes)
 		digest := hex.EncodeToString(hash[:])

@@ -22,6 +22,22 @@ type CurriculumManifests struct {
 }
 
 func BuildCurriculumManifests(scored CurriculumResult, evidence CurriculumEvidence) (CurriculumManifests, error) {
+	result, err := buildCurriculumManifests(scored, evidence, true)
+	if err != nil {
+		return CurriculumManifests{}, err
+	}
+	return result, verifyCurriculumManifestFiles(result, true)
+}
+
+func BuildPolicyCurriculumManifests(scored CurriculumResult, evidence CurriculumEvidence) (CurriculumManifests, error) {
+	result, err := buildCurriculumManifests(scored, evidence, false)
+	if err != nil {
+		return CurriculumManifests{}, err
+	}
+	return result, verifyCurriculumManifestFiles(result, false)
+}
+
+func buildCurriculumManifests(scored CurriculumResult, evidence CurriculumEvidence, includeAuthority bool) (CurriculumManifests, error) {
 	result := CurriculumManifests{Curriculum: scored.Curriculum}
 	if evidence.Curriculum != scored.Curriculum || len(evidence.Transcripts) != 44 || len(evidence.RunEvidence) != 44 || actionrelationexp.VerifyStructuralOutputMap(evidence.StructuralMap) != nil {
 		return result, fmt.Errorf("invalid curriculum manifest input")
@@ -30,7 +46,10 @@ func BuildCurriculumManifests(scored CurriculumResult, evidence CurriculumEviden
 	if err != nil || evidence.StructuralMap.EvidenceRoot != evidenceRoot {
 		return result, fmt.Errorf("curriculum manifest panel root mismatch")
 	}
-	bundles := []actionrelationexp.ObjectBundle{evidence.NousPreboundary, evidence.NoGuardPreboundary, evidence.Utility, evidence.Authority}
+	bundles := []actionrelationexp.ObjectBundle{evidence.NousPreboundary, evidence.NoGuardPreboundary, evidence.Utility}
+	if includeAuthority {
+		bundles = append(bundles, evidence.Authority)
+	}
 	for _, bundle := range bundles {
 		if actionrelationexp.VerifyObjectBundle(bundle) != nil || bundle.Scope.Curriculum != scored.Curriculum {
 			return result, fmt.Errorf("invalid curriculum object bundle")
@@ -111,14 +130,15 @@ func BuildCurriculumManifests(scored CurriculumResult, evidence CurriculumEviden
 	if evidence.StructuralMap.File != nil {
 		result.PackFiles = append(result.PackFiles, *evidence.StructuralMap.File)
 	}
-	if err := verifyCurriculumManifestFiles(result); err != nil {
-		return CurriculumManifests{}, err
-	}
 	return result, nil
 }
 
-func verifyCurriculumManifestFiles(value CurriculumManifests) error {
-	if len(value.ManifestFiles) != 155 || len(value.ObjectRoots) != 4 || len(value.IndexRoots) != 4 || len(value.JournalRoots) != 44 || len(value.InputRoots) != 44 || len(value.DetailRoots) != 44 || len(value.Tables) != 14 || len(value.StoreBoundaries) != 2 || value.StructuralMap.Verify() != nil {
+func verifyCurriculumManifestFiles(value CurriculumManifests, includeAuthority bool) error {
+	wantManifests, wantObjects := 153, 3
+	if includeAuthority {
+		wantManifests, wantObjects = 155, 4
+	}
+	if len(value.ManifestFiles) != wantManifests || len(value.ObjectRoots) != wantObjects || len(value.IndexRoots) != wantObjects || len(value.JournalRoots) != 44 || len(value.InputRoots) != 44 || len(value.DetailRoots) != 44 || len(value.Tables) != 14 || len(value.StoreBoundaries) != 2 || value.StructuralMap.Verify() != nil {
 		return fmt.Errorf("curriculum manifest cardinality mismatch")
 	}
 	seen := map[string]bool{}
@@ -129,4 +149,50 @@ func verifyCurriculumManifestFiles(value CurriculumManifests) error {
 		seen[file.Path] = true
 	}
 	return nil
+}
+
+func AddAuthorityCurriculumManifests(panel string, value CurriculumManifests, authority actionrelationexp.ObjectBundle) (CurriculumManifests, error) {
+	if authority.Scope.Curriculum != value.Curriculum || authority.Scope.Class != "authority" || actionrelationexp.VerifyObjectBundle(authority) != nil {
+		return CurriculumManifests{}, fmt.Errorf("invalid delayed authority bundle")
+	}
+	evidenceRoot, err := actionrelationexp.EvidenceRoot(panel)
+	if err != nil {
+		return CurriculumManifests{}, err
+	}
+	objectCanonical, _ := authority.ObjectRoot.CanonicalJSON()
+	indexCanonical, _ := authority.IndexRoot.CanonicalJSON()
+	objectPath := fmt.Sprintf("%s/manifests/curriculum-%04d/authority-object-root.json", evidenceRoot, value.Curriculum)
+	indexPath := fmt.Sprintf("%s/manifests/curriculum-%04d/authority-index-root.json", evidenceRoot, value.Curriculum)
+	value.ManifestFiles = append(value.ManifestFiles,
+		actionrelationexp.EvidenceFile{Path: objectPath, Mode: "100644", Data: objectCanonical},
+		actionrelationexp.EvidenceFile{Path: indexPath, Mode: "100644", Data: indexCanonical},
+	)
+	value.PackFiles = append(value.PackFiles, authority.ObjectFiles...)
+	value.PackFiles = append(value.PackFiles, authority.IndexFiles...)
+	value.ObjectRoots = append(value.ObjectRoots, actionrelationexp.ObjectManifestRef{Scope: authority.Scope, Path: objectPath, Digest: objectDigest(objectCanonical)})
+	value.IndexRoots = append(value.IndexRoots, actionrelationexp.ObjectManifestRef{Scope: authority.Scope, Path: indexPath, Digest: objectDigest(indexCanonical)})
+	return value, verifyCurriculumManifestFiles(value, true)
+}
+
+func BuildDelayedAuthorityFiles(panel string, curriculum int, authority actionrelationexp.ObjectBundle) ([]actionrelationexp.EvidenceFile, actionrelationexp.ObjectManifestRef, actionrelationexp.ObjectManifestRef, error) {
+	if authority.Scope.Curriculum != curriculum || authority.Scope.Class != "authority" || actionrelationexp.VerifyObjectBundle(authority) != nil {
+		return nil, actionrelationexp.ObjectManifestRef{}, actionrelationexp.ObjectManifestRef{}, fmt.Errorf("invalid delayed authority bundle")
+	}
+	evidenceRoot, err := actionrelationexp.EvidenceRoot(panel)
+	if err != nil {
+		return nil, actionrelationexp.ObjectManifestRef{}, actionrelationexp.ObjectManifestRef{}, err
+	}
+	objectCanonical, _ := authority.ObjectRoot.CanonicalJSON()
+	indexCanonical, _ := authority.IndexRoot.CanonicalJSON()
+	objectPath := fmt.Sprintf("%s/manifests/curriculum-%04d/authority-object-root.json", evidenceRoot, curriculum)
+	indexPath := fmt.Sprintf("%s/manifests/curriculum-%04d/authority-index-root.json", evidenceRoot, curriculum)
+	files := []actionrelationexp.EvidenceFile{
+		{Path: objectPath, Mode: "100644", Data: objectCanonical},
+		{Path: indexPath, Mode: "100644", Data: indexCanonical},
+	}
+	files = append(files, authority.ObjectFiles...)
+	files = append(files, authority.IndexFiles...)
+	return files,
+		actionrelationexp.ObjectManifestRef{Scope: authority.Scope, Path: objectPath, Digest: objectDigest(objectCanonical)},
+		actionrelationexp.ObjectManifestRef{Scope: authority.Scope, Path: indexPath, Digest: objectDigest(indexCanonical)}, nil
 }

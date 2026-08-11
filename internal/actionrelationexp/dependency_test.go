@@ -70,7 +70,8 @@ func TestProtectedConstructorSurfaceHasOneGuardedProductionPath(t *testing.T) {
 		{needle: "actionrelationscore.PrepareProtectedPanel(", path: "../actionrelationrun/protected.go", count: 1},
 		{needle: "actionrelationfixture.GenerateProtectedPanel(", path: "../actionrelationscore/sealed.go", count: 1},
 		{needle: "token.BeginConstruction()", path: "../actionrelationfixture/panel_authority.go", count: 1},
-		{needle: "actionrelationscore.ExecuteSealedPanel(", path: "../actionrelationrun/isolated.go", count: 1},
+		{needle: "actionrelationscore.FinalizePolicyPanel(", path: "../actionrelationrun/isolated.go", count: 1},
+		{needle: "actionrelationscore.ExecutePublicPanel(", path: "../actionrelationrun/isolated.go", count: 1},
 		{needle: "actionrelationrun.ExecuteIsolatedPolicyWorker(", path: "../../cmd/nous/main.go", count: 1},
 	}
 	productionRoots := []string{"../actionrelationcap", "../actionrelationfixture", "../actionrelationrun", "../actionrelationscore", "../../cmd/nous"}

@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"slices"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/chazu/nous/internal/actionrelationexp"
@@ -345,7 +347,7 @@ func VerifyRoot(value Root) error {
 }
 
 func competenceRootCanonical(value Root) ([]byte, error) {
-	if !digestText(value.SourceRoot) || !digestText(value.BinaryDigest) || value.BuildAuthority.Verify() != nil || len(value.CommandArgv) == 0 || VerifyEvidence(value.Evidence) != nil || value.CaseManifestRef.Verify() != nil || value.ResultManifestRef.Verify() != nil || value.CaseManifestRef.Digest != value.Evidence.CaseManifest.Digest || value.ResultManifestRef.Digest != value.Evidence.ResultManifest.Digest {
+	if !digestText(value.SourceRoot) || !digestText(value.BinaryDigest) || value.BuildAuthority.Verify() != nil || VerifyEvidence(value.Evidence) != nil || verifyFrozenEvidence(value.Evidence) != nil || value.CaseManifestRef.Verify() != nil || value.ResultManifestRef.Verify() != nil || value.CaseManifestRef.Digest != value.Evidence.CaseManifest.Digest || value.ResultManifestRef.Digest != value.Evidence.ResultManifest.Digest {
 		return nil, fmt.Errorf("invalid competence root authority")
 	}
 	if value.BuildAuthority.Path != "docs/actionrelations-build-authority.json" || value.CaseManifestRef.Path != competenceRootPath+"/cases-root.json" || value.ResultManifestRef.Path != competenceRootPath+"/results-root.json" {
@@ -370,12 +372,42 @@ func competenceRootCanonical(value Root) ([]byte, error) {
 		environment[index] = []any{row.Key, row.Value}
 		previous = row.Key
 	}
-	for _, argument := range value.CommandArgv {
-		if argument == "" || !utf8.ValidString(argument) {
-			return nil, fmt.Errorf("invalid competence argv")
-		}
+	if len(value.CommandArgv) != 6 || value.CommandArgv[1] != "actionrelation-trials" || value.CommandArgv[2] != "-stage" || value.CommandArgv[3] != "competence" || value.CommandArgv[4] != "-repo-root" || !filepath.IsAbs(value.CommandArgv[5]) || filepath.Clean(value.CommandArgv[5]) != value.CommandArgv[5] || value.CommandArgv[0] != filepath.Join(value.CommandArgv[5], filepath.FromSlash(actionrelationexp.PanelBinaryPath)) {
+		return nil, fmt.Errorf("invalid competence argv")
+	}
+	wantEnvironment := []actionrelationexp.EnvironmentRow{{Key: "GOMAXPROCS", Value: "1"}, {Key: "LC_ALL", Value: "C"}, {Key: "PATH", Value: "/opt/homebrew/bin:/usr/bin:/bin"}, {Key: "TZ", Value: "UTC"}}
+	if !slices.Equal(value.Environment, wantEnvironment) {
+		return nil, fmt.Errorf("invalid competence environment")
 	}
 	return json.Marshal([]any{"actionrelation-competence-root/v2", value.SourceRoot, value.BinaryDigest, value.BuildAuthority.Wire(), value.CommandArgv, environment, value.CaseManifestRef.Wire(), value.ResultManifestRef.Wire(), value.Evidence.CaseManifest.RowRoot, value.Evidence.ResultManifest.RowRoot, len(value.Evidence.Cases), "passed"})
+}
+
+var frozenEvidenceAuthority struct {
+	sync.Once
+	caseRoot   string
+	resultRoot string
+	total      int
+	err        error
+}
+
+func verifyFrozenEvidence(value Evidence) error {
+	frozenEvidenceAuthority.Do(func() {
+		_, evidence, err := RunEvidence()
+		if err != nil {
+			frozenEvidenceAuthority.err = err
+			return
+		}
+		frozenEvidenceAuthority.caseRoot = evidence.CaseManifest.RowRoot
+		frozenEvidenceAuthority.resultRoot = evidence.ResultManifest.RowRoot
+		frozenEvidenceAuthority.total = len(evidence.Cases)
+	})
+	if frozenEvidenceAuthority.err != nil {
+		return frozenEvidenceAuthority.err
+	}
+	if value.CaseManifest.RowRoot != frozenEvidenceAuthority.caseRoot || value.ResultManifest.RowRoot != frozenEvidenceAuthority.resultRoot || len(value.Cases) != frozenEvidenceAuthority.total {
+		return fmt.Errorf("competence evidence is not the frozen exhaustive universe")
+	}
+	return nil
 }
 
 func parseRowManifest(data []byte, class string) (RowManifest, error) {

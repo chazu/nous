@@ -11,8 +11,8 @@ import (
 // bARObservationAssemble only folds already materialized transition/equality
 // rows. It never executes an action or asks production code to classify a pair.
 func bARObservationAssemble(vm *VM) error {
-	requested, labelValue, equalityValue, aAfterBValue, bAfterAValue, bInitialValue, aInitialValue, bOccurrenceValue, aOccurrenceValue, stateValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
-	values := []Value{requested, labelValue, equalityValue, aAfterBValue, bAfterAValue, bInitialValue, aInitialValue, bOccurrenceValue, aOccurrenceValue, stateValue}
+	requested, equalityValue, aAfterBValue, bAfterAValue, bInitialValue, aInitialValue, bOccurrenceValue, aOccurrenceValue, stateValue := vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop(), vm.pop()
+	values := []Value{requested, equalityValue, aAfterBValue, bAfterAValue, bInitialValue, aInitialValue, bOccurrenceValue, aOccurrenceValue, stateValue}
 	for _, value := range values {
 		if value.Kind() != VString {
 			vm.push(Nil())
@@ -51,7 +51,7 @@ func bARObservationAssemble(vm *VM) error {
 	aAfterB := arOptionalTransition(vm, aAfterBValue.AsString())
 	equality := arOptionalEquality(vm, equalityValue.AsString())
 	label, abDigest, baDigest, valid := reconstructObservation(aInitial, bInitial, bAfterA, aAfterB, equality, aDigest, bDigest)
-	if !valid || label != labelValue.AsString() {
+	if !valid {
 		vm.push(Nil())
 		return nil
 	}

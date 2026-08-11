@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/chazu/nous/internal/actionrelationoracle"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
 
@@ -255,16 +254,15 @@ func (s *searcher) visit(state actionrelations.State, remaining []actionrelation
 			return visitSummary{}, err
 		}
 		s.record(&s.result.SearchEdges, edge)
-		edgePreorder = append(edgePreorder, edge.Digest)
-		edgePreorder = append(edgePreorder, childSummary.EdgePreorder...)
 		terminals = append(terminals, childSummary.TerminalDigests...)
 		historyCount += childSummary.HistoryCount
 		s.result.Edges++
-		completed, err := BuildCompletedSubtree(node.Digest, takenDigest, childSummary.Subtree, childSummary.TerminalSet)
+		completed, err := BuildCompletedSubtree(node.Digest, takenDigest, edge, childSummary.Subtree, childSummary.TerminalSet)
 		if err != nil {
 			return visitSummary{}, err
 		}
 		s.record(&s.result.CompletedSubtrees, completed)
+		edgePreorder = append(edgePreorder, completed.Digest)
 		earlierSubtrees[takenDigest] = completed.Digest
 		earlier = append(earlier, taken)
 	}
@@ -368,17 +366,7 @@ func (s *searcher) certify(state actionrelations.State, left, right actionrelati
 			decision.CertificateDigest = developmentCertificateDigest(stateDigest, leftDigest, rightDigest)
 		}
 	} else {
-		stateJSON, _ := state.CanonicalJSON()
-		leftJSON, _ := left.Action.CanonicalJSON()
-		rightJSON, _ := right.Action.CanonicalJSON()
-		observation, oracleErr := actionrelationoracle.Observe(stateJSON, leftJSON, rightJSON)
-		if oracleErr != nil {
-			return CertificateDecision{}, oracleErr
-		}
-		decision.Certified = observation.Label == "commutes"
-		if decision.Certified {
-			decision.CertificateDigest = developmentCertificateDigest(stateDigest, leftDigest, rightDigest)
-		}
+		return CertificateDecision{}, fmt.Errorf("sleep policy requires an external certificate authority")
 	}
 	s.certificateCache[key] = decision
 	return decision, nil

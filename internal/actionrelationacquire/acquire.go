@@ -84,10 +84,21 @@ func BeginFamilyScopeFor(domainsDir, token string, family int, scope, panel, aut
 	if err != nil {
 		return nil, err
 	}
+	public, err := actionrelationfixturecore.PublicCases(training)
+	if err != nil {
+		return nil, err
+	}
+	return BeginPublicFor(domainsDir, token, public, scope, panel, authority, curriculum)
+}
+
+func BeginPublicFor(domainsDir, token string, training []actionrelationfixturecore.PublicCase, scope, panel, authority string, curriculum int) (*Session, error) {
+	if len(training) != actionrelationfixturecore.TrainingCount {
+		return nil, fmt.Errorf("invalid public training cardinality")
+	}
 	store := unit.NewStore()
 	previous := seed.DomainsDir
 	seed.DomainsDir = domainsDir
-	err = seed.LoadDomain(store, "actionrelations")
+	err := seed.LoadDomain(store, "actionrelations")
 	seed.DomainsDir = previous
 	if err != nil {
 		return nil, err
@@ -153,8 +164,6 @@ func BeginFamilyScopeFor(domainsDir, token string, family int, scope, panel, aut
 	patternJSON, _ := pattern.CanonicalJSON()
 	experiment.Set("pattern", string(patternJSON))
 	experiment.Set("patternUnit", putCanonical(store, "ActionRelationPattern", patternJSON))
-	experiment.Set("family", family)
-	experiment.Set("familyName", actionrelationfixturecore.FamilyNames[family])
 	experiment.Set("scope", scope)
 	store.Put(experiment)
 	for _, testCase := range training {
@@ -166,7 +175,6 @@ func BeginFamilyScopeFor(domainsDir, token string, family int, scope, panel, aut
 		u.Set("state", string(testCase.State))
 		u.Set("aOccurrence", string(testCase.AOccurrence))
 		u.Set("bOccurrence", string(testCase.BOccurrence))
-		u.Set("label", testCase.Label)
 		store.Put(u)
 	}
 	ag := agenda.New()
@@ -327,18 +335,36 @@ const (
 	acquisitionLifecycleCap = 2_000_000
 )
 
-func acquisitionOperationSchedule(training []actionrelationfixturecore.Case, scope string) []uint8 {
+func acquisitionOperationSchedule(training []actionrelationfixturecore.PublicCase, scope string) []uint8 {
 	var result []uint8
 	for _, testCase := range training {
+		state, stateErr := actionrelations.ParseState(testCase.State)
+		a, aErr := actionrelations.ParseOccurrence(testCase.AOccurrence)
+		b, bErr := actionrelations.ParseOccurrence(testCase.BOccurrence)
+		if stateErr != nil || aErr != nil || bErr != nil {
+			return nil
+		}
+		aNext, aOutcome, aApplyErr := actionrelations.Apply(state, a.Action)
+		bNext, bOutcome, bApplyErr := actionrelations.Apply(state, b.Action)
+		if aApplyErr != nil || bApplyErr != nil {
+			return nil
+		}
 		result = append(result, 5, 5, 4, 4)
-		if testCase.AInitiallyApplicable {
+		if aOutcome == "applied" {
 			result = append(result, 5, 4)
 		}
-		if testCase.BInitiallyApplicable {
+		if bOutcome == "applied" {
 			result = append(result, 5, 4)
 		}
-		if testCase.Label == "commutes" || testCase.Label == "conflicts" {
-			result = append(result, 6)
+		if aOutcome == "applied" && bOutcome == "applied" {
+			_, bAfterA, crossBErr := actionrelations.Apply(aNext, b.Action)
+			_, aAfterB, crossAErr := actionrelations.Apply(bNext, a.Action)
+			if crossBErr != nil || crossAErr != nil {
+				return nil
+			}
+			if bAfterA == "applied" && aAfterB == "applied" {
+				result = append(result, 6)
+			}
 		}
 	}
 	guards := actionrelations.EnumerateGuards()
@@ -383,7 +409,7 @@ func actionrelationsDigest(value string) bool {
 	return err == nil && len(decoded) == 32
 }
 
-func installPresentationViews(store *unit.Store, experiment *unit.Unit, training []actionrelationfixturecore.Case) error {
+func installPresentationViews(store *unit.Store, experiment *unit.Unit, training []actionrelationfixturecore.PublicCase) error {
 	observations := experiment.GetStrings("observationUnits")
 	if len(observations) != len(training) {
 		return fmt.Errorf("view observation count mismatch")
@@ -404,7 +430,7 @@ func installPresentationViews(store *unit.Store, experiment *unit.Unit, training
 	var names, presentationNames, proofNames []string
 	var rootRows []any
 	for index, testCase := range training {
-		views, err := actionrelationfixturecore.Views(testCase)
+		views, err := actionrelationfixturecore.ViewsPublic(testCase)
 		if err != nil {
 			return err
 		}
@@ -463,7 +489,7 @@ func installPresentationViews(store *unit.Store, experiment *unit.Unit, training
 	return nil
 }
 
-func installSemanticInputs(store *unit.Store, training []actionrelationfixturecore.Case) error {
+func installSemanticInputs(store *unit.Store, training []actionrelationfixturecore.PublicCase) error {
 	for _, testCase := range training {
 		state, err := actionrelations.ParseState(testCase.State)
 		if err != nil {
