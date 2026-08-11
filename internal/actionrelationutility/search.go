@@ -389,28 +389,16 @@ func (r *completeRunner) visit(state actionrelations.State, remaining []actionre
 			}
 			decision, err := CertifyCached(r.session, r.cache, r.worldDigest, r.policy, state, taken, candidate, witness, operationStart, fmt.Sprintf("%s.%05d", r.token, r.session.Sequence))
 			if err != nil {
+				if decision.AttemptDigest != "" {
+					if retainErr := r.recordFreshCertificateDecision(decision); retainErr != nil {
+						return completeVisit{}, retainErr
+					}
+				}
 				return completeVisit{}, err
 			}
 			if !decision.CacheHit {
-				cacheRow := r.session.Store.Get(decision.CacheRow)
-				if cacheRow == nil {
-					return completeVisit{}, fmt.Errorf("fresh certificate decision lacks cache row")
-				}
-				attempt := r.session.Store.Get(cacheRow.GetString("attemptUnit"))
-				if attempt == nil {
-					return completeVisit{}, fmt.Errorf("fresh certificate decision lacks attempt preimage")
-				}
-				if err := r.recordStructuralUnit(44, attempt); err != nil {
+				if err := r.recordFreshCertificateDecision(decision); err != nil {
 					return completeVisit{}, err
-				}
-				if decision.Certified {
-					certificate := r.unitByDigest(decision.CertificateDigest)
-					if certificate == nil {
-						return completeVisit{}, fmt.Errorf("certified decision lacks certificate preimage")
-					}
-					if err := r.recordStructuralUnit(17, certificate); err != nil {
-						return completeVisit{}, err
-					}
 				}
 			}
 			if !decision.Certified {
@@ -466,6 +454,28 @@ func (r *completeRunner) recordProofRoot(root actionrelationexp.OperationRoot) {
 	}
 	r.proofRootSeen[root.Digest] = true
 	r.proofRoots = append(r.proofRoots, root)
+}
+
+func (r *completeRunner) recordFreshCertificateDecision(decision CacheDecision) error {
+	if decision.AttemptDigest == "" || decision.OperationRoot.Digest == "" {
+		return fmt.Errorf("fresh certificate decision lacks pre-finalization authority")
+	}
+	r.recordProofRoot(decision.OperationRoot)
+	attempt := r.unitByDigest(decision.AttemptDigest)
+	if attempt == nil {
+		return fmt.Errorf("fresh certificate decision lacks attempt preimage")
+	}
+	if err := r.recordStructuralUnit(44, attempt); err != nil {
+		return err
+	}
+	if !decision.Certified {
+		return nil
+	}
+	certificate := r.unitByDigest(decision.CertificateDigest)
+	if certificate == nil {
+		return fmt.Errorf("certified decision lacks certificate preimage")
+	}
+	return r.recordStructuralUnit(17, certificate)
 }
 
 func (r *completeRunner) recordStructuralBytes(kind uint16, canonical []byte) error {

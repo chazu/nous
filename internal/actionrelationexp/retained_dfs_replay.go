@@ -22,21 +22,23 @@ type retainedDFSVisit struct {
 }
 
 type retainedDFSReplay struct {
-	runID              string
-	authority          retainedRunAuthority
-	calls              []retainedCall
-	objects            map[string]retainedObjectValue
-	structural         map[string]bool
-	cursor             int
-	memo               map[string]retainedDFSVisit
-	consumed           map[string]bool
-	currentWitnesses   map[string]bool
-	completedWitnesses map[string]bool
+	runID               string
+	authority           retainedRunAuthority
+	calls               []retainedCall
+	objects             map[string]retainedObjectValue
+	structural          map[string]bool
+	cursor              int
+	memo                map[string]retainedDFSVisit
+	consumed            map[string]bool
+	currentWitnesses    map[string]bool
+	completedWitnesses  map[string]bool
+	preFinalizationTail map[string]bool
 }
 
 type retainedDFSWitnessAuthority struct {
-	current   map[string]bool
-	completed map[string]bool
+	current             map[string]bool
+	completed           map[string]bool
+	preFinalizationTail map[string]bool
 }
 
 func verifyRetainedOrderedDFS(runID string, authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool) error {
@@ -46,7 +48,7 @@ func verifyRetainedOrderedDFS(runID string, authority retainedRunAuthority, call
 func verifyRetainedOrderedDFSWithWitnesses(runID string, authority retainedRunAuthority, calls []retainedCall, objects map[string]retainedObjectValue, structural map[string]bool, witnessAuthority *retainedDFSWitnessAuthority) error {
 	r := &retainedDFSReplay{
 		runID: runID, authority: authority, calls: calls, objects: objects, structural: structural,
-		memo: map[string]retainedDFSVisit{}, consumed: map[string]bool{}, currentWitnesses: map[string]bool{}, completedWitnesses: map[string]bool{},
+		memo: map[string]retainedDFSVisit{}, consumed: map[string]bool{}, currentWitnesses: map[string]bool{}, completedWitnesses: map[string]bool{}, preFinalizationTail: map[string]bool{},
 	}
 	exhausted := false
 	if authority.policy == "nous-guarded-sleep" || authority.policy == "no-guard-sleep" || authority.policy == "learned-no-use" {
@@ -113,6 +115,7 @@ func verifyRetainedOrderedDFSWithWitnesses(runID string, authority retainedRunAu
 	if witnessAuthority != nil {
 		witnessAuthority.current = r.currentWitnesses
 		witnessAuthority.completed = r.completedWitnesses
+		witnessAuthority.preFinalizationTail = r.preFinalizationTail
 	}
 	return nil
 }
@@ -513,6 +516,17 @@ func (r *retainedDFSReplay) consumeCertificate(state, taken, sleeper string, wit
 		finalizeWire, _ := json.Marshal([]any{"actionrelation-cache-finalize-task/v1", r.runID, r.authority.world, r.authority.policy, state, pair[0], pair[1], lookup.callID, attemptDigest, root.Digest})
 		finalize, err := r.consumeReservation("certificate-cache-finalize", shaHex(finalizeWire), []uint8{25})
 		if err != nil {
+			if errors.Is(err, errRetainedDFSExhausted) {
+				for kind, digest := range map[uint16]string{46: root.Digest, 44: attemptDigest, 17: certificateDigest} {
+					if digest == zeroObjectDigest && kind == 17 {
+						continue
+					}
+					if markErr := r.mark(kind, digest); markErr != nil {
+						return false, "", fmt.Errorf("ordered DFS pre-finalization tail: %w", markErr)
+					}
+					r.preFinalizationTail[fmt.Sprintf("%d:%s", kind, digest)] = true
+				}
+			}
 			return false, "", err
 		}
 		if len(finalize[0].payload) != 9 || rawText(finalize[0].payload[6]) != lookup.callID || rawText(finalize[0].payload[7]) != attemptDigest || rawText(finalize[0].payload[8]) != root.Digest || len(finalize[0].outputs) != 1 {

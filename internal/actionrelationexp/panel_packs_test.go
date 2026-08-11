@@ -61,6 +61,20 @@ func TestEmptyStructuralMapStillYieldsPerRunEmptyRoots(t *testing.T) {
 	}
 }
 
+func TestStructuralOutputMapEnforcesFrozenRowCapacity(t *testing.T) {
+	runIDs := fortyFourRunIDs("structural-cap")
+	attributions := make([]StructuralAttribution, MaximumStructuralRows+1)
+	for index := range attributions {
+		attributions[index] = StructuralAttribution{Kind: 44, Digest: testDigest(fmt.Sprintf("structural-cap-%d", index)), RunIDs: []string{runIDs[index%len(runIDs)]}}
+	}
+	if value, err := BuildStructuralOutputMap(0, runIDs, attributions[:MaximumStructuralRows]); err != nil || value.File == nil || len(value.File.Data) != len(StructuralMapHeader)+MaximumStructuralRows*StructuralMapRowSize {
+		t.Fatalf("frozen structural boundary: rows=%d err=%v", MaximumStructuralRows, err)
+	}
+	if _, err := BuildStructuralOutputMap(0, runIDs, attributions); err == nil {
+		t.Fatal("accepted structural output map above frozen row capacity")
+	}
+}
+
 func TestDevelopmentRunEvidencePackHasExact240ByteRows(t *testing.T) {
 	records := make([]RunEvidenceRecord, panelRunCounts["development"])
 	for index := range records {

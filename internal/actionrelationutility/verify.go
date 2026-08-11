@@ -289,6 +289,11 @@ func verifyCertificateAuthority(run SearchRun) error {
 		}
 		usedRoots[rootDigest] = true
 	}
+	if run.Terminal == "budget-exhausted" && slices.Equal(run.WorkTerminal.RejectedReservation.OperationCodes, []uint8{25}) {
+		if err := verifyCertificateFinalizationTail(run, objects, semanticObjects, certificates, roots, usedRoots); err != nil {
+			return err
+		}
+	}
 	if len(usedRoots) != len(roots) {
 		return fmt.Errorf("unreferenced certificate operation root")
 	}
@@ -306,6 +311,101 @@ func verifyCertificateAuthority(run SearchRun) error {
 		}
 	}
 	return nil
+}
+
+func verifyCertificateFinalizationTail(run SearchRun, objects map[string]verifiedObject, semanticObjects map[string][]byte, certificates map[string]verifiedObject, roots map[string]actionrelationexp.OperationRoot, usedRoots map[string]bool) error {
+	var root actionrelationexp.OperationRoot
+	for digest, candidate := range roots {
+		if usedRoots[digest] {
+			continue
+		}
+		if root.Digest != "" {
+			return fmt.Errorf("finalization tail has multiple unclosed operation roots")
+		}
+		root = candidate
+	}
+	if root.Digest == "" {
+		return fmt.Errorf("finalization tail lacks its operation root")
+	}
+	start, count, err := operationRangeBounds(root)
+	if err != nil || start < 0 || count < 1 || start+count != len(run.Records)-1 {
+		return fmt.Errorf("finalization tail operation root is not the exact terminal prefix")
+	}
+	missSequence := -1
+	var operationRows []string
+	for sequence := start; sequence < start+count; sequence++ {
+		record := run.Records[sequence]
+		if record.Code == 18 {
+			if missSequence >= 0 || record.Status != 1 || len(record.Outputs) != 0 {
+				return fmt.Errorf("finalization tail has a non-unique cache miss")
+			}
+			missSequence = sequence
+		}
+		if record.Code == 25 {
+			return fmt.Errorf("finalization tail operation root includes finalization")
+		}
+		if record.Code == 12 || record.Code == 13 || record.Code == 14 {
+			if len(record.Outputs) == 0 {
+				return fmt.Errorf("finalization tail proof call lacks output")
+			}
+			operationRows = append(operationRows, digestBytesText(record.Outputs[0]))
+		}
+	}
+	if missSequence < 0 {
+		return fmt.Errorf("finalization tail lacks its cache miss")
+	}
+	type tailAttempt struct {
+		digest string
+		value  verifiedObject
+	}
+	var tail tailAttempt
+	for digest, object := range objects {
+		if len(object.row) != 9 || utilityRowTag(object.row) != "local-diamond-certificate-attempt/v3" || utilityString(object.row[5]) != root.Digest {
+			continue
+		}
+		if tail.digest != "" {
+			return fmt.Errorf("finalization tail has multiple attempts")
+		}
+		tail = tailAttempt{digest: digest, value: object}
+	}
+	if tail.digest == "" || utilityString(tail.value.row[8]) != "valid" || !retainedUtilityObject(run.StructuralObjects, 44, tail.digest) {
+		return fmt.Errorf("finalization tail lacks its retained attempt")
+	}
+	state, aDigest, bDigest := utilityString(tail.value.row[1]), utilityString(tail.value.row[2]), utilityString(tail.value.row[3])
+	result, certificateDigest := utilityString(tail.value.row[6]), utilityString(tail.value.row[7])
+	minimum, maximum := slices.Min([]string{aDigest, bDigest}), slices.Max([]string{aDigest, bDigest})
+	finalizeWire, _ := json.Marshal([]any{"actionrelation-cache-finalize-task/v1", run.RunID, run.WorldDigest, string(run.Policy), state, minimum, maximum, run.Transcript.CallIDs[missSequence], tail.digest, root.Digest})
+	if run.WorkTerminal.RejectedReservation.TaskDigest != digestBytesText(finalizeWire) {
+		return fmt.Errorf("finalization tail differs from the rejected code-25 task")
+	}
+	certificateCanonical := []byte(nil)
+	if certificateDigest != utilityZeroDigest {
+		certificateCanonical = semanticObjects[certificateDigest]
+	}
+	if err := VerifyCertificateDecisionSemantics(semanticObjects[state], semanticObjects[aDigest], semanticObjects[bDigest], operationRows, result, certificateDigest, certificateCanonical); err != nil {
+		return fmt.Errorf("finalization tail certificate semantics: %w", err)
+	}
+	if result == "certified" {
+		if !retainedUtilityObject(run.StructuralObjects, 17, certificateDigest) {
+			return fmt.Errorf("finalization tail lacks its retained certificate")
+		}
+		if err := verifyCertificateObject(certificates[certificateDigest], state, aDigest, bDigest, utilityString(tail.value.row[4]), root.Digest); err != nil {
+			return err
+		}
+	} else if result != "not-certified" || certificateDigest != utilityZeroDigest {
+		return fmt.Errorf("invalid non-certified finalization tail")
+	}
+	usedRoots[root.Digest] = true
+	return nil
+}
+
+func retainedUtilityObject(objects []actionrelationexp.ObjectRecord, kind uint16, digest string) bool {
+	for _, object := range objects {
+		if object.Kind == kind && digestBytesText(object.Bytes) == digest {
+			return true
+		}
+	}
+	return false
 }
 
 func verifyCertificateObject(certificate verifiedObject, state, aDigest, bDigest, witnessDigest, rootDigest string) error {

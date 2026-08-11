@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	StructuralMapHeader  = "ARSM1\n"
-	StructuralMapRowSize = 40
-	RunEvidenceHeader    = "ARRV1\n"
-	RunEvidenceRowSize   = 240
+	StructuralMapHeader   = "ARSM1\n"
+	StructuralMapRowSize  = 40
+	MaximumStructuralRows = 4_192
+	RunEvidenceHeader     = "ARRV1\n"
+	RunEvidenceRowSize    = 240
 )
 
 type StructuralAttribution struct {
@@ -78,7 +79,7 @@ func BuildStructuralOutputMapAt(evidenceRoot string, curriculum int, runIDs []st
 		}
 		return bytes.Compare(mustDecodeDigest(a.digest), mustDecodeDigest(b.digest))
 	})
-	if len(keys) > 4192 {
+	if len(keys) > MaximumStructuralRows {
 		return StructuralOutputMap{}, fmt.Errorf("structural map exceeds row cap")
 	}
 	result := StructuralOutputMap{EvidenceRoot: evidenceRoot, Curriculum: curriculum, RunIDs: slices.Clone(runIDs), RunRoots: map[string]string{}}

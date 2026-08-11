@@ -23,6 +23,7 @@ type CertificateCache struct {
 type CacheDecision struct {
 	Certified         bool
 	CertificateDigest string
+	AttemptDigest     string
 	CacheRow          string
 	CacheHit          bool
 	OperationRoot     actionrelationexp.OperationRoot
@@ -97,8 +98,16 @@ func CertifyCached(session *Session, cache *CertificateCache, worldDigest, polic
 	if err != nil {
 		return CacheDecision{}, fmt.Errorf("reserve certificate cache finalization: %w", err)
 	}
+	decision := CacheDecision{
+		Certified:     attempt.GetString("result") == "certified",
+		AttemptDigest: attempt.GetString("objectDigest"),
+		OperationRoot: certificate.OperationRoot,
+	}
+	if decision.Certified {
+		decision.CertificateDigest = attempt.GetString("certificateDigest")
+	}
 	if reservation.Status == "rejected-cap" {
-		return CacheDecision{}, &budgetExhaustedError{Reservation: reservation}
+		return decision, &budgetExhaustedError{Reservation: reservation}
 	}
 	if reservation.Status != "reserved" {
 		return CacheDecision{}, fmt.Errorf("reserve certificate cache finalization returned %s", reservation.Status)
@@ -131,7 +140,8 @@ func CertifyCached(session *Session, cache *CertificateCache, worldDigest, polic
 		return CacheDecision{}, fmt.Errorf("certificate cache finalization lacks row")
 	}
 	cache.rows[key] = rowName
-	return CacheDecision{Certified: row.GetString("result") == "certified", CertificateDigest: nonzeroCertificate(row), CacheRow: rowName, OperationRoot: certificate.OperationRoot}, nil
+	decision.CacheRow = rowName
+	return decision, nil
 }
 
 func runCacheFinalize(store *unit.Store, request string) error {

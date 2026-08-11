@@ -586,7 +586,13 @@ func verifyRetainedStructuralCompleteness(authority retainedRunAuthority, calls 
 			}
 		}
 		if orderedWitnesses == nil {
-			orderedWitnesses = &retainedDFSWitnessAuthority{current: map[string]bool{}, completed: map[string]bool{}}
+			orderedWitnesses = &retainedDFSWitnessAuthority{current: map[string]bool{}, completed: map[string]bool{}, preFinalizationTail: map[string]bool{}}
+		}
+		for key := range orderedWitnesses.preFinalizationTail {
+			if !actual[key] {
+				return fmt.Errorf("pre-finalization tail lacks retained structural authority")
+			}
+			expected[key] = true
 		}
 		for key := range orderedWitnesses.completed {
 			if !orderedWitnesses.current[key] || !actual[key] {

@@ -3,14 +3,157 @@ package actionrelationexp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/chazu/nous/internal/actionrelationledger"
+	"github.com/chazu/nous/internal/actionrelationoracle"
 	"github.com/chazu/nous/internal/actionrelationsearch"
 	actionrelations "github.com/chazu/nous/internal/vocab/actionrelations"
 )
+
+func TestRetainedCertificateFinalizationTailRequiresProducedPreimages(t *testing.T) {
+	runID := testDigest("retained-finalization-tail")[:32]
+	world := testAuthorityDigest("retained-finalization-world")
+	state := actionrelations.State{Cells: []actionrelations.Cell{{Name: "c0", Value: 0}, {Name: "c1", Value: 0}}}
+	occurrences, err := actionrelations.AssignOccurrences([]actionrelations.SemanticAction{
+		{Kind: "set", XRole: "c0", N: 1},
+		{Kind: "set", XRole: "c1", N: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(occurrences, func(a, b actionrelations.Occurrence) int {
+		aBytes, _ := a.CanonicalJSON()
+		bBytes, _ := b.CanonicalJSON()
+		return bytes.Compare(aBytes, bBytes)
+	})
+	stateCanonical, _ := state.CanonicalJSON()
+	stateDigest, _ := state.Digest()
+	aCanonical, _ := occurrences[0].CanonicalJSON()
+	bCanonical, _ := occurrences[1].CanonicalJSON()
+	aDigest, _ := occurrences[0].Digest()
+	bDigest, _ := occurrences[1].Digest()
+	objects := map[string]retainedObjectValue{
+		stateDigest: {kind: 1, canonical: stateCanonical},
+		aDigest:     {kind: 3, canonical: aCanonical},
+		bDigest:     {kind: 3, canonical: bCanonical},
+	}
+	payload := func(values ...any) []json.RawMessage {
+		wire, _ := json.Marshal(values)
+		var result []json.RawMessage
+		_ = json.Unmarshal(wire, &result)
+		return result
+	}
+	calls := []retainedCall{}
+	total := 0
+	appendBlock := func(task []any, codes []uint8) {
+		wire, _ := json.Marshal(task)
+		reservation, buildErr := actionrelationledger.BuildReservation(runID, shaHex(wire), codes, total, 100)
+		if buildErr != nil || reservation.Status != "reserved" {
+			t.Fatalf("reservation: %v", buildErr)
+		}
+		objects[reservation.Digest] = retainedObjectValue{kind: 27, canonical: reservation.Canonical}
+		for _, code := range codes {
+			sequence := len(calls)
+			calls = append(calls, retainedCall{sequence: sequence, operation: code, status: 1, source: reservation.Digest, callID: testAuthorityDigest(fmt.Sprintf("finalization-call-%d", sequence))})
+		}
+		total += len(codes)
+	}
+	pair := sortedPair(aDigest, bDigest)
+	lookupWire := []any{"actionrelation-cache-lookup-task/v1", runID, world, "dynamic-diamond-sleep", stateDigest, pair[0], pair[1]}
+	appendBlock(lookupWire, []uint8{18})
+	calls[0].payload = payload("certificate-cache-lookup", world, "dynamic-diamond-sleep", stateDigest, pair[0], pair[1])
+	request := "AR.CertificateRequest.policy-c0000-p03-w0.00000"
+	for _, stage := range []string{"initial", "cross"} {
+		codes := []uint8{13, 13, 12, 12}
+		appendBlock([]any{"actionrelation-certificate-stage/v1", runID, request, stage, codes}, codes)
+		calls[len(calls)-2].outputs = []string{testAuthorityDigest(stage + "-left-state"), testAuthorityDigest(stage + "-left-outcome")}
+		calls[len(calls)-1].outputs = []string{testAuthorityDigest(stage + "-right-state"), testAuthorityDigest(stage + "-right-outcome")}
+	}
+	appendBlock([]any{"actionrelation-certificate-stage/v1", runID, request, "equality", []uint8{14}}, []uint8{14})
+	callIDs := make([]string, len(calls))
+	for index := range calls {
+		callIDs[index] = calls[index].callID
+	}
+	root, err := BuildOperationRange(runID, 2, 0, callIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness, _ := json.Marshal([]any{"dynamic-witness/v1", "all-pairs", testAuthorityDigest("retained-finalization-applicability")})
+	aAction, _ := occurrences[0].Action.CanonicalJSON()
+	bAction, _ := occurrences[1].Action.CanonicalJSON()
+	observation, err := actionrelationoracle.Observe(stateCanonical, aAction, bAction)
+	if err != nil || observation.Label != "commutes" {
+		t.Fatalf("observation: %+v %v", observation, err)
+	}
+	certificate, _ := json.Marshal([]any{"local-diamond-certificate/v1", stateDigest, aDigest, bDigest, shaHex(witness), shaHex(observation.AB), shaHex(observation.BA), true, aDigest, root.Digest})
+	certificateDigest := shaHex(certificate)
+	attempt, _ := json.Marshal([]any{"local-diamond-certificate-attempt/v3", stateDigest, aDigest, bDigest, shaHex(witness), root.Digest, "certified", certificateDigest, "valid"})
+	attemptDigest := shaHex(attempt)
+	for digest, object := range map[string]retainedObjectValue{
+		root.Digest:       {kind: 46, canonical: root.Canonical},
+		attemptDigest:     {kind: 44, canonical: attempt},
+		certificateDigest: {kind: 17, canonical: certificate},
+	} {
+		objects[digest] = object
+	}
+	finalizeWire, _ := json.Marshal([]any{"actionrelation-cache-finalize-task/v1", runID, world, "dynamic-diamond-sleep", stateDigest, pair[0], pair[1], calls[0].callID, attemptDigest, root.Digest})
+	rejected, err := actionrelationledger.BuildReservation(runID, shaHex(finalizeWire), []uint8{25}, total, total+1)
+	if err != nil || rejected.Status != "rejected-cap" {
+		t.Fatalf("rejected finalization: %v", err)
+	}
+	objects[rejected.Digest] = retainedObjectValue{kind: 27, canonical: rejected.Canonical}
+	terminalTask, _ := json.Marshal([]any{"actionrelation-budget-terminal-task/v1", runID, rejected.Digest})
+	terminalReservation, err := actionrelationledger.BuildTerminalReservation(runID, shaHex(terminalTask), total, total+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects[terminalReservation.Digest] = retainedObjectValue{kind: 27, canonical: terminalReservation.Canonical}
+	work := [12]int{}
+	work[11] = total + 1
+	terminal, _ := json.Marshal([]any{"action-work-terminal/v1", runID, 2, rejected.Digest, "budget-exhausted", work, total + 1, 0})
+	terminalDigest := shaHex(terminal)
+	objects[terminalDigest] = retainedObjectValue{kind: 49, canonical: terminal}
+	calls = append(calls, retainedCall{sequence: total, operation: 19, status: 1, source: terminalReservation.Digest, payload: payload("budget-terminal", rejected.Digest), outputs: []string{terminalDigest}, callID: testAuthorityDigest("finalization-terminal-call")})
+	structural := map[string]bool{
+		fmt.Sprintf("46:%s", root.Digest):       true,
+		fmt.Sprintf("44:%s", attemptDigest):     true,
+		fmt.Sprintf("17:%s", certificateDigest): true,
+	}
+	r := &retainedDFSReplay{
+		runID: runID, authority: retainedRunAuthority{curriculum: 0, worldOrdinal: 0, world: world, policy: "dynamic-diamond-sleep"},
+		calls: calls, objects: objects, structural: structural, consumed: map[string]bool{}, preFinalizationTail: map[string]bool{},
+	}
+	certified, _, err := r.consumeCertificate(stateDigest, aDigest, bDigest, witness, 0)
+	if !errors.Is(err, errRetainedDFSExhausted) || certified || r.cursor != len(calls) {
+		t.Fatalf("finalization tail replay: certified=%t cursor=%d err=%v", certified, r.cursor, err)
+	}
+	wantTail := map[string]bool{
+		fmt.Sprintf("46:%s", root.Digest):       true,
+		fmt.Sprintf("44:%s", attemptDigest):     true,
+		fmt.Sprintf("17:%s", certificateDigest): true,
+	}
+	if !reflect.DeepEqual(r.preFinalizationTail, wantTail) {
+		t.Fatalf("tail authority=%v want=%v", r.preFinalizationTail, wantTail)
+	}
+	authority := r.authority
+	authority.phase, authority.terminal, authority.operationRoot = 2, "budget-exhausted", root.Digest
+	ordered := &retainedDFSWitnessAuthority{current: map[string]bool{}, completed: map[string]bool{}, preFinalizationTail: r.preFinalizationTail}
+	if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, structural, ordered); err != nil {
+		t.Fatalf("retained finalization tail completeness: %v", err)
+	}
+	for key := range wantTail {
+		missing := mapsCloneBool(structural)
+		delete(missing, key)
+		if err := verifyRetainedStructuralCompleteness(authority, calls, objects, nil, missing, ordered); err == nil {
+			t.Fatalf("accepted finalization tail without %s: %v", key, err)
+		}
+	}
+}
 
 func TestRetainedOrderedDFSRejectsReorderedLifecycle(t *testing.T) {
 	runID := testDigest("ordered-dfs-run")[:32]

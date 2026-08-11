@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/chazu/nous/internal/actionrelationacquire"
@@ -332,6 +333,33 @@ func TestUtilityBudgetExhaustionCoversEveryCertificateReservationStage(t *testin
 			seen["equality-proof"] = true
 		case slices.Equal(rejected.OperationCodes, []uint8{25}):
 			seen["cache-finalize"] = true
+			if err := VerifySearchRun(run); err != nil {
+				t.Fatalf("cap %d finalization tail does not reopen: %v", cap, err)
+			}
+			if len(run.ProofRoots) == 0 {
+				t.Fatalf("cap %d dropped the pre-finalization operation root", cap)
+			}
+			tailRoot := run.ProofRoots[len(run.ProofRoots)-1].Digest
+			objects := map[uint16]map[string][]byte{}
+			for _, object := range run.StructuralObjects {
+				if objects[object.Kind] == nil {
+					objects[object.Kind] = map[string][]byte{}
+				}
+				objects[object.Kind][digestBytesText(object.Bytes)] = object.Bytes
+			}
+			attemptDigest, certificateDigest := "", ""
+			for digest, canonical := range objects[44] {
+				var row []any
+				if json.Unmarshal(canonical, &row) == nil && len(row) == 9 && row[5] == tailRoot {
+					attemptDigest, certificateDigest = digest, row[7].(string)
+				}
+			}
+			if attemptDigest == "" || objects[46][tailRoot] == nil {
+				t.Fatalf("cap %d dropped exact kind-46/kind-44 finalization authority", cap)
+			}
+			if certificateDigest != strings.Repeat("0", 64) && objects[17][certificateDigest] == nil {
+				t.Fatalf("cap %d dropped certified kind-17 finalization authority", cap)
+			}
 		case slices.Equal(rejected.OperationCodes, []uint8{13, 13, 12, 12}):
 			for _, stage := range []string{"initial", "cross"} {
 				for sequence := 0; sequence < cap; sequence++ {

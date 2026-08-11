@@ -80,6 +80,12 @@ func TestObjectBundleRejectsCorruptionAndCrossKindIndex(t *testing.T) {
 	}
 }
 
+func TestObjectBundleEnforcesFrozenCurriculumRowCapacity(t *testing.T) {
+	if _, err := BuildObjectBundle(ObjectScope{Curriculum: 0, Class: "utility"}, make([]ObjectRecord, MaximumCurriculumObjects+1)); err == nil {
+		t.Fatal("accepted object bundle above frozen curriculum row capacity")
+	}
+}
+
 func TestObjectPacksSplitGreedilyAtCap(t *testing.T) {
 	records := make([]ObjectRecord, 50)
 	for index := range records {
