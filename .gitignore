@@ -2,3 +2,7 @@ nous
 runs/
 go.work
 go.work.sum
+.nous/bin/
+.nous/*-transcripts/
+.nous/*-report.json
+.maki/
